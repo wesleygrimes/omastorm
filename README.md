@@ -36,6 +36,11 @@ in your Omarchy theme.
 
 Omarchy 4 on x86_64.
 
+ARM64 (`aarch64`) can run a native source build (see below). Prebuilt ARM64
+installation requires a published engine asset pinned in
+`engine/release-aarch64.pin`; until that pin ships, the installer explains
+how to build locally instead of trying to run an x86_64 binary.
+
 ```sh
 omarchy plugin add https://github.com/wesleygrimes/omastorm --enable
 ```
@@ -61,6 +66,20 @@ bash ~/.config/omarchy/plugins/com.omastorm.radar/scripts/install-launcher.sh
 ```
 
 Update with `omarchy plugin update com.omastorm.radar`.
+
+### ARM64 source installation
+
+Install the plugin as above, then, with Rust 1.89+ and a C compiler available:
+
+```sh
+cd ~/.config/omarchy/plugins/com.omastorm.radar
+bash scripts/setup-fixture.sh
+bash scripts/cargo.sh build --locked
+bash run.sh --ensure
+```
+
+The plugin automatically uses this native engine on subsequent launches.
+Repeat the build after updating the plugin to pick up engine changes.
 
 ## Use
 

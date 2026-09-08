@@ -9,10 +9,25 @@ build --locked`. Run `bash run.sh` thereafter; launch builds offline, ensures a
 shared daemon exists, and starts Quickshell. Rust 1.89+ is required for a
 checkout build. Plugin installs use `scripts/install-engine.sh` and the pin
 in `engine/release.pin` instead of Rust; `bash scripts/build-engine-release.sh`
-produces the x86_64 asset under `target/dist/` and does not publish it
-(the pinned release holds the current file).
+produces a native x86_64 or aarch64 asset under `target/dist/` and does not
+publish it (the pinned release holds the current file).
 `scripts/cargo.sh` uses Cargo on PATH or, if present, an isolated
 `.tools/{cargo,rustup}` toolchain. No Python runs at launch.
+
+### Native engine releases
+
+Run `bash scripts/build-engine-release.sh` on Linux x86_64 or ARM64 after
+fetching the build dependencies and fixture data. It explicitly targets the
+Rust host and emits `omastorm-engine-<host>` plus `SHA256SUMS`. If both native
+assets are collected in `target/dist/`, the checksum manifest covers both.
+Cross-compilation is not configured by this script.
+
+`--write-pin` prepares the host's pin: `engine/release.pin` for x86_64,
+`engine/release-aarch64.pin` for ARM64. It never overwrites the other
+architecture's pin. Publish the exact asset on the named upstream engine
+release before committing its pin. The installer checks both the architecture
+in the asset name and its SHA256. An unpublished ARM64 pin is intentionally
+absent; source builds work while an upstream ARM64 release is being prepared.
 
 The engine embeds `data/fixture.json` and `data/sites.json` and nothing
 archived. `fixture.json` is the frame template (product, palette, bounds,

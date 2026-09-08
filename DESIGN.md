@@ -262,9 +262,14 @@ reviewed with Wes the same day. Everything below is decided.
   `~/.local/share/omastorm/bin`). A dest whose sha256 already matches is
   left alone. Otherwise it copies `OMASTORM_ENGINE_ASSET` or curl-fetches
   the pinned URL (`OMASTORM_ENGINE_URL` overrides), verifies the committed
-  hash, and temp-and-renames. A mismatch is refused. `aarch64` is named
-  and deferred. A missing GitHub asset names the publish step and the
-  checkout build. `ensure` still replaces a stale daemon by self-hash.
+  hash, and temp-and-renames. A mismatch is refused. A missing GitHub asset
+  names the publish step and the checkout build. `ensure` still replaces a
+  stale daemon by self-hash.
+  ARM64 packaging uses the same flow with `omastorm-engine-aarch64-unknown-linux-gnu`
+  and a separate `engine/release-aarch64.pin`. The native release builder
+  selects the host's asset and pin; the installer selects by `uname -m` and
+  refuses a pin for another architecture. Until the ARM64 asset is published
+  and pinned, it gives source-build instructions. No speculative hash ships.
 - `run.sh --ensure` uses `target/debug/omastorm-engine` when that file is
   executable (ordinary development, no fetch). Otherwise it runs the
   installer and execs the installed binary's `ensure`. Ordinary

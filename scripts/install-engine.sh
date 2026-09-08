@@ -8,8 +8,15 @@ cd "$(dirname "$0")/.."
 
 die() { printf '%s\n' "$@" >&2; exit 1; }
 
-pin_file=${OMASTORM_ENGINE_PIN:-engine/release.pin}
-[[ -f $pin_file ]] || die "Omastorm engine pin missing: $pin_file"
+machine=${OMASTORM_ENGINE_MACHINE:-$(uname -m)}
+case $machine in
+  x86_64) default_pin=engine/release.pin ;;
+  aarch64) default_pin=engine/release-aarch64.pin ;;
+  *) die "Unsupported engine architecture: $machine (supported: x86_64, aarch64)." ;;
+esac
+pin_file=${OMASTORM_ENGINE_PIN:-$default_pin}
+[[ -f $pin_file ]] || die "No pinned $machine engine release: $pin_file" \
+  "From this checkout with Rust 1.89+: bash scripts/setup-fixture.sh && bash scripts/cargo.sh build --locked && bash run.sh --ensure"
 tag= repo= asset= sha256=
 while IFS= read -r line || [[ -n $line ]]; do
   [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
@@ -23,8 +30,8 @@ done < "$pin_file"
 [[ -n $tag && -n $repo && -n $asset && -n $sha256 ]] || die "Incomplete pin in $pin_file"
 [[ $sha256 =~ ^[a-f0-9]{64}$ ]] || die "Pin sha256 in $pin_file is not 64 lowercase hex digits"
 
-machine=${OMASTORM_ENGINE_MACHINE:-$(uname -m)}
-[[ $machine == x86_64 ]] || die "No $machine engine asset yet (aarch64 is deferred; see DESIGN.md, distribution)."
+expected_asset=omastorm-engine-$machine-unknown-linux-gnu
+[[ $asset == "$expected_asset" ]] || die "Engine asset $asset does not match architecture $machine (expected $expected_asset)."
 
 data_home=${XDG_DATA_HOME:-$HOME/.local/share}
 dest_dir=$data_home/omastorm/bin
