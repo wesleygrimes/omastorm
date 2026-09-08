@@ -219,7 +219,7 @@ impl Osm {
     /// 204 or 404 (an empty tile), otherwise the failure in words.
     async fn get(&self, url: &str) -> Result<Vec<u8>, String> {
         let _permit = self.permits.acquire().await.map_err(|e| e.to_string())?;
-        let response = self
+        let mut response = self
             .client
             .get(url)
             .send()
@@ -238,11 +238,17 @@ impl Osm {
         {
             return Err("body over the size limit".into());
         }
-        let bytes = response.bytes().await.map_err(|e| e.to_string())?;
-        if bytes.len() > MAX_BODY {
-            return Err("body over the size limit".into());
+        // Content-Length may be absent (chunked or close-delimited bodies).
+        // Enforce the cap while receiving, before retaining each chunk, rather
+        // than buffering the entire response and only checking after EOF.
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response.chunk().await.map_err(|e| e.to_string())? {
+            if chunk.len() > MAX_BODY - bytes.len() {
+                return Err("body over the size limit".into());
+            }
+            bytes.extend_from_slice(&chunk);
         }
-        Ok(bytes.to_vec())
+        Ok(bytes)
     }
     /// The data version and URL template, reading TileJSON on the first call
     /// of a daemon's life. `None` while offline.
@@ -654,6 +660,174 @@ mod tests {
     use crate::tiles::review::{DIR as REVIEW, preview};
 
     const RECORDED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/vt");
+
+    /// A loopback response, optionally held open after its last supplied byte.
+    /// No public service or disk cache is involved. Holding the response open
+    /// distinguishes an in-flight size check from one that waits for EOF.
+    async fn fetch_response(
+        headers: &str,
+        body: Vec<u8>,
+        hold_open: bool,
+    ) -> Result<Vec<u8>, String> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/tile", listener.local_addr().unwrap());
+        let headers = headers.to_owned();
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            // Consume the request before replying so closing does not reset a
+            // connection with unread request bytes. Bound this test reader too.
+            let mut request = Vec::new();
+            while !request.ends_with(b"\r\n\r\n") {
+                request.push(socket.read_u8().await.unwrap());
+                assert!(request.len() < 16 * 1024);
+            }
+            // Early rejection may close the connection before the server has
+            // written everything. That is expected, not a server test failure.
+            if socket.write_all(headers.as_bytes()).await.is_ok() {
+                let _ = socket.write_all(&body).await;
+            }
+            if hold_open {
+                let _ = released.await;
+            }
+        });
+        // Only client and permits are used by get(); avoid Osm::open(), which
+        // reads environment configuration and opens the user's persistent cache.
+        let source = Osm {
+            url: url.clone(),
+            dir: PathBuf::new(),
+            client: reqwest::Client::builder()
+                .no_proxy()
+                .timeout(FETCH_TIMEOUT)
+                .build()
+                .unwrap(),
+            permits: Semaphore::new(IN_FLIGHT),
+            tilejson: tokio::sync::Mutex::new(()),
+            back_off: BACK_OFF,
+            inner: Mutex::new(Inner {
+                info: Info {
+                    status: OsmStatus::Unavailable,
+                    source: String::new(),
+                    version: String::new(),
+                    attribution: String::new(),
+                },
+                template: None,
+                back_off_until: None,
+                cache_bytes: 0,
+                grown: false,
+            }),
+        };
+        let result = tokio::time::timeout(Duration::from_secs(3), source.get(&url))
+            .await
+            .unwrap_or_else(|_| Err("still waiting for the response to finish".into()));
+        let _ = release.send(());
+        server.await.unwrap();
+        result
+    }
+
+    fn chunked_body(size: usize, complete: bool) -> Vec<u8> {
+        let mut body = format!("{size:x}\r\n").into_bytes();
+        body.resize(body.len() + size, b'x');
+        body.extend_from_slice(b"\r\n");
+        if complete {
+            body.extend_from_slice(b"0\r\n\r\n");
+        }
+        body
+    }
+
+    #[test]
+    fn oversized_downloads_are_rejected_before_the_response_finishes() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                // A declared oversized length must be rejected before reading
+                // any body. Unknown lengths must stop after crossing MAX_BODY,
+                // without waiting for a closing chunk or connection close.
+                for (name, headers, body) in [
+                    (
+                        "declared length",
+                        format!(
+                            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+                            MAX_BODY + 1
+                        ),
+                        Vec::new(),
+                    ),
+                    (
+                        "chunked",
+                        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".into(),
+                        chunked_body(MAX_BODY + 1, false),
+                    ),
+                    (
+                        "close-delimited",
+                        "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".into(),
+                        vec![b'x'; MAX_BODY + 1],
+                    ),
+                ] {
+                    let result = fetch_response(&headers, body, true).await;
+                    eprintln!("oversized {name}: {result:?}");
+                    assert_eq!(result.unwrap_err(), "body over the size limit", "{name}");
+                }
+            });
+    }
+
+    #[test]
+    fn downloads_accept_bodies_up_to_the_limit_and_preserve_http_status_handling() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                for size in [0, 17, MAX_BODY - 1, MAX_BODY] {
+                    let headers = format!("HTTP/1.1 200 OK\r\nContent-Length: {size}\r\n\r\n");
+                    assert_eq!(
+                        fetch_response(&headers, vec![b'x'; size], false)
+                            .await
+                            .unwrap(),
+                        vec![b'x'; size]
+                    );
+                    let headers = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n";
+                    assert_eq!(
+                        fetch_response(headers, vec![b'x'; size], false)
+                            .await
+                            .unwrap(),
+                        vec![b'x'; size]
+                    );
+                    let headers = "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n";
+                    let body = if size == 0 {
+                        b"0\r\n\r\n".to_vec()
+                    } else {
+                        chunked_body(size, true)
+                    };
+                    assert_eq!(
+                        fetch_response(headers, body, false).await.unwrap(),
+                        vec![b'x'; size]
+                    );
+                }
+                for status in ["204 No Content", "404 Not Found"] {
+                    let headers = format!("HTTP/1.1 {status}\r\nContent-Length: 0\r\n\r\n");
+                    assert!(
+                        fetch_response(&headers, Vec::new(), false)
+                            .await
+                            .unwrap()
+                            .is_empty()
+                    );
+                }
+                assert!(
+                    fetch_response(
+                        "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n",
+                        Vec::new(),
+                        false
+                    )
+                    .await
+                    .unwrap_err()
+                    .starts_with("HTTP 503")
+                );
+            });
+    }
 
     fn decode(png_bytes: &[u8]) -> Vec<u8> {
         let decoder = png::Decoder::new(std::io::Cursor::new(png_bytes));
