@@ -110,6 +110,28 @@ function weakFloor(value, errors) {
     errors.push("weak_floor = " + JSON.stringify(value) + ": a dBZ number or false");
     return DEFAULT_FLOOR;
 }
+// The home view's centre (docs/protocol.md, configuration): `home_lat` and
+// `home_lon` in config.toml put the camera on a point of the user's
+// choosing instead of the home station's own offset. Both are needed and
+// each must be in range; returns { lat, lon }, or null when the file names
+// neither. A mistake is reported and leaves the station's own home view.
+function homePoint(lat, lon, errors) {
+    if (lat === undefined && lon === undefined) return null;
+    if (lat === undefined || lon === undefined) {
+        errors.push("home_lat and home_lon: the home view needs both");
+        return null;
+    }
+    if (typeof lat !== "number" || !isFinite(lat) || lat < -90 || lat > 90) {
+        errors.push("home_lat = " + JSON.stringify(lat) + ": a latitude between -90 and 90");
+        return null;
+    }
+    if (typeof lon !== "number" || !isFinite(lon) || lon < -180 || lon > 180) {
+        errors.push("home_lon = " + JSON.stringify(lon) + ": a longitude between -180 and 180");
+        return null;
+    }
+    return { lat: lat, lon: lon };
+}
+
 // OMASTORM_WEAK, set by the capture scripts, outranks the file: "off" or a
 // dBZ number. Empty or unparsable is no override (undefined).
 function envFloor(text) {

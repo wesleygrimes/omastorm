@@ -21,12 +21,18 @@ QtObject {
     property var weakFloor: KeyMap.envFloor(Quickshell.env("OMASTORM_WEAK")) !== undefined ? KeyMap.envFloor(Quickshell.env("OMASTORM_WEAK")) : KeyMap.DEFAULT_FLOOR
     property string startupError: ""
     signal homeRequested()
+    // { lat, lon } from config.toml's home_lat/home_lon (docs/protocol.md,
+    // configuration), or null. The popover's map centres on it, and it
+    // picks the home station when `home_site` is unset. The window reports
+    // a value out of range; here a bad pair is simply no point.
+    readonly property var homePoint: KeyMap.homePoint(config.homeLat, config.homeLon, [])
     readonly property string homeSite: {
         if (config.homeSite) return config.homeSite;
-        if (!config.location) return "";
+        var point = homePoint || config.location;
+        if (!point) return "";
         var best = "", distance = Infinity;
         for (var site of engine.sites) {
-            var km = Sites.distanceKm(config.location.lat, config.location.lon, site.lat, site.lon);
+            var km = Sites.distanceKm(point.lat, point.lon, site.lat, site.lon);
             if (km < distance) { best = site.id; distance = km; }
         }
         return best;

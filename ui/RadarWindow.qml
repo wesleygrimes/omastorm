@@ -133,11 +133,18 @@ Item {
     // again after a reconnect (a rebuilt daemon starts on the archived
     // fixture), with the camera on its home view; the follow setting goes
     // with it. An edit to the file while the window is open applies at once.
-    // Without a home_site the home is the station nearest Omarchy's own
-    // location (DESIGN.md, site model), when that file has one.
+    // Without a home_site the home is the station nearest the home point
+    // config.toml names, or nearest Omarchy's own location (DESIGN.md, site
+    // model) when that file has one.
     Config { id: config }
-    readonly property string homeSource: config.homeSite ? "config" : config.location ? "location" : ""
+    // { lat, lon } from config.toml's home_lat/home_lon, or null. It places
+    // the home view and, without a home_site, picks the home station; a
+    // value out of range is reported like a bad treatment and leaves the
+    // station's own home view standing.
+    readonly property var homePoint: KeyMap.homePoint(config.homeLat, config.homeLon, [])
+    readonly property string homeSource: config.homeSite || homePoint ? "config" : config.location ? "location" : ""
     readonly property string homeSite: config.homeSite ? config.homeSite
+        : homePoint ? nearestTo(homePoint.lat, homePoint.lon)
         : config.location ? nearestTo(config.location.lat, config.location.lon) : ""
     function nearestTo(lat, lon) {
         var best = null, bestKm = Infinity;
@@ -153,7 +160,7 @@ Item {
         configApplied = true;
         if (homeSite) {
             var home = engine.sites.find(s => s.id === homeSite);
-            if (home && (home.id !== siteId || state.source !== "live")) { map.jumpTo(home.lat, home.lon); engine.send({type: "select_site", id: home.id}); }
+            if (home && (home.id !== siteId || state.source !== "live")) { map.jumpHome(home.lat, home.lon); engine.send({type: "select_site", id: home.id}); }
             else if (!home) engine.send({type: "select_site", id: homeSite}); // the engine names the mistake
         }
         if (config.follow !== undefined && config.follow !== state.site.follow) engine.send({type: "follow", enabled: config.follow});
@@ -164,6 +171,8 @@ Item {
         target: config
         function onReadyChanged() { app.applyConfig(); }
         function onFollowChanged() { app.configApplied = false; app.applyConfig(); }
+        function onHomeLatChanged() { app.applySettings(); app.configApplied = false; app.applyConfig(); }
+        function onHomeLonChanged() { app.applySettings(); app.configApplied = false; app.applyConfig(); }
         function onKeysChanged() { app.applySettings(); }
         function onTreatmentChanged() { app.applySettings(); }
         function onWeakFloorChanged() { app.applySettings(); }
@@ -182,6 +191,7 @@ Item {
     function canon(sequence) { probe.sequence = sequence; return probe.portableText; }
     function applySettings() {
         var errors = [], wanted = KeyMap.treatment(config.treatment, errors), floor = KeyMap.weakFloor(config.weakFloor, errors);
+        KeyMap.homePoint(config.homeLat, config.homeLon, errors);
         var resolved = KeyMap.resolve(config.keys, canon);
         bindings = resolved.bindings;
         configErrors = errors.concat(resolved.errors);
@@ -491,6 +501,7 @@ Item {
                     theme: app.theme
                     treatment: app.treatment
                     weakFloor: app.weakFloor
+                    homePoint: app.homePoint
                     radarOpacity: app.condition === "unavailable" ? .6 : 1
                     labelSize: win.compact ? 10 : 12
                     locked: app.locked

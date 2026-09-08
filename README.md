@@ -98,11 +98,14 @@ are hidden by default and the legend says so; `w` shows them.
 ## Configuration
 
 `~/.config/omastorm/config.toml` is optional. Without `home_site` the home is
-the station nearest Omarchy's weather location. `Shift+H`, or the HOME
-button, saves the station on screen as `home_site`.
+the station nearest `home_lat`/`home_lon`, or nearest Omarchy's weather
+location. `Shift+H`, or the HOME button, saves the station on screen as
+`home_site`.
 
 ```toml
-home_site = "KTLX"   # a station id; omit to use Omarchy's weather location
+home_site = "KTLX"   # a station id; omit to use the home point or Omarchy's weather location
+home_lat = 35.47     # centre the home view here instead of on the station
+home_lon = -97.52    # both are needed
 follow = true        # follow the nearest station while panning
 treatment = "GLYPHS" # PIXELS, GLYPHS, or STIPPLE at launch
 weak_floor = 5       # dBZ; false draws every measured return

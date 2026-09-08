@@ -38,7 +38,7 @@ export OMASTORM_ARCHIVE="$PWD/data/raw/KTLX20130520_201643_V06.gz"
 # check-picker and check-keys select stations for real, so they run last.
 export XDG_RUNTIME_DIR="$scratch/runtime"
 mkdir -p "$XDG_RUNTIME_DIR"
-for check in check-engine-ui check-engine-install check-map-tiles check-map-sites check-map-network check-theme check-picker check-keys check-popover check-launcher check-bind; do
+for check in check-engine-ui check-engine-install check-map-tiles check-map-sites check-map-network check-map-home check-theme check-picker check-keys check-popover check-launcher check-bind; do
   step "$check" timeout 180 bash "scripts/$check.sh"
 done
 target/debug/omastorm-engine stop > /dev/null 2>&1 || true

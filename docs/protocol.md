@@ -322,6 +322,8 @@ another file for checks and captures; a missing file is no configuration.
 
 ```toml
 home_site = "KJAX"   # a station id from hello.sites
+home_lat = 30.33     # the home view centres here rather than on the station
+home_lon = -81.66    # both are needed; omit both to keep the station's own home view
 follow = true        # the map centre picks the station; omit to leave the shared flag alone
 treatment = "GLYPHS" # PIXELS, GLYPHS, or STIPPLE at launch; Glyphs when omitted
 weak_floor = 5       # dBZ; measured returns under it draw nothing; false draws them all; 5 when omitted
@@ -333,8 +335,8 @@ zoom_in = "+ ="
 
 - `home_site`: when the engine's state first arrives (and again after a
   reconnect, since a restarted daemon starts with no station) the
-  window puts the camera on this station's home view and sends
-  `select_site`; an id outside the table shows the engine's rejection in the
+  window puts the camera on this station's home view (or on `home_lat`/
+  `home_lon` when the file names them) and sends `select_site`; an id outside the table shows the engine's rejection in the
   status slot. Without it, the home is the station nearest Omarchy's own
   location when `~/.local/state/omarchy/settings/weather.json` (`name`,
   `latitude`, `longitude`, written by the shell's weather panel) has one,
@@ -345,6 +347,18 @@ zoom_in = "+ ="
   another location file; when `OMASTORM_CONFIG` is set the machine's own
   location file is not read unless `OMASTORM_LOCATION` names one, so a check
   or capture with its own config is isolated from the desktop's settings.
+- `home_lat` and `home_lon`: the point the home view centres on, in degrees.
+  The home view otherwise sits at the home station's own offset (5 km west and
+  15 km north of the site), which is the station, not the user; a place well
+  inside the station's range needs a pan on every open. Given both, the camera
+  lands on the point itself in the window and in the popover, and `Shift+H`,
+  RESET, and every later hand-off return to it. Without a `home_site` the home
+  station is the one nearest the point, so naming a place is enough on its own;
+  with one, the station is honoured and the camera still sits on the point.
+  Both are needed: one alone, a latitude outside ±90, or a longitude outside
+  ±180 is reported like a bad `treatment` and leaves the station's own home
+  view standing. The point is the user's, so it outranks Omarchy's weather
+  location for choosing the home station.
 - `follow`: sent as the `follow` command at the same moments when it differs
   from the state. An edit to the file applies to the open window at once.
 - `treatment`: the treatment at launch and whenever the file changes; the

@@ -4,10 +4,11 @@ import Quickshell.Io
 import "Toml.js" as Toml
 
 // ~/.config/omastorm/config.toml (docs/protocol.md, configuration): the
-// home station, whether the map centre picks the station, the treatment,
-// the weak-return floor, and the `[keys]` table. Watched like the theme
-// files, so an edit applies to the running window. OMASTORM_CONFIG names
-// another file for checks and captures; a missing file is no config.
+// home station, the home view's own centre, whether the map centre picks
+// the station, the treatment, the weak-return floor, and the `[keys]`
+// table. Watched like the theme files, so an edit applies to the running
+// window. OMASTORM_CONFIG names another file for checks and captures; a
+// missing file is no config.
 //
 // Omarchy's own location (DESIGN.md, site model), the file its weather
 // panel writes, is read beside it for the current-location home. It is
@@ -31,6 +32,12 @@ QtObject {
     readonly property var treatment: values.treatment
     // The raw value; the window judges it: a dBZ number, false, or unset.
     readonly property var weakFloor: values.weak_floor
+    // The raw values; the window judges them as a latitude/longitude pair.
+    // Together they place the home view on a point of the user's choosing
+    // instead of the home station's own offset, and pick the home station
+    // when `home_site` is unset.
+    readonly property var homeLat: values.home_lat
+    readonly property var homeLon: values.home_lon
     // The `[keys]` table as action id -> value, for Keys.resolve.
     readonly property var keys: {
         var table = {};

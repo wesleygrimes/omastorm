@@ -67,20 +67,25 @@ Item {
     readonly property real kmPerUnit: 2 * Math.PI * 6371 * Math.cos(siteLat * Math.PI / 180)
 
     // Camera. `center` is a longitude/latitude point, or null for the home
-    // view: the site offset by `home` kilometres east and north. `span` is
-    // the ground distance across the shorter viewport side at the scan site,
-    // never under 25 km. The longer side shows at most one world, and the view
+    // view: `homePoint` when config.toml names one, otherwise the site
+    // offset by `home` kilometres east and north. `span` is the ground
+    // distance across the shorter viewport side at the scan site, never
+    // under 25 km. The longer side shows at most one world, and the view
     // stays inside the tile pyramid on both axes; the whole network fits one
     // Mercator world, so nothing wraps at the date line.
     property var center: null
     readonly property point home: Qt.point(-5, 15)
+    // { lat, lon } from config.toml's home_lat/home_lon (docs/protocol.md,
+    // configuration), or null. The home view lands on the point itself,
+    // not offset: the user named the spot they want to look at.
+    property var homePoint: null
     property real span: 210
     readonly property real maxSpan: kmPerUnit * Math.min(width, height) / Math.max(1, width, height)
     readonly property real pixelsPerKm: Math.max(Math.min(width, height) / Math.max(25, span), Math.max(width, height) / kmPerUnit)
     readonly property real worldPixels: pixelsPerKm * kmPerUnit
     readonly property real unitsPerPixel: 1 / worldPixels
-    readonly property real wantedX: center ? mercatorX(center.x) : siteMx + home.x / kmPerUnit
-    readonly property real wantedY: center ? mercatorY(center.y) : siteMy - home.y / kmPerUnit
+    readonly property real wantedX: center ? mercatorX(center.x) : homePoint ? mercatorX(homePoint.lon) : siteMx + home.x / kmPerUnit
+    readonly property real wantedY: center ? mercatorY(center.y) : homePoint ? mercatorY(homePoint.lat) : siteMy - home.y / kmPerUnit
     readonly property real viewCenterX: Math.max(width/2*unitsPerPixel, Math.min(1-width/2*unitsPerPixel, wantedX))
     readonly property real viewCenterY: Math.max(height/2*unitsPerPixel, Math.min(1-height/2*unitsPerPixel, wantedY))
     function reset() { center = null; span = Math.min(210, maxSpan); }
@@ -99,6 +104,13 @@ Item {
     function jumpTo(lat, lon) {
         var k = 2 * Math.PI * 6371 * Math.cos(lat * Math.PI / 180);
         center = Qt.point(longitude(mercatorX(lon) + home.x / k), latitude(mercatorY(lat) - home.y / k));
+    }
+    // The same jump for the home station: a configured home point stands
+    // wherever the station lands, so the camera goes back to the home view
+    // rather than to the station's own offset.
+    function jumpHome(lat, lon) {
+        if (homePoint) center = null;
+        else jumpTo(lat, lon);
     }
     // A hand-off changes the site under a camera the user placed. The span
     // is measured at the site's latitude, so it is rescaled to keep the
