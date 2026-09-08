@@ -44,11 +44,20 @@ layout(binding = 3) uniform sampler2D azimuthLut;
 const float R_M = 6371000.0;
 const float EARTH_M = R_M * 4.0 / 3.0;
 const float PI = 3.14159265358979;
-const int density[9] = int[9](0,7,3,6,4,8,2,5,1);
 // Hyperbolics spelled with exp so every GLSL target qsb emits has them. For
 // small arguments exp(x) - exp(-x) cancels to a few significant bits, so the
 // small terms below take their series instead; the rendering test replays
 // the same polynomials, and the GPU and CPU then agree past the row epsilon.
+// The 3x3 ordered-dither matrix the Glyphs treatment thresholds against.
+// Spelled as a function, not a const array: GLSL 120 and 100 es have no
+// constant arrays, and qsb emits both, so a const array here compiles on
+// GLSL 150 and is rejected outright everywhere else (NVIDIA: "error C7516:
+// OpenGL does not allow constant arrays"), which silently blanks the layer.
+int density(int slot) {
+    return slot == 0 ? 0 : slot == 1 ? 7 : slot == 2 ? 3
+         : slot == 3 ? 6 : slot == 4 ? 4 : slot == 5 ? 8
+         : slot == 6 ? 2 : slot == 7 ? 5 : 1;
+}
 float cosh_(float x) { return 0.5 * (exp(x) + exp(-x)); }
 float sinh_(float x) {
     if (abs(x) >= 1.0) return 0.5 * (exp(x) - exp(-x));
@@ -148,7 +157,7 @@ void main() {
     if (treatment == 1) {
         int count=group==0 ? 2 : group==1 ? 4 : group==2 ? 7 : 9;
         int slot=int(floor(phase.y))*3+int(floor(phase.x));
-        alpha=density[slot]<count ? 1.0 : 0.0;
+        alpha=density(slot)<count ? 1.0 : 0.0;
     } else if (treatment == 2) {
         float side=group==0 ? 1.75 : group==1 ? 2.0 : group==2 ? 2.25 : 2.5;
         vec2 coverage=clamp(vec2(side*.5+.5)-abs(phase-1.5),0.0,1.0);
