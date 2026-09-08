@@ -84,6 +84,7 @@ feed cannot be reached, with cached frames kept.
 | `n` | Nearest site |
 | `Shift+L` | Lock the station |
 | `Shift+H` | Save the station as home |
+| `Shift+O` | Open this view in HookEcho |
 | `Space` | Loop the frames |
 | `[` `]` | Step a frame |
 | `Home` `End` | Oldest or newest frame |
@@ -94,6 +95,13 @@ feed cannot be reached, with cached frames kept.
 
 Measured returns under 5 dBZ (insects, birds, ground clutter on a clear day)
 are hidden by default and the legend says so; `w` shows them.
+
+`Shift+O`, or the HOOKECHO control, opens the station, map centre, and zoom
+on screen in [HookEcho](https://github.com/d4vid87/hookecho) through its
+`hookecho://goto/` link; a stepped-back or archived frame opens on that scan,
+a live view opens live. Omastorm runs `hookecho` from your PATH (an AppImage
+renamed or symlinked to `~/.local/bin/hookecho` works), or the desktop's
+registered `hookecho://` handler. Without either the status slot says so.
 
 ## Configuration
 

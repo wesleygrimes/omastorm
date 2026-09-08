@@ -374,6 +374,33 @@ reviewed with Wes the same day. Everything below is decided.
   camera path per theme on the archived fixture, stills at home for the
   treatment table (`scripts/capture-demo.sh`, `scripts/capture-readme.sh`).
 
+### HookEcho hand-off as built (2026-09-08)
+
+- Omastorm stays the quick native radar view and hands a view to a fuller
+  viewer rather than growing into one. `Shift+O` and a HOOKECHO control in
+  the controls row build HookEcho's documented deep link,
+  `hookecho://goto/SITE,lon,lat,zoom[,time]` (`docs/technical-reference.md`
+  in `d4vid87/hookecho`; `parse_goto` in `crates/hookecho/src/app.rs`), from
+  the station on screen, the map centre to four decimals, and the zoom as
+  `log2(worldPixels / 256)`, HookEcho's camera being `1 / (256 · 2^zoom)`
+  world units per pixel. The scan time travels only when the frame shown is
+  not the live head (archived, or stepped back), because HookEcho seeks to
+  a named instant and goes live without one. No product or tilt travels:
+  reflectivity is both sides' default, and an absent field leaves the
+  recipient's own setting alone by HookEcho's contract.
+- Launch is a short `sh -c`: `hookecho` on PATH first (HookEcho hands a
+  link to its running instance itself), else `xdg-open` when
+  `xdg-mime query default x-scheme-handler/hookecho` names a handler, else
+  exit 127 and `HOOKECHO NOT FOUND · PUT hookecho ON PATH` in the status
+  slot. `setsid -f` detaches the viewer from the window's process. Omarchy
+  is Arch and HookEcho has no AUR package (checked 2026-09-08), so the
+  README names the AppImage-on-PATH route. No config key: a PATH entry or
+  the scheme registration is the whole setup.
+- `scripts/check-keys.sh` puts a stand-in `hookecho` on PATH that records
+  its argument, asserts the link's shape and centre from the `hookecho`
+  status field, runs the action, and expects the stand-in to receive that
+  link and the slot to confirm.
+
 ## Technical foundation (decided 2026-09-05)
 
 **Architecture.** A headless engine does fetching, decoding, caching, and

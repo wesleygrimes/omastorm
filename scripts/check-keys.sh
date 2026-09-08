@@ -24,8 +24,14 @@ nearest = "s"
 bogus = "x"
 reset = 0
 TOML
+# A stand-in `hookecho` on PATH records the link the hand-off gives it, so
+# the check exercises the real launch without opening a viewer.
+mkdir -p "$check_dir/bin"
+printf '#!/bin/sh\nprintf %%s "$1" > "%s/link"\n' "$check_dir" > "$check_dir/bin/hookecho"
+chmod +x "$check_dir/bin/hookecho"
+rm -f "$check_dir/link"
 export QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=basic QT_QUICK_BACKEND=rhi QSG_RHI_BACKEND=opengl
-OMASTORM_CONFIG="$check_dir/config.toml" OMASTORM_LOCATION="$check_dir/weather.json" bash run.sh > "$check_dir/log" 2>&1 &
+PATH="$check_dir/bin:$PATH" OMASTORM_CONFIG="$check_dir/config.toml" OMASTORM_LOCATION="$check_dir/weather.json" bash run.sh > "$check_dir/log" 2>&1 &
 pid=$!
 trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true' EXIT
 call() { quickshell ipc --pid "$pid" call keys "$@"; }
@@ -72,6 +78,16 @@ less "$(field span)" "$span" || fail "zoom_in did not narrow the span: $span -> 
 call run reset
 expect 'reset returns the span' "$span" "$(field span)"
 expect 'reset returns the centre' "$lat $lon" "$(field lat) $(field lon)"
+# Shift+O hands the view to HookEcho: the link names the station, the map
+# centre, and HookEcho's zoom, and the stand-in on PATH receives exactly it.
+link=$(field hookecho)
+[[ $link =~ ^hookecho://goto/KFCX,(-?[0-9]+\.[0-9]{4}),(-?[0-9]+\.[0-9]{4}),[0-9]+\.[0-9]$ ]] || fail "The HookEcho link has the wrong shape: $link"
+near() { awk -v a="$1" -v b="$2" 'BEGIN { d = a - b; exit !(d < .0011 && d > -.0011) }'; }
+near "${BASH_REMATCH[2]}" "$lat" && near "${BASH_REMATCH[1]}" "$lon" || fail "The link does not carry the map centre $lat $lon: $link"
+call run hookecho
+for attempt in {1..50}; do [[ -f "$check_dir/link" ]] && break; sleep .1; done
+expect 'The stand-in received the link' "$link" "$(cat "$check_dir/link")"
+expect 'The status slot says so' 'HOOKECHO · OPENING KFCX' "$(field notice)"
 call run pixels
 expect '1 picks Pixels' PIXELS "$(field treatment)"
 call run weak

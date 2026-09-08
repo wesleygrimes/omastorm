@@ -196,6 +196,7 @@ Item {
         case "nearest": nearest(); break;
         case "lock": toggleLock(); break;
         case "home": setHome(); break;
+        case "hookecho": openHookEcho(); break;
         case "pan_left": map.pan(-1, 0); break;
         case "pan_right": map.pan(1, 0); break;
         case "pan_up": map.pan(0, -1); break;
@@ -226,7 +227,7 @@ Item {
         function status(): string {
             return JSON.stringify({sheet: sheet.open, menu: treatmentMenu.opened, treatment: app.treatment, weakFloor: app.weakFloor === null ? "off" : app.weakFloor, error: app.configError,
                                    span: Math.round(map.span * 10) / 10, lat: Math.round(map.centerLat * 1000) / 1000, lon: Math.round(map.centerLon * 1000) / 1000,
-                                   home: app.homeSite, homeSource: app.homeSource, site: app.siteId, locked: app.locked});
+                                   home: app.homeSite, homeSource: app.homeSource, site: app.siteId, locked: app.locked, hookecho: app.hookechoLink, notice: app.notice});
         }
     }
     // Site navigation (DESIGN.md, markers): the lock pins the station against
@@ -245,6 +246,34 @@ Item {
         config.setHome(siteId);
         notice = "HOME · " + siteId + " SAVED TO CONFIG.TOML";
         noticeTimer.restart();
+    }
+    // Shift+O or the HOOKECHO control hands this view to HookEcho through
+    // its documented deep link (DESIGN.md, HookEcho hand-off as built):
+    // `hookecho://goto/SITE,lon,lat,zoom[,time]`. The centre is the map's;
+    // HookEcho's zoom is log2 of the world's width in 256 px tiles, so the
+    // span converts through the map's worldPixels. The scan time travels
+    // only when the frame on screen is not the live head, so a live view
+    // opens live and an archived or stepped-back one opens on that scan.
+    readonly property string hookechoLink: !scan ? ""
+        : "hookecho://goto/" + siteId + "," + map.centerLon.toFixed(4) + "," + map.centerLat.toFixed(4) + "," + Math.log2(map.worldPixels / 256).toFixed(1)
+          + (scan.scanTime && !(state.source === "live" && newestShown) ? "," + scan.scanTime : "")
+    function openHookEcho() {
+        if (!hookechoLink || hookecho.running) return;
+        hookecho.command = ["sh", "-c",
+            'command -v hookecho >/dev/null 2>&1 && exec setsid -f hookecho "$1"; ' +
+            '[ -n "$(xdg-mime query default x-scheme-handler/hookecho 2>/dev/null)" ] && exec setsid -f xdg-open "$1"; exit 127',
+            "omastorm", hookechoLink];
+        hookecho.running = true;
+    }
+    // The launch is a short shell: HookEcho on PATH, else the desktop's
+    // registered hookecho:// handler, else 127. setsid detaches the viewer
+    // so it outlives this window; only the shell's exit is awaited.
+    Process {
+        id: hookecho
+        onExited: code => {
+            app.notice = code === 0 ? "HOOKECHO · OPENING " + (app.siteId || "THIS VIEW") : "HOOKECHO NOT FOUND · PUT hookecho ON PATH";
+            noticeTimer.restart();
+        }
     }
     function nearest() {
         var s = map.nearest();
@@ -706,6 +735,7 @@ Item {
                 GlyphButton { glyph: app.locked ? "lock" : "follow"; selected: app.locked; enabled: !!app.state; onClicked: app.toggleLock() }
                 // Save the station on screen as home; away once it is the home.
                 Control { text: win.compact ? "⌂" : "⌂ HOME"; visible: !!app.state && app.siteId !== "" && app.siteId !== app.homeSite; onClicked: app.setHome() }
+                Control { text: win.compact ? "↗" : "↗ HOOKECHO"; visible: !!app.scan; onClicked: app.run("hookecho") }
                 Item { Layout.fillWidth: true }
                 // The treatment chip (DESIGN.md, treatment control): one
                 // low-emphasis control naming the treatment; click opens the
