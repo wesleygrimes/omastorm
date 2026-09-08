@@ -1580,7 +1580,21 @@ fn handshake(dir: &Path) -> io::Result<Option<Handshake>> {
     stream.set_read_timeout(Some(Duration::from_millis(200)))?;
     let mut reader = BufReader::new(stream).take(64 * 1024);
     let mut text = String::new();
-    reader.read_line(&mut text)?;
+    // A daemon that has bound the socket but not yet published its hello is
+    // starting, not broken: the read timeout means "not ready", the same
+    // answer as no socket at all, so `ensure` keeps waiting out its deadline.
+    match reader.read_line(&mut text) {
+        Ok(_) => {}
+        Err(e)
+            if matches!(
+                e.kind(),
+                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+            ) =>
+        {
+            return Ok(None);
+        }
+        Err(e) => return Err(e),
+    }
     let handshake: Handshake = serde_json::from_str(&text).map_err(io::Error::other)?;
     if handshake.kind != "hello" {
         return Err(io::Error::other(
