@@ -77,5 +77,5 @@ if (( write_pin )); then
 else
   printf 'Candidate pin: %s (committed pin unchanged).\n' "$candidate"
   printf 'Publish only as a new immutable release with both architectures; follow docs/RELEASING.md.\n'
-  printf 'After publication, verify the candidate with scripts/pin-engine-release.sh.\n'
+  printf 'After publication, verify with mise engine-verify and write the pin with mise engine-pin.\n'
 fi

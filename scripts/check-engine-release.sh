@@ -3,13 +3,33 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 fail() { printf '%s\n' "$@" >&2; exit 1; }
-scratch=$(mktemp -d /tmp/omastorm-release-check.XXXXXX)
+scratch=$(mktemp -d "${TMPDIR:-/tmp}/omastorm-release-check.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
+for task in engine-bump engine-tag engine-verify engine-pin build-release release; do
+  rg -q "\[tasks\.$task\]" mise.toml || fail "mise.toml is missing $task"
+done
+toml=$(sha256sum engine/Cargo.toml Cargo.lock)
+current=$(awk -F'"' '/^version = /{print $2; exit}' engine/Cargo.toml)
+if bash scripts/bump-engine-version.sh not-a-version > "$scratch/bump.err" 2>&1; then
+  fail 'bump-engine-version.sh accepted a non X.Y.Z version'
+fi
+rg -q 'Version must be X.Y.Z' "$scratch/bump.err" || fail "unclear bump error: $(cat "$scratch/bump.err")"
+if bash scripts/bump-engine-version.sh "$current" > "$scratch/bump.err" 2>&1; then
+  fail 'bump-engine-version.sh rewrote the current version'
+fi
+rg -q "already $current" "$scratch/bump.err" || fail "unclear current-version bump error: $(cat "$scratch/bump.err")"
+[[ $(sha256sum engine/Cargo.toml Cargo.lock) == "$toml" ]] || fail 'Failed bump changed Cargo.toml or Cargo.lock'
 mkdir -p "$scratch"/{scripts,engine,target/dist,bin,published}
-cp scripts/{engine-pin,package-engine-release,pin-engine-release}.sh "$scratch/scripts/"
+cp scripts/{engine-pin,package-engine-release,pin-engine-release,tag-engine-release}.sh "$scratch/scripts/"
 cp engine/{Cargo.toml,release.pin} "$scratch/engine/"
 git -C "$scratch" init -q
 git -C "$scratch" -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit -qm fixture --allow-empty
+git -C "$scratch" branch -m topic
+if bash "$scratch/scripts/tag-engine-release.sh" > "$scratch/tag.err" 2>&1; then
+  fail 'tag-engine-release.sh tagged from a topic branch'
+fi
+rg -q 'engine tags are pushed from main' "$scratch/tag.err" \
+  || fail "unclear tag refusal: $(cat "$scratch/tag.err")"
 source_commit=$(git -C "$scratch" rev-parse HEAD)
 version=$(awk -F'"' '/^version = /{print $2; exit}' engine/Cargo.toml)
 # Header fixtures exercise architecture checks; these files are never executed.
@@ -64,6 +84,10 @@ if FAIL_ASSET=$arm bash scripts/pin-engine-release.sh > failure.log 2>&1; then f
 [[ $(sha256sum engine/release.pin) == "$before" ]] || fail 'Missing asset changed the tracked pin'
 if CORRUPT_ASSET=$arm bash scripts/pin-engine-release.sh > failure.log 2>&1; then fail 'Pinned a mismatching published asset'; fi
 [[ $(sha256sum engine/release.pin) == "$before" ]] || fail 'Wrong checksum changed the tracked pin'
+if FAIL_ASSET=$arm bash scripts/pin-engine-release.sh --verify-only > failure.log 2>&1; then fail 'Verified a missing published asset'; fi
+[[ $(sha256sum engine/release.pin) == "$before" ]] || fail 'Failed verify-only changed the tracked pin'
+bash scripts/pin-engine-release.sh --verify-only
+[[ $(sha256sum engine/release.pin) == "$before" ]] || fail 'verify-only changed the tracked pin'
 bash scripts/pin-engine-release.sh
 cmp engine/release.pin target/dist/release.pin
 echo 'Engine release: both architectures, ELF labels, exact checksums, and publication gate PASS'

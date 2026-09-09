@@ -92,8 +92,9 @@ commit; it uses scratch daemons and leaves the shared daemon alone. Cargo runs
 first, then the Rust tests run alongside the UI checks, which proceed in two
 lanes. Scratch and logs live under `target/check/`, never `/tmp`; the daemons
 and runtime files go on every exit, and the logs stay until the next run.
-The checks read `target/debug/`, so leave `CARGO_TARGET_DIR` unset. There is no
-GitHub Actions suite yet; a pull request is ready when those local checks pass.
+The checks read `target/debug/`, so leave `CARGO_TARGET_DIR` unset. Engine
+builds CI lints, tests, and packages both Linux architectures; GPU and QML
+checks still run locally. A pull request is ready when `mise check` passes.
 
 For shader, sampling, or camera changes, also run `mise check --gpu` and
 `bash scripts/capture-review.sh`, inspect the images in `review/`, and include

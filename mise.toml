@@ -62,12 +62,28 @@ run = "cargo test --offline --locked"
 description = "Integration suite against a scratch daemon; run before every commit (--gpu adds the rendering test)"
 run = "bash scripts/check.sh"
 
+[tasks.engine-bump]
+description = "Bump engine/Cargo.toml and Cargo.lock to the next patch (or -- <version>); publishes nothing"
+run = "bash scripts/bump-engine-version.sh"
+
+[tasks.engine-tag]
+description = "Push annotated engine-<version> from clean main so CI drafts the GitHub Release"
+run = "bash scripts/tag-engine-release.sh"
+
+[tasks.engine-verify]
+description = "Download published engine assets and require their sha256 to match the candidate pin; writes nothing"
+run = "bash scripts/pin-engine-release.sh --verify-only"
+
+[tasks.engine-pin]
+description = "Verify published engine assets, then write engine/release.pin (does not commit)"
+run = "bash scripts/pin-engine-release.sh"
+
 [tasks.build-release]
 description = "Optimized, stripped engine and SHA256SUMS under target/dist/ as a release candidate; publishes nothing (--write-pin updates engine/release.pin)"
 run = "bash scripts/build-engine-release.sh"
 
 [tasks.release]
-description = "Publish engine-<version> from main: candidate, draft release, publish, verify the published asset, write the pin (--dry-run, --yes)"
+description = "Local fallback: publish engine-<version> from a laptop (candidate, draft, publish, verify, write pin; --dry-run, --yes)"
 run = "bash scripts/release-engine.sh"
 
 [tasks.clean]

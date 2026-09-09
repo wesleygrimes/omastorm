@@ -26,7 +26,7 @@ for arch in x86_64 aarch64; do
     || die "Build metadata does not match $asset, engine $version, and commit $source_commit"
 done
 {
-  printf '# Verify published assets with scripts/pin-engine-release.sh before committing.\n'
+  printf '# Verify published assets with mise engine-pin before committing.\n'
   printf 'tag=engine-%s\nrepo=%s\n' "$version" "$repo"
   for arch in x86_64 aarch64; do
     printf 'asset_%s=%s\nsha256_%s=%s\n' "$arch" "${assets[$arch]}" "$arch" "${hashes[$arch]}"

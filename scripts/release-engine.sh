@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Publish an engine release from main (DESIGN.md, distribution). Run it as
+# Local fallback: publish an engine release from a laptop (docs/RELEASING.md).
+# Prefer `mise engine-tag` after CI builds both architectures. Run this as
 # `mise release`. Refuses unless on main, clean, and even with origin/main,
 # and unless engine/Cargo.toml names a version with no tag or release yet.
 # Builds the candidate, requires it to answer hello with that version and the

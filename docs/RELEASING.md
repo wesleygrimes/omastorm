@@ -30,9 +30,9 @@ Honor the work later with a `v*` tag; generate its notes as Plugin step 3
 describes, from the previous `v*` tag and never an `engine-*` tag.
 
 Engine only: the code may merge to `main`, but users keep the pinned binary
-until a maintainer runs `mise release` and the pin commit lands. Batch engine
-releases; do not release on every merge. Credit the engine author in the
-release notes, which the script generates from commit subjects alone.
+until a maintainer finishes the engine sequence below and the pin commit
+lands. Batch engine releases; do not release on every merge. Credit the
+engine author in the release notes.
 
 Plugin and engine together in one PR: do not merge while the UI needs a
 protocol or feature the published pin does not speak. `mise check` builds the
@@ -46,54 +46,76 @@ Never merge the UI first.
 
 ## Engine
 
-Use a configured checkout with GitHub CLI authentication and release access.
-The implementation is [scripts/release-engine.sh](../scripts/release-engine.sh).
+Prefer CI. Bump the version on `main`, let
+[.github/workflows/engine.yml](../.github/workflows/engine.yml) build both
+Linux architectures, push `engine-<version>`, publish the draft, then verify
+the public bytes before writing the pin.
 
-1. Bump `version` in `engine/Cargo.toml`. Run
-   `mise exec -- cargo build --offline` to update `Cargo.lock`, then
-   `mise check`. Commit both files and push to `main`.
-   The engine workflow builds both Linux architectures natively. Download its
-   `engine-release` artifact into `target/dist/` before running the release
-   command locally, or gather both native outputs and their `.build.json`
-   metadata from this same commit. A missing, stale, or mislabeled build fails
-   packaging before a draft is created.
-2. Run `mise release --dry-run` from clean `main`, even with `origin/main`.
-   It builds the native stripped candidate, verifies both binaries' source
+The workflow runs the mise toolchain's lint, Rust tests, installer checks,
+and release checks on native `ubuntu-24.04` x86_64 and `ubuntu-24.04-arm`
+aarch64 runners. Every native candidate must answer hello with the engine
+version and UI protocol. GPU/QML checks still require an Omarchy desktop.
+PRs, branch pushes, and manual runs produce workflow artifacts. Pushing
+`engine-<version>` (the tag must match Cargo.toml) combines both candidates
+and creates a draft GitHub Release; it refuses to overwrite an existing
+release.
+
+Ubuntu runners execute the newly built native candidates. They verify
+installation and checksums for the existing published pin with
+`--published-install-only`: the Arch-built engine-0.1.2 x86 asset requires
+glibc 2.44, newer than Ubuntu 24.04. Normal desktop checks still require the
+pinned binary to run. Building future releases on Ubuntu also avoids inheriting
+the build machine's newer Arch glibc.
+
+1. Run `mise engine-bump` (next patch) or `mise engine-bump -- <version>`.
+   It writes `engine/Cargo.toml` and `Cargo.lock`. Run `mise check`, commit
+   both files, and push to `main`.
+2. Wait for Engine builds CI on that commit to finish on both architectures.
+3. From clean `main`, even with `origin/main`, run `mise engine-tag`. It
+   pushes an annotated `engine-<version>` tag. CI drafts the GitHub Release
+   with both binaries, build metadata, `SHA256SUMS`, and the candidate pin.
+4. Review the draft and publish it. Never pin a draft or add assets after
+   publishing.
+5. Download the published `release.pin` or the `engine-release` workflow
+   artifact into `target/dist/`. Run `mise engine-verify` to require every
+   public binary to match the candidate checksums. It writes nothing.
+6. Run `mise engine-pin` to write `engine/release.pin`. Run `mise check`,
+   then commit the pin separately and push. Users receive it on their next
+   plugin update.
+
+`mise engine-verify` and `mise engine-pin` call
+[scripts/pin-engine-release.sh](../scripts/pin-engine-release.sh). Neither
+commits. If an already published asset is wrong, leave the pin unchanged and
+release a new version.
+
+### Local fallback
+
+Use a laptop only when CI cannot cut the release. You still need both native
+binaries and their `.build.json` metadata from the same commit: download the
+`engine-release` workflow artifact into `target/dist/`, or gather both native
+outputs. A missing, stale, or mislabeled build fails packaging before a draft
+is created.
+
+`mise release` remains the one-shot local path
+([scripts/release-engine.sh](../scripts/release-engine.sh)). From clean
+`main`, even with `origin/main`, and with GitHub CLI authentication and
+release access:
+
+1. After the version bump is on `main`, run `mise release --dry-run`. It
+   builds the native stripped candidate, verifies both binaries' source
    commit/version/checksums, checks the native candidate's reported version
-   and UI protocol compatibility, and prints the tag, sha256, and release notes.
-   Review these before publishing.
-3. Run `mise release` and confirm publication. It creates `engine-<version>`
-   with both binaries, build metadata, `SHA256SUMS`, and the candidate pin,
-   then verifies every published binary before writing `engine/release.pin`.
-4. Run `mise check` to verify installation from the new pin, then commit the
-   pin separately and push. Users receive it on their next plugin update.
+   and UI protocol compatibility, and prints the tag, sha256, and release
+   notes. Review these before publishing.
+2. Run `mise release` and confirm publication. It creates `engine-<version>`,
+   publishes, verifies every published binary, and writes `engine/release.pin`.
+3. Run `mise check`, then commit the pin separately and push.
 
-`mise build-release` builds a local candidate without publishing. Do not use
-its `--write-pin` option to bypass published-asset verification.
-If release validation fails, resolve the reported precondition. If an already
-published asset is wrong, leave the pin unchanged and release a new version.
+`mise build-release` builds a local candidate without publishing (CI calls
+this per architecture). Do not use its `--write-pin` option to bypass
+published-asset verification. After a local candidate, prefer
+`mise engine-verify` / `mise engine-pin`.
 
-### CI release route
-
-Ubuntu runners execute the newly built native candidates. They verify installation
-and checksums for the existing published pin with `--published-install-only`: the
-Arch-built engine-0.1.2 x86 asset requires glibc 2.44, newer than Ubuntu 24.04.
-Normal desktop checks still require the pinned binary to run. Building future
-releases on Ubuntu also avoids inheriting the build machine's newer Arch glibc.
-
-`.github/workflows/engine.yml` runs the mise toolchain's lint, Rust tests,
-installer checks, and release checks on native `ubuntu-24.04` x86_64 and
-`ubuntu-24.04-arm` aarch64 runners. Every native candidate must answer hello
-with the engine version and UI protocol. GPU/QML checks still require an
-Omarchy desktop. PRs, branch pushes, and manual runs produce workflow artifacts.
-
-Alternatively, push `engine-<version>` on the tested release commit. The tag
-must match Cargo.toml. CI combines both candidates and creates a draft GitHub
-Release; it refuses to overwrite an existing release. Review and publish the
-draft, download its `engine-release` workflow artifact into `target/dist/`,
-then run `bash scripts/pin-engine-release.sh target/dist/release.pin`. That
-verifies the exact public bytes without rebuilding them. Run `mise check`
-and commit the pin afterward. Never pin a draft or add assets after publishing.
+If release validation fails, resolve the reported precondition.
 
 ## Plugin
 
