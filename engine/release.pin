@@ -1,6 +1,7 @@
-# Pinned GitHub Release for the engine binary (DESIGN.md, distribution).
-# Bump only after the named release exists on wesleygrimes/omastorm.
-tag=engine-0.1.2
+# Verify published assets with mise engine-pin before committing.
+tag=engine-0.1.3
 repo=wesleygrimes/omastorm
 asset_x86_64=omastorm-engine-x86_64-unknown-linux-gnu
-sha256_x86_64=e2c415e003002c7e0641d9f5effc7ba3d255ba7436aa6b2179e8f670ae650584
+sha256_x86_64=922ff79dbbbfaa179352e91c941b29b35dbea6947359b81aff2a4fa6ee093f65
+asset_aarch64=omastorm-engine-aarch64-unknown-linux-gnu
+sha256_aarch64=95866a98ad3d87bed60f54bd01e22662b6834710693f288ac3fb1ef6a18ff117
