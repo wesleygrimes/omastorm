@@ -2,7 +2,7 @@
 
 Open-source, live NEXRAD radar for the Omarchy desktop. Beta.
 
-[![Omastorm, one live take on the Jacksonville radar](https://github.com/wesleygrimes/omastorm/releases/download/v0.1.0/omastorm-preview.gif)](https://github.com/wesleygrimes/omastorm/releases/download/v0.1.0/omastorm-demo.mp4)
+[![Omastorm window: live take with loop, search, keys, and treatments](https://github.com/wesleygrimes/omastorm/releases/download/media-2026-09-09/omastorm-preview.gif)](https://github.com/wesleygrimes/omastorm/releases/download/media-2026-09-09/omastorm-demo.mp4)
 
 Live KJAX demo: playback, pan and zoom, treatments, weak returns, station
 search, and keyboard controls.
@@ -12,9 +12,9 @@ the actual scan time. Expand it for the full window: every NEXRAD site in the
 network, reflectivity at native resolution, a timeline you can scrub, all drawn
 in your Omarchy theme.
 
-![The Omastorm window, live](https://github.com/wesleygrimes/omastorm/releases/download/v0.1.0/window-live.png)
+![The Omastorm window, live](https://github.com/wesleygrimes/omastorm/releases/download/media-2026-09-09/window-live.png)
 
-![The Omastorm popover, live](https://github.com/wesleygrimes/omastorm/releases/download/v0.1.0/popover.png)
+![The Omastorm popover, live](https://github.com/wesleygrimes/omastorm/releases/download/media-2026-09-09/popover.png)
 
 A headless Rust engine fetches and decodes NEXRAD Level II data and prepares
 GPU-ready radar textures. An Omarchy plugin built with Quickshell/QML is the

@@ -81,13 +81,15 @@
     background: #1a1b26;
     line-height: 0;
   }
-  .frame video {
+  .frame video, .frame img {
     display: block;
     width: 100%;
     height: auto;
-    aspect-ratio: 16 / 9;
     background: #1a1b26;
   }
+  .frame video { aspect-ratio: 13 / 9; }
+  .frame.shot img { width: min(100%, 520px); margin: 0 auto; }
+  figure.shots .frame { display: flex; justify-content: center; background: var(--well); }
   figcaption {
     display: flex;
     justify-content: space-between;
@@ -231,16 +233,27 @@
   <figure>
     <div class="frame">
       <video id="take" autoplay muted loop playsinline preload="metadata"
-             poster="take-poster.png" width="1280" height="720"
-             aria-label="One live take of the Omastorm window on the Jacksonville radar: the loop plays, the view pans and zooms to the coast, the three treatments switch, weak returns show, the picker finds Tallahassee, and the keys sheet opens.">
+             poster="take-poster.png" width="1280" height="886"
+             aria-label="One live take of the Omastorm window: Jacksonville radar loop, station search to Tampa, keys sheet, and Glyphs / Pixels / Stipple treatments.">
         <source src="take.mp4" type="video/mp4">
       </video>
     </div>
     <figcaption>
-      <span>2026-09-07 · one live take, sped up slightly · <a href="https://github.com/wesleygrimes/omastorm/releases/download/v0.1.0/omastorm-demo.mp4">full quality</a></span>
-      <span>Loop · pan and zoom · Glyphs, Pixels, Stipple · weak returns · picker · keys</span>
+      <span>2026-09-09 · one live take · <a href="https://github.com/wesleygrimes/omastorm/releases/download/media-2026-09-09/omastorm-demo.mp4">full quality</a></span>
+      <span>Loop · station search · keys · Glyphs, Pixels, Stipple</span>
     </figcaption>
   </figure>
+
+  <figure class="shots">
+    <div class="frame shot">
+      <img src="popover.png" width="720" height="520" alt="Omastorm bar popover: Miami station, live radar, timeline, and EXPAND.">
+    </div>
+    <figcaption>
+      <span>Bar popover · home station · LIVE · expand to the window</span>
+      <span>Same map, timeline, and theme as the full window</span>
+    </figcaption>
+  </figure>
+
 
   <p class="lede">
     Live NEXRAD radar for the Omarchy desktop. Every site in the network, drawn from the
@@ -263,7 +276,7 @@
     </div>
     <div class="rule"></div>
     <div class="cmd">
-      <pre><code id="install-cmd"><span class="p">$ </span>omarchy plugin add <span class="a">https://github.com/wesleygrimes/omastorm</span> --enable</code></pre>
+      <pre><code id="install-cmd"><span class="p">$ </span>omarchy plugin add <span class="a">https://github.com/wesleygrimes/omastorm.git</span> --enable</code></pre>
       <button type="button" data-copy="install-cmd" aria-label="Copy the install command">Copy</button>
     </div>
     <ol class="steps">
