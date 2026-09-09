@@ -44,7 +44,17 @@ layout(binding = 3) uniform sampler2D azimuthLut;
 const float R_M = 6371000.0;
 const float EARTH_M = R_M * 4.0 / 3.0;
 const float PI = 3.14159265358979;
-const int density[9] = int[9](0,7,3,6,4,8,2,5,1);
+// The Glyphs treatment's 3x3 ordered-dither matrix, row-major: a cell's
+// pixel paints while its entry is under the band's count. Spelled as a
+// lookup rather than a const array: qsb also emits GLSL 100 es and 120,
+// which have no constant arrays, and a driver taking that path rejected
+// the whole shader ("OpenGL does not allow constant arrays"), leaving a
+// blank radar layer under a LIVE badge (issues #16, #22).
+int density(int slot) {
+    return slot == 0 ? 0 : slot == 1 ? 7 : slot == 2 ? 3
+         : slot == 3 ? 6 : slot == 4 ? 4 : slot == 5 ? 8
+         : slot == 6 ? 2 : slot == 7 ? 5 : 1;
+}
 // Hyperbolics spelled with exp so every GLSL target qsb emits has them. For
 // small arguments exp(x) - exp(-x) cancels to a few significant bits, so the
 // small terms below take their series instead; the rendering test replays
@@ -148,7 +158,7 @@ void main() {
     if (treatment == 1) {
         int count=group==0 ? 2 : group==1 ? 4 : group==2 ? 7 : 9;
         int slot=int(floor(phase.y))*3+int(floor(phase.x));
-        alpha=density[slot]<count ? 1.0 : 0.0;
+        alpha=density(slot)<count ? 1.0 : 0.0;
     } else if (treatment == 2) {
         float side=group==0 ? 1.75 : group==1 ? 2.0 : group==2 ? 2.25 : 2.5;
         vec2 coverage=clamp(vec2(side*.5+.5)-abs(phase-1.5),0.0,1.0);
