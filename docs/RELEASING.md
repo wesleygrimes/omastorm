@@ -9,6 +9,33 @@ Published releases are immutable. Prepare assets in a draft; a mistake after
 publication requires a new version. Never pin an unpublished or unverified
 binary.
 
+## Release paths
+
+Users run `main`: a merged change reaches them on their next plugin update. A
+`v*` tag is the thank-you note for that work, not the thing users wait for.
+The engine they run is whatever `engine/release.pin` names. A maintainer
+decides when an engine release happens; nothing here publishes one on its own.
+Every change takes one of four paths.
+
+Plugin or UI only (QML, copy, docs, README): merge anytime. No engine release.
+Honor the work later with a `v*` tag; generate its notes as Plugin step 3
+describes, from the previous `v*` tag and never an `engine-*` tag.
+
+Engine only: the code may merge to `main`, but users keep the pinned binary
+until a maintainer runs `mise release` and the pin commit lands. Batch engine
+releases; do not release on every merge. Credit the engine author in the
+release notes, which the script generates from commit subjects alone.
+
+Plugin and engine together in one PR: do not merge while the UI needs a
+protocol or feature the published pin does not speak. `mise check` builds the
+PR's own engine, so a green check proves nothing about the pin. Leave the PR
+open until the engine binary is published, then land the pin and the UI in
+the same push so an update never puts the UI ahead of the binary.
+
+Split PRs: merge the engine PR first; the plugin on `main` must still speak
+the current pin. Publish the engine and land the pin. Then merge the UI PR.
+Never merge the UI first.
+
 ## Engine
 
 Use a configured checkout with GitHub CLI authentication and release access.
