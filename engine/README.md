@@ -53,10 +53,18 @@ blank. Selecting another station cancels the poller and discards its late events
 A background backfill fetches up to twelve earlier volumes, skipping cached ones.
 SAILS and MRLE extra low-level cuts are not separate frames.
 
-The poller bounds requests with timeouts and retries with backoff. A reachable
-feed becomes stale at ten minutes and unavailable at thirty minutes without
-new radials; an empty station is unavailable, and an unreachable bucket is
-offline. Cached frames remain usable under every condition.
+The poller bounds requests with timeouts and retries with backoff. Four
+failed chunk fetches restart discovery. `try_next` returning `None` is not a
+failure, but 90 seconds with no chunk at all (higher cuts of a live volume
+still arrive every 4–12 s) means the iterator is parked on a volume the
+bucket has rotated off, so discovery starts over. Independently, the engine
+respawns a poller whose task has exited, or whose newest radial is thirty
+minutes old and has not been rediscovered since. Reselecting the live
+station is a no-op while the poller is running; if the task has ended, the
+reselect starts it again. A reachable feed becomes stale at ten minutes and
+unavailable at thirty minutes without new radials; an empty station is
+unavailable, and an unreachable bucket is offline. Cached frames remain
+usable under every condition.
 
 `src/catalog.rs` stores the newest 60 complete frames per station in
 `$XDG_CACHE_HOME/omastorm/frames/`: a SQLite WAL catalog and PNG files.

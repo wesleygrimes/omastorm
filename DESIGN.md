@@ -101,6 +101,15 @@ configuration.
 A product is a texture, legend, units, timestamp, and source from the engine.
 Level II is what is drawn.
 
+The live poller follows the latest volume. `try_next` returning no chunk is
+normal between chunks, but 90 seconds with no chunk at all means the
+iterator is stuck on a volume that will never grow; restart discovery.
+Independently, if the poller task has exited, or the newest radial is thirty
+minutes old and discovery has not been tried since, spawn a new poller.
+Reselecting the current station is a no-op while the poller is running; if
+the task has ended, start it again. Cached frames stay on screen through a
+rediscovery.
+
 ## Scope
 
 Keep the feature set small. Prefer the weather panel, the theme, and the

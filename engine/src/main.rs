@@ -295,6 +295,21 @@ fn feed_condition(current: ConnectionStatus, evidence_age: Option<u64>) -> Conne
         _ => ConnectionStatus::Ok,
     }
 }
+/// Restart the live poller when it has exited, or when the newest radial
+/// is old enough that the UI already says UNAVAILABLE and we have not
+/// tried discovery since. A cooldown equal to that age keeps a silent
+/// station from being rediscovered every cleanup tick.
+fn should_restart_live(
+    poller_dead: bool,
+    evidence_age: Option<u64>,
+    since_restart: Duration,
+) -> bool {
+    if poller_dead {
+        return true;
+    }
+    evidence_age.is_some_and(|age| age >= UNAVAILABLE_AFTER.as_secs())
+        && since_restart >= UNAVAILABLE_AFTER
+}
 /// A live station's frame from an assembled sweep: the fixture frame's
 /// product, palette, and bounds (the engine's reflectivity vocabulary), the
 /// sweep's geometry and times, and the station table's coordinates. Texture
@@ -488,8 +503,12 @@ struct Shared {
     dir: PathBuf,
     catalog: Arc<catalog::Catalog>,
     /// The poller for the selected station in live mode (`live.rs`);
-    /// aborted and replaced by a site switch.
+    /// aborted and replaced by a site switch or a quiet-feed restart.
     live: Option<JoinHandle<()>>,
+    /// When the poller was last spawned, so an UNAVAILABLE feed is
+    /// rediscovered at most once per `UNAVAILABLE_AFTER` rather than every
+    /// cleanup tick.
+    last_live_restart: Instant,
     events: Sender<live::Event>,
     /// `scanTime` of the newest complete frame, milliseconds since the
     /// epoch, for `connection.ageSeconds`; `None` while there is none.
@@ -516,16 +535,8 @@ impl Shared {
         // half-finished cut from a station that then fell silent ages like
         // any other evidence.
         if self.state.source == Source::Live {
-            let newest_ms = self
-                .pending
-                .as_ref()
-                .map(|p| p.end_ms)
-                .into_iter()
-                .chain(self.frame_ms)
-                .max();
-            let evidence_age = newest_ms.map(|ms| now_ms().saturating_sub(ms).max(0) as u64 / 1000);
             self.state.connection.status =
-                feed_condition(self.state.connection.status, evidence_age);
+                feed_condition(self.state.connection.status, self.evidence_age_secs());
         }
         line(&Message::State(&self.state))
     }
@@ -561,12 +572,45 @@ impl Shared {
             .ok_or_else(|| io::Error::other(format!("{id} is no longer in the catalog")))?;
         self.show(stored.frame, &stored.texture, &stored.azimuth_lut)
     }
+    /// Age of the newest radial received for the live station: the sweep
+    /// in progress while one paints, else the newest complete frame.
+    fn evidence_age_secs(&self) -> Option<u64> {
+        let newest_ms = self
+            .pending
+            .as_ref()
+            .map(|p| p.end_ms)
+            .into_iter()
+            .chain(self.frame_ms)
+            .max()?;
+        Some(now_ms().saturating_sub(newest_ms).max(0) as u64 / 1000)
+    }
+    /// Abort the current poller, if any, and start another on the selected
+    /// station. Timeline and the frame on screen stay; the next sweep
+    /// clears `unavailable` / `offline`.
+    fn restart_live(&mut self, why: &str) {
+        let site = self.state.site.id.clone();
+        if site.is_empty() || self.state.source != Source::Live {
+            return;
+        }
+        eprintln!("{} Live {site}: {why}", iso(now_ms()));
+        if let Some(task) = self.live.take() {
+            task.abort();
+        }
+        let cached: Vec<i64> = self.timeline.stored.iter().map(|e| e.start_ms).collect();
+        self.live = Some(tokio::spawn(live::poll(site, self.events.clone(), cached)));
+        self.last_live_restart = Instant::now();
+    }
     /// Go live on a station: the newest cached frame (or an empty one)
     /// shows at once under `loading`, the timeline is the station's
     /// catalog, and a poller replaces the previous station's. Reselecting
-    /// the live station changes nothing.
+    /// the live station changes nothing while its poller is still running;
+    /// a finished poller is started again so opening the popover recovers
+    /// a wedged feed.
     fn select_site(&mut self, id: &str) -> (bool, Option<String>) {
         if id == self.state.site.id && self.state.source == Source::Live {
+            if self.live.as_ref().is_none_or(JoinHandle::is_finished) {
+                self.restart_live("poller ended; restarting on reselect");
+            }
             return (false, None);
         }
         let Some(station) = self.sites.iter().find(|s| s.id == id).cloned() else {
@@ -609,22 +653,14 @@ impl Shared {
                 );
             }
         };
-        if let Some(task) = self.live.take() {
-            task.abort();
-        }
         self.frame_ms = frame_ms;
-        let cached: Vec<i64> = listed.iter().map(|e| e.start_ms).collect();
         self.timeline = Timeline::new(listed);
         self.pending = None;
         self.state.playing = false;
-        self.state.site.id = station.id.clone();
+        self.state.site.id = station.id;
         self.state.source = Source::Live;
         self.state.connection.status = ConnectionStatus::Loading;
-        self.live = Some(tokio::spawn(live::poll(
-            station.id,
-            self.events.clone(),
-            cached,
-        )));
+        self.restart_live("polling");
         (true, None)
     }
     /// A pan settled with the map centred at `lat`, `lon`. While following and
@@ -1523,6 +1559,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
         dir: dir.clone(),
         catalog,
         live: None,
+        last_live_restart: Instant::now(),
         events,
         frame_ms,
         timeline: Timeline::new(entries),
@@ -1555,6 +1592,23 @@ fn serve(dir: PathBuf) -> io::Result<()> {
             let mut shared = cleanup_shared.lock().unwrap();
             if shared.state.source == Source::Live {
                 shared.broadcast();
+                if !shared.state.site.id.is_empty()
+                    && should_restart_live(
+                        shared.live.as_ref().is_none_or(JoinHandle::is_finished),
+                        shared.evidence_age_secs(),
+                        shared.last_live_restart.elapsed(),
+                    )
+                {
+                    let why = if shared.live.as_ref().is_none_or(JoinHandle::is_finished) {
+                        "poller ended; restarting".to_owned()
+                    } else {
+                        format!(
+                            "no new radial for {}s; rediscovering",
+                            shared.evidence_age_secs().unwrap_or(0)
+                        )
+                    };
+                    shared.restart_live(&why);
+                }
             }
         }
     });
@@ -1899,6 +1953,32 @@ mod tests {
             serde_json::to_string(&Unavailable).unwrap(),
             "\"unavailable\""
         );
+    }
+
+    #[test]
+    fn a_wedged_poller_is_restarted_once_the_feed_is_unavailable() {
+        let cooldown = UNAVAILABLE_AFTER;
+        assert!(
+            should_restart_live(true, None, Duration::from_secs(0)),
+            "a finished poller restarts at once"
+        );
+        assert!(
+            !should_restart_live(
+                false,
+                Some(UNAVAILABLE_AFTER.as_secs()),
+                Duration::from_secs(0)
+            ),
+            "do not restart every tick after going unavailable"
+        );
+        assert!(
+            !should_restart_live(false, Some(STALE_AFTER.as_secs()), cooldown),
+            "stale is not old enough; the inner iterator watchdog fires first"
+        );
+        assert!(should_restart_live(
+            false,
+            Some(UNAVAILABLE_AFTER.as_secs()),
+            cooldown
+        ));
     }
 
     #[test]

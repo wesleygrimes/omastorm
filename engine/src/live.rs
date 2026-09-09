@@ -16,6 +16,7 @@
 //! station, so launch still fetches nothing.
 
 use crate::sweep::Sweep;
+use chrono::{SecondsFormat, Utc};
 use nexrad_data::aws::realtime::{
     Chunk, ChunkIdentifier, ChunkIterator, DownloadedChunk, VolumeIndex, download_chunk,
     list_chunks_in_volume,
@@ -23,7 +24,7 @@ use nexrad_data::aws::realtime::{
 use nexrad_data::result::{Error, aws::AWSError};
 use nexrad_data::volume::Record;
 use nexrad_model::data::{Radial, RadialStatus};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::{
     sync::mpsc::Sender,
     time::{sleep, timeout},
@@ -50,6 +51,12 @@ const BACK_OFF: Duration = Duration::from_secs(5);
 const MAX_BACK_OFF: Duration = Duration::from_secs(60);
 const OFFLINE_AFTER: u32 = 2;
 const RESTART_AFTER: u32 = 4;
+/// Higher cuts of the same volume still arrive every 4–12 s after the
+/// lowest cut ends, so a long stretch of `try_next` returning `None` means
+/// the iterator is parked on a chunk that will never appear (a volume the
+/// bucket has rotated off, or a sequence the station skipped). Restart
+/// discovery instead of waiting until the UI goes UNAVAILABLE.
+const QUIET_RESTART: Duration = Duration::from_secs(90);
 /// Chunks replayed from a volume's start when the VCP could not be read and
 /// so no chunk can be mapped to a cut: the lowest cut of a super-resolution
 /// volume spans about four.
@@ -63,6 +70,19 @@ const BLIND_REPLAY: usize = 12;
 const BACKFILL_VOLUMES: usize = 12;
 const BACKFILL_DELAY: Duration = Duration::from_secs(3);
 const BACKFILL_CHUNKS: usize = 16;
+
+fn live_log(site: &str, message: impl std::fmt::Display) {
+    eprintln!(
+        "{} Live {site}: {message}",
+        Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
+    );
+}
+
+/// `try_next` has returned `None` (chunk not ready) this long since the last
+/// actual chunk. Higher cuts keep the iterator busy on a live volume.
+fn quiet_too_long(since_chunk: Instant, now: Instant) -> bool {
+    now.saturating_duration_since(since_chunk) >= QUIET_RESTART
+}
 
 /// What the poller reports to `main.rs`.
 pub enum Event {
@@ -205,7 +225,7 @@ async fn deliver(
     let radials = match radials_of(&chunk.chunk) {
         Ok(radials) => radials,
         Err(e) => {
-            eprintln!("Live {site}: chunk {}: {e}", id.name());
+            live_log(site, format_args!("chunk {}: {e}", id.name()));
             return true;
         }
     };
@@ -222,7 +242,7 @@ async fn deliver(
             .is_ok(),
         Ok(None) => true,
         Err(e) => {
-            eprintln!("Live {site}: chunk {}: {e}", id.name());
+            live_log(site, format_args!("chunk {}: {e}", id.name()));
             true
         }
     }
@@ -258,13 +278,16 @@ async fn earlier_chunks(
     let ids = match timeout(CALL_TIMEOUT, list_chunks_in_volume(site, volume, 100)).await {
         Ok(Ok(ids)) => ids,
         Ok(Err(e)) => {
-            eprintln!("Live {site}: listing volume {}: {e}", volume.as_number());
+            live_log(
+                site,
+                format_args!("listing volume {}: {e}", volume.as_number()),
+            );
             return chunks;
         }
         Err(_) => {
-            eprintln!(
-                "Live {site}: listing volume {} timed out",
-                volume.as_number()
+            live_log(
+                site,
+                format_args!("listing volume {} timed out", volume.as_number()),
             );
             return chunks;
         }
@@ -287,8 +310,8 @@ async fn earlier_chunks(
                 chunk,
                 attempts: 1,
             }),
-            Ok(Err(e)) => eprintln!("Live {site}: replaying {}: {e}", id.name()),
-            Err(_) => eprintln!("Live {site}: replaying {} timed out", id.name()),
+            Ok(Err(e)) => live_log(site, format_args!("replaying {}: {e}", id.name())),
+            Err(_) => live_log(site, format_args!("replaying {} timed out", id.name())),
         }
     }
     chunks.sort_by_key(|chunk| chunk.identifier.sequence());
@@ -315,16 +338,16 @@ async fn backfill(site: String, events: Sender<Event>, current: VolumeIndex, cac
         let mut ids = match timeout(CALL_TIMEOUT, list_chunks_in_volume(&site, volume, 100)).await {
             Ok(Ok(ids)) => ids,
             Ok(Err(e)) => {
-                eprintln!(
-                    "Live {site}: backfill listing volume {}: {e}",
-                    volume.as_number()
+                live_log(
+                    &site,
+                    format_args!("backfill listing volume {}: {e}", volume.as_number()),
                 );
                 return;
             }
             Err(_) => {
-                eprintln!(
-                    "Live {site}: backfill listing volume {} timed out",
-                    volume.as_number()
+                live_log(
+                    &site,
+                    format_args!("backfill listing volume {} timed out", volume.as_number()),
                 );
                 return;
             }
@@ -339,18 +362,18 @@ async fn backfill(site: String, events: Sender<Event>, current: VolumeIndex, cac
             let (identifier, chunk) = match timeout(CALL_TIMEOUT, download_chunk(&site, id)).await {
                 Ok(Ok(got)) => got,
                 Ok(Err(e)) => {
-                    eprintln!("Live {site}: backfill {}: {e}", id.name());
+                    live_log(&site, format_args!("backfill {}: {e}", id.name()));
                     break;
                 }
                 Err(_) => {
-                    eprintln!("Live {site}: backfill {} timed out", id.name());
+                    live_log(&site, format_args!("backfill {} timed out", id.name()));
                     break;
                 }
             };
             let radials = match radials_of(&chunk) {
                 Ok(radials) => radials,
                 Err(e) => {
-                    eprintln!("Live {site}: backfill {}: {e}", id.name());
+                    live_log(&site, format_args!("backfill {}: {e}", id.name()));
                     break;
                 }
             };
@@ -358,7 +381,7 @@ async fn backfill(site: String, events: Sender<Event>, current: VolumeIndex, cac
             let update = match assembler.feed(starts, &name, identifier.name(), radials) {
                 Ok(update) => update,
                 Err(e) => {
-                    eprintln!("Live {site}: backfill {}: {e}", id.name());
+                    live_log(&site, format_args!("backfill {}: {e}", id.name()));
                     break;
                 }
             };
@@ -381,7 +404,7 @@ async fn backfill(site: String, events: Sender<Event>, current: VolumeIndex, cac
             }
         }
     }
-    eprintln!("Live {site}: backfilled {fetched} earlier volumes");
+    live_log(&site, format_args!("backfilled {fetched} earlier volumes"));
 }
 
 /// Aborts its task when dropped, so a poller replaced mid-backfill takes
@@ -448,11 +471,14 @@ pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>) {
         if let Some(start) = init.start_chunk {
             replay.insert(0, start);
         }
-        eprintln!(
-            "Live {site}: joined volume {} at chunk {}, replaying {} chunks",
-            newest.identifier.volume().as_number(),
-            newest.identifier.name(),
-            replay.len()
+        live_log(
+            &site,
+            format_args!(
+                "joined volume {} at chunk {}, replaying {} chunks",
+                newest.identifier.volume().as_number(),
+                newest.identifier.name(),
+                replay.len()
+            ),
         );
         if backfilling.is_none() {
             backfilling = Some(AbortOnDrop(tokio::spawn(backfill(
@@ -472,10 +498,12 @@ pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>) {
         }
 
         let mut failures = 0;
+        let mut last_chunk = Instant::now();
         loop {
             match timeout(CALL_TIMEOUT, iterator.try_next()).await {
                 Ok(Ok(Some(chunk))) => {
                     failures = 0;
+                    last_chunk = Instant::now();
                     // The iterator enters the next volume at its newest chunk;
                     // a poll that arrived after more than the Start chunk
                     // landed fetches the ones it skipped first.
@@ -494,6 +522,16 @@ pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>) {
                     }
                 }
                 Ok(Ok(None)) => {
+                    if quiet_too_long(last_chunk, Instant::now()) {
+                        live_log(
+                            &site,
+                            format_args!(
+                                "no chunk for {:.0?}; rediscovering",
+                                last_chunk.elapsed()
+                            ),
+                        );
+                        break;
+                    }
                     let wait = iterator
                         .time_until_next()
                         .and_then(|d| d.to_std().ok())
@@ -505,7 +543,7 @@ pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>) {
                     failures += 1;
                     let reason = format!("fetching the next chunk: {e} ({e:?})");
                     if failures < OFFLINE_AFTER {
-                        eprintln!("Live {site}: {reason}; retrying");
+                        live_log(&site, format_args!("{reason}; retrying"));
                     } else if !offline(&events, &site, reason).await {
                         return;
                     }
@@ -518,7 +556,7 @@ pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>) {
                     failures += 1;
                     let reason = "fetching the next chunk timed out".to_owned();
                     if failures < OFFLINE_AFTER {
-                        eprintln!("Live {site}: {reason}; retrying");
+                        live_log(&site, format_args!("{reason}; retrying"));
                     } else if !offline(&events, &site, reason).await {
                         return;
                     }
@@ -546,6 +584,17 @@ mod tests {
         assert_eq!(previous_volume(VolumeIndex::new(5), 5).as_number(), 999);
         assert_eq!(previous_volume(VolumeIndex::new(1), 1).as_number(), 999);
         assert_eq!(previous_volume(VolumeIndex::new(999), 12).as_number(), 987);
+    }
+
+    #[test]
+    fn a_quiet_iterator_restarts_before_the_ui_goes_unavailable() {
+        let start = Instant::now();
+        assert!(!quiet_too_long(start, start + Duration::from_secs(89)));
+        assert!(quiet_too_long(start, start + QUIET_RESTART));
+        assert!(
+            QUIET_RESTART < Duration::from_secs(600),
+            "must fire before STALE, so a wedged volume is rediscovered while still LIVE"
+        );
     }
 
     const FIXTURE: &str = concat!(
