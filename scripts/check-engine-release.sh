@@ -19,6 +19,68 @@ if bash scripts/bump-engine-version.sh "$current" > "$scratch/bump.err" 2>&1; th
 fi
 rg -q "already $current" "$scratch/bump.err" || fail "unclear current-version bump error: $(cat "$scratch/bump.err")"
 [[ $(sha256sum engine/Cargo.toml Cargo.lock) == "$toml" ]] || fail 'Failed bump changed Cargo.toml or Cargo.lock'
+# Success and upgrade-refusal paths use a stub cargo so this check does not
+# need the mise toolchain or a registry. The stub must only rewrite the
+# engine package version; a stub that touches another lock line must fail.
+package=$(awk -F'"' '/^name = /{print $2; exit}' engine/Cargo.toml)
+IFS=. read -r major minor patch <<< "$current"
+next=$major.$minor.$((patch + 1))
+write_bump_tree() {
+  local root=$1
+  mkdir -p "$root"/{engine,scripts}
+  cp Cargo.toml Cargo.lock "$root/"
+  cp engine/Cargo.toml engine/release.pin "$root/engine/"
+  cp scripts/bump-engine-version.sh "$root/scripts/"
+  cat > "$root/scripts/cargo.sh" <<'STUB'
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")/.."
+package=$(awk -F'"' '/^name = /{print $2; exit}' engine/Cargo.toml)
+version=$(awk -F'"' '/^version = /{print $2; exit}' engine/Cargo.toml)
+[[ $1 == update ]] || exit 1
+extra=
+[[ -f scripts/cargo.extra ]] && extra=$(cat scripts/cargo.extra)
+awk -v name="$package" -v v="$version" -v extra="$extra" '
+  $0 == "name = \"" name "\"" { print; getline; if ($0 ~ /^version = /) { printf "version = \"%s\"\n", v; next } }
+  extra != "" && /^version = / && !done { printf "version = \"%s\"\n", extra; done = 1; next }
+  { print }
+' Cargo.lock > Cargo.lock.next
+mv -- Cargo.lock.next Cargo.lock
+STUB
+  chmod +x "$root/scripts/cargo.sh"
+}
+write_bump_tree "$scratch/bump-ok"
+if ! bash "$scratch/bump-ok/scripts/bump-engine-version.sh" "$next" > "$scratch/bump-ok.log" 2>&1; then
+  fail "bump-engine-version.sh failed a version-only lock refresh: $(cat "$scratch/bump-ok.log")"
+fi
+[[ $(awk -F'"' '/^version = /{print $2; exit}' "$scratch/bump-ok/engine/Cargo.toml") == "$next" ]] \
+  || fail 'Successful bump did not write engine/Cargo.toml'
+ok_lock=$(awk -v name="$package" '
+  $0 == "name = \"" name "\"" { getline; print }
+' "$scratch/bump-ok/Cargo.lock" | awk -F'"' '{print $2}')
+[[ $ok_lock == "$next" ]] || fail "Successful bump did not write the $package version in Cargo.lock"
+toml_changed=$(diff -u engine/Cargo.toml "$scratch/bump-ok/engine/Cargo.toml" | awk '/^[+-][^+-]/ {c++} END {print c+0}' || true)
+lock_changed=$(diff -u Cargo.lock "$scratch/bump-ok/Cargo.lock" | awk '/^[+-][^+-]/ {c++} END {print c+0}' || true)
+[[ $toml_changed == 2 && $lock_changed == 2 ]] \
+  || fail "Successful bump must change only the engine version lines (toml=$toml_changed lock=$lock_changed)"
+rg -q "^-version = \"$current\"\$" <(diff -u engine/Cargo.toml "$scratch/bump-ok/engine/Cargo.toml") \
+  || fail 'Successful bump did not replace the Cargo.toml version line'
+rg -q "^\+version = \"$next\"\$" <(diff -u engine/Cargo.toml "$scratch/bump-ok/engine/Cargo.toml") \
+  || fail 'Successful bump did not write the new Cargo.toml version'
+rg -q "^-version = \"$current\"\$" <(diff -u Cargo.lock "$scratch/bump-ok/Cargo.lock") \
+  || fail 'Successful bump did not replace the Cargo.lock version line'
+rg -q "^\+version = \"$next\"\$" <(diff -u Cargo.lock "$scratch/bump-ok/Cargo.lock") \
+  || fail 'Successful bump did not write the new Cargo.lock version'
+write_bump_tree "$scratch/bump-bad"
+printf '9.9.9\n' > "$scratch/bump-bad/scripts/cargo.extra"
+before_bad=$(sha256sum "$scratch/bump-bad/engine/Cargo.toml" "$scratch/bump-bad/Cargo.lock")
+if bash "$scratch/bump-bad/scripts/bump-engine-version.sh" "$next" > "$scratch/bump-bad.log" 2>&1; then
+  fail 'bump-engine-version.sh accepted a lock refresh that upgraded another package'
+fi
+rg -q 'more than the engine version' "$scratch/bump-bad.log" \
+  || fail "unclear extra-lock-change error: $(cat "$scratch/bump-bad.log")"
+[[ $(sha256sum "$scratch/bump-bad/engine/Cargo.toml" "$scratch/bump-bad/Cargo.lock") == "$before_bad" ]] \
+  || fail 'Rejected bump left Cargo.toml or Cargo.lock dirty'
 mkdir -p "$scratch"/{scripts,engine,target/dist,bin,published}
 cp scripts/{engine-pin,package-engine-release,pin-engine-release,tag-engine-release}.sh "$scratch/scripts/"
 cp engine/{Cargo.toml,release.pin} "$scratch/engine/"
