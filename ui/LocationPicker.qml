@@ -16,6 +16,10 @@ Item {
     property real cardTop: 20
     property bool open: false
     property bool closeOnScrim: true
+    // Whether the map centre lies outside the gazetteer's envelope
+    // (Location.inGazetteer): search finds no towns there, and the empty
+    // list says so instead of looking like a miss.
+    property bool outsideGazetteer: false
     property alias query: field.text
     property alias latText: latField.text
     property alias lonText: lonField.text
@@ -23,7 +27,9 @@ Item {
     property int selected: 0
     property var results: []
     property string pendingQuery: ""
-    readonly property int limit: 4
+    // Every result the engine sends is shown; it ranks and cuts to eight
+    // (docs/protocol.md, search_places), so nothing is asked for and dropped.
+    readonly property int limit: 8
     readonly property var coordEntry: Location.parseCoordFields(latText, lonText)
     readonly property string coordError: coordEntry.error || ""
     component Word: Text {
@@ -291,7 +297,8 @@ Item {
                 }
                 Word {
                     visible: !picker.coordError && picker.coordEntry.lat === undefined && !picker.rows.length
-                    text: picker.query.trim() ? "NO PLACE MATCHES · TRY COORDINATES" : "TOWNS OF 5,000+ PEOPLE, OR ENTER LATITUDE AND LONGITUDE"
+                    text: picker.outsideGazetteer ? "SEARCH FINDS NO TOWNS HERE · ENTER LATITUDE AND LONGITUDE"
+                        : picker.query.trim() ? "NO PLACE MATCHES · TRY COORDINATES" : "TOWNS OF 5,000+ PEOPLE, OR ENTER LATITUDE AND LONGITUDE"
                     Layout.fillWidth: true; Layout.leftMargin: 12; Layout.preferredHeight: 28; opacity: .55; font.letterSpacing: 1
                 }
             }

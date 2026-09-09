@@ -87,7 +87,8 @@ settings even when the sweep is outside the view. Show the selected station
 and lock, with "Use nearest radar" and "Go to selected radar" available when
 coverage is outside the view. Never relocate the camera or discard the lock
 silently. The chrome says `LOCKED · OUTSIDE COVERAGE` when the camera sits
-outside that radar's rings.
+outside that radar's nominal ring, and `FOLLOWING · OUTSIDE COVERAGE` when
+even the nearest station is that far from an unlocked view.
 
 For agent-assisted installation, write coordinate overrides only when the
 user requests a fixed launch location. Ordinary installation leaves them

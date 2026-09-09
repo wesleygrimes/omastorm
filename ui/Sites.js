@@ -82,17 +82,19 @@ function match(site, query) {
 // The stations matching `query`, best tier first and nearer the centre
 // first within a tier, cut to `limit` rows: { rows, total }. Each row has
 // the station, its distance and bearing from the centre, and the matched
-// letter positions for the two columns.
-function rank(sites, query, lat, lon, limit) {
-    var all = [];
+// letter positions for the two columns. `pinned` names the station the
+// session has locked, if any: an empty query lists it first, since that
+// is the station the picker would otherwise have to be told about.
+function rank(sites, query, lat, lon, limit, pinned) {
+    var all = [], q = String(query || "").trim();
     for (var site of sites) {
         var m = match(site, query);
         if (!m) continue;
         var km = distanceKm(lat, lon, site.lat, site.lon);
         all.push({ site: site, tier: m.tier, km: km, where: where(km, bearingDeg(lat, lon, site.lat, site.lon)),
-                   idHits: m.idHits, placeHits: m.placeHits, place: place(site) });
+                   idHits: m.idHits, placeHits: m.placeHits, place: place(site), pinned: !!pinned && site.id === pinned });
     }
-    all.sort((a, b) => a.tier - b.tier || a.km - b.km || (a.site.id < b.site.id ? -1 : 1));
+    all.sort((a, b) => (!q && b.pinned - a.pinned) || a.tier - b.tier || a.km - b.km || (a.site.id < b.site.id ? -1 : 1));
     return { rows: all.slice(0, limit), total: all.length };
 }
 

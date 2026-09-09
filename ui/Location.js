@@ -51,6 +51,14 @@ function distanceKm(lat1, lon1, lat2, lon2) {
     return 2 * 6371 * Math.asin(Math.sqrt(Math.max(0, Math.min(1, h))));
 }
 
+// Whether a point lies in the envelope the engine's gazetteer covers
+// (engine/build.rs `in_envelope`, docs/protocol.md search_places): 5–75° N,
+// west of 20° W or east of 120° E, the reach of the station table. Place
+// search finds no towns outside it; coordinates still work anywhere.
+function inGazetteer(lat, lon) {
+    return validPair(lat, lon) && lat >= 5 && lat <= 75 && (lon <= -20 || lon >= 120);
+}
+
 function nearestSite(sites, lat, lon) {
     var best = null, bestKm = Infinity;
     if (!validPair(lat, lon) || !sites) return null;

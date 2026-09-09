@@ -4,18 +4,18 @@ import "Sites.js" as Sites
 
 // The fuzzy site picker (DESIGN.md, picker and keys; picker as built) in the
 // launcher's style: a scrim over the window, a card with an input row, up to
-// four matches with the matched letters in accent and each station's
-// distance and bearing from the map centre, and a hint footer. Typing
-// filters, up and down move, Enter hands the station to `chosen` (lock and
-// centre), Escape or a click on the scrim closes. The keys are handled here
-// the window's own shortcuts stand down.
+// eight matches with the matched letters in accent and each station's
+// distance and bearing from the map centre, and a footer counting the
+// matches beyond them. Typing filters, up and down move, Enter hands the
+// station to `chosen` (lock and centre), Escape or a click on the scrim
+// closes. The keys are handled here; the window's own shortcuts stand down.
 Item {
     id: picker
     property var sites: []            // hello.sites
     property var theme
     property real centerLat: 0        // the map centre the distances are from
     property real centerLon: 0
-    property string homeSite: ""      // the configured home, marked in its row
+    property string pinnedSite: ""    // the session's locked station: first on an empty query, marked in its row
     property bool compact: false
     property real cardTop: 20         // where the card's top edge sits
     property bool open: false
@@ -23,7 +23,7 @@ Item {
     // Whether the field holds the keyboard; closed, it must not.
     readonly property bool fieldFocused: field.activeFocus
     property int selected: 0
-    readonly property int limit: 4
+    readonly property int limit: 8
     component Word: Text {
         color: picker.theme.foreground
         font.family: picker.theme.font
@@ -32,7 +32,7 @@ Item {
         verticalAlignment: Text.AlignVCenter
     }
     signal chosen(var site)
-    readonly property var ranked: open ? Sites.rank(sites, query, centerLat, centerLon, limit) : ({ rows: [], total: 0 })
+    readonly property var ranked: open ? Sites.rank(sites, query, centerLat, centerLon, limit, pinnedSite) : ({ rows: [], total: 0 })
     readonly property var rows: ranked.rows
     visible: open
     function show(text) {
@@ -148,7 +148,7 @@ Item {
                             spacing: 12
                             Word { text: Sites.mark(row.modelData.site.id, row.modelData.idHits, picker.theme.accent); textFormat: Text.StyledText; font.bold: true; color: row.ink; Layout.preferredWidth: 52 }
                             Word { text: Sites.mark(row.modelData.place, row.modelData.placeHits, picker.theme.accent); textFormat: Text.StyledText; color: row.ink; opacity: .9; Layout.fillWidth: true }
-                            Word { text: (row.modelData.site.id === picker.homeSite ? "home · " : "") + row.modelData.where; font.pixelSize: 10; color: row.ink; opacity: .6 }
+                            Word { text: (row.modelData.pinned ? "locked · " : "") + row.modelData.where; font.pixelSize: 10; color: row.ink; opacity: .6 }
                         }
                         MouseArea {
                             anchors.fill: parent
@@ -168,7 +168,10 @@ Item {
                 Word { text: "↵ select and lock"; font.pixelSize: 10; opacity: .55 }
                 Word { text: "esc close"; font.pixelSize: 10; opacity: .55; visible: !picker.compact }
                 Item { Layout.fillWidth: true }
-                Word { text: picker.rows.length + " of " + picker.ranked.total; font.pixelSize: 10; opacity: .55 }
+                Word {
+                    text: picker.ranked.total > picker.rows.length ? picker.rows.length + " of " + picker.ranked.total + " · type to narrow" : picker.rows.length + " of " + picker.ranked.total
+                    font.pixelSize: 10; opacity: .55
+                }
             }
         }
     }
