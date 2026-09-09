@@ -189,8 +189,24 @@ Code: MIT, see [LICENSE](LICENSE).
 
 ## Contributing
 
-Start with [CONTRIBUTING.md](CONTRIBUTING.md) for local setup, checks, and the
-pull request workflow. [DESIGN.md](DESIGN.md) defines the app's visual and
-interaction rules; the [engine guide](engine/README.md) and
-[wire protocol](docs/protocol.md) explain the backend/client boundary.
-Maintainers can follow the [release guide](docs/RELEASING.md).
+This is a beta. Contributions are welcome.
+[CONTRIBUTING.md](CONTRIBUTING.md) is setup, checks, and pull requests.
+Open work that is ready for a first patch is labeled
+[`good first issue`](https://github.com/wesleygrimes/omastorm/issues?q=is%3Aissue+is%3Aopen+label%3A%22good+first+issue%22)
+and [`help wanted`](https://github.com/wesleygrimes/omastorm/issues?q=is%3Aissue+is%3Aopen+label%3A%22help+wanted%22).
+
+A headless Rust engine serves GPU textures over a Unix socket. The
+Quickshell UI is the client. `manifest.json` is the Omarchy plugin.
+
+- `engine/` Rust daemon: NEXRAD decode, cache, and the socket protocol
+- `ui/` Quickshell QML for the bar popover and window
+- `scripts/` setup, checks, captures, install, and release
+- `data/` fixture provenance and checksums (`data/raw/` is downloaded)
+- `golden/` decoder answer key for the archived KTLX scan
+- `docs/` protocol, configuration, and releasing
+- `site/` omastorm.com
+
+Read [DESIGN.md](DESIGN.md) before proposing a product change and
+[docs/protocol.md](docs/protocol.md) before touching the engine/client
+boundary. Maintainers cut releases with
+[docs/RELEASING.md](docs/RELEASING.md).

@@ -18,3 +18,6 @@ labels: bug
 **Engine log**
 
 The last lines of `$XDG_RUNTIME_DIR/omastorm/engine.log`, if the engine is involved.
+
+Setup, logs, and how to file a useful report:
+[CONTRIBUTING.md](../../CONTRIBUTING.md#issues).

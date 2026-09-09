@@ -1,9 +1,24 @@
 # Contributing
 
 Report bugs and propose work in [GitHub issues](https://github.com/wesleygrimes/omastorm/issues).
-Include reproduction steps, expected behavior, and the logs described in the
-[README](README.md#troubleshooting). Track pending work in issues and projects;
-discuss new features there before implementation.
+Track pending work in issues and projects; discuss new features there before
+implementation.
+
+## Issues
+
+For a bug, use the
+[bug report template](https://github.com/wesleygrimes/omastorm/issues/new?template=bug-report.md).
+Say what happened, what you expected, and your Omarchy version, plugin commit,
+engine, and GPU as the template asks.
+
+`$XDG_RUNTIME_DIR/omastorm/engine.log` is the daemon's stderr: startup,
+`Live {site}: …` feed lines, decode and tile errors. Attach the last screenful
+covering the failure, not a single line. If the engine never installed, attach
+`bootstrap.log` from the same directory too. Paths are in the
+[README](README.md#troubleshooting).
+
+For a feature, open an issue first: what should change on screen, why it belongs
+in this app, and how it fits [DESIGN.md](DESIGN.md). Keep the feature set small.
 
 ## Develop
 
@@ -55,14 +70,30 @@ files apply. `mise restart` stops the daemon first so a check or capture
 leftover is not reused. `mise onboard` starts the window with no weather file
 and no remembered view, so the location picker shows.
 
+## What not to change
+
+Do not bump [engine/release.pin](engine/release.pin) until the named GitHub
+Release exists and its asset is verified. [docs/RELEASING.md](docs/RELEASING.md)
+is the sequence.
+
+[golden/](golden/) is the decoder's answer key. Regenerating it is a
+decoder-contract change: keep the provenance and dates in the JSON, and do not
+rewrite it to match a new decode by accident. Capture scripts write images
+under `review/` for visual review; those stay out of git. Regenerate them when
+the picture changed, and include the captures with the review.
+
+Honor [DESIGN.md](DESIGN.md): actual scan times, no forecasts, chrome from the
+Omarchy theme, radar color only from `frame.palette`.
+
 ## Verify and submit
 
-Keep each change scoped to one issue. Run `mise check` before every commit;
-it uses scratch daemons and leaves the shared daemon alone. Cargo runs
+Branch from `main`. One change per pull request. Run `mise check` before every
+commit; it uses scratch daemons and leaves the shared daemon alone. Cargo runs
 first, then the Rust tests run alongside the UI checks, which proceed in two
 lanes. Scratch and logs live under `target/check/`, never `/tmp`; the daemons
 and runtime files go on every exit, and the logs stay until the next run.
-The checks read `target/debug/`, so leave `CARGO_TARGET_DIR` unset.
+The checks read `target/debug/`, so leave `CARGO_TARGET_DIR` unset. There is no
+GitHub Actions suite yet; a pull request is ready when those local checks pass.
 
 For shader, sampling, or camera changes, also run `mise check --gpu` and
 `bash scripts/capture-review.sh`, inspect the images in `review/`, and include
@@ -72,9 +103,15 @@ tile shaders with `bash scripts/build-shader.sh` and commit their `.qsb` files.
 The GPU checks need a desktop OpenGL context; software Qt Quick is unsupported.
 If the environment cannot run a required check, report that explicitly.
 
-Open a pull request linking the issue, explaining the resulting behavior and
-why it changed, and noting verification. Keep commits small, with a body that
-explains why; omit co-author and tool trailers. Update the relevant docs when
-behavior changes. Document current behavior, not implementation history.
+Open a pull request linking the issue. Subject is a short imperative; the body
+says why the behavior changed and how you verified it. Keep commits small.
+Omit co-author and tool trailers. Update the relevant docs when behavior
+changes. Document current behavior, not implementation history.
 
-Maintainers: [release instructions](docs/RELEASING.md).
+## Releases
+
+Maintainers: [docs/RELEASING.md](docs/RELEASING.md).
+
+## Conduct
+
+There is no code of conduct file yet.
