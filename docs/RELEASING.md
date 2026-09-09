@@ -40,7 +40,11 @@ published asset is wrong, leave the pin unchanged and release a new version.
    [CONTRIBUTING.md](../CONTRIBUTING.md#verify-and-submit). Commit and push
    the release changes to `main`.
 3. Tag that same commit `v<version>` and push the tag. Create a draft GitHub
-   Release for it with user-facing notes. Attach any new
+   Release for it with user-facing notes. Generate release notes against the
+   previous `v*` tag, never an `engine-*` tag (engine releases compare only
+   against the previous `engine-*` tag). GitHub groups pull requests by label
+   per [.github/release.yml](../.github/release.yml); unlabeled ones land under
+   Other changes, and GitHub adds New Contributors itself. Attach any new
    [README media](media/README.md) before publishing; keep media out of git.
 4. Publish the draft. Keep README media URLs pointed at releases containing
    those assets; older demo assets can stay linked.
