@@ -3,6 +3,7 @@ import QtQuick.Controls
 import QtQuick.Layouts
 import "Keys.js" as KeyMap
 import "Timeline.js" as Timeline
+import "Status.js" as Status
 
 FocusScope {
     id: card
@@ -13,21 +14,30 @@ FocusScope {
     readonly property var scan: state ? state.frame : null
     readonly property var frames: state ? state.timeline : []
     readonly property var slots: Timeline.slots(frames)
-    readonly property string condition: state ? state.source === "archived" ? "archived" : state.connection.status : "offline"
+    // The feed condition (Status.js): the engine's judgement, "offline"
+    // while there is no engine. The headline says LIVE only under ok; a
+    // feed that is not delivering says NOT UPDATING with the last sweep's
+    // time, and `detail` under the map names the condition and what to do.
+    readonly property string condition: state ? Status.condition(state) : "offline"
+    readonly property bool cached: Status.notUpdating(condition)
     readonly property color statusColor: condition === "stale" ? theme.yellow
         : condition === "offline" || condition === "unavailable" ? theme.red : theme.accent
-    readonly property string statusText: {
-        if (!state) return "OFFLINE";
-        if (condition === "archived") return "ARCHIVED";
-        var label = condition === "ok" ? "LIVE" : condition.toUpperCase();
-        var complete = frames.filter(f => f.status === "complete");
-        if (!scan.scanTime || !complete.length) return label;
-        var age = Math.max(0, state.connection.ageSeconds +
-            Math.round((Date.parse(complete[complete.length - 1].scanTime) - Date.parse(scan.scanTime)) / 1000));
-        var minutes = Math.floor(age / 60);
-        return label + " · " + (minutes < 1 ? "just now" : minutes < 60 ? minutes + " min ago"
-            : minutes < 1440 ? Math.floor(minutes / 60) + "h ago" : Math.floor(minutes / 1440) + "d ago");
-    }
+    readonly property string statusText: Status.headline(state, scan)
+    readonly property string detail: Status.detail(state)
+    // What stands in for the radar: no engine yet (the bootstrap's word
+    // while it has one; otherwise the engine is starting, since the session
+    // relaunches it while the socket stays quiet, and a transport fault
+    // that will not clear by itself is shown as such), or a GPU shader the
+    // driver refused, which would otherwise read as a clear night under a
+    // LIVE badge. The driver log stays out of the card; the window shows it.
+    readonly property string notice: !state ? (session.startupError
+            || (connection.error && !/Reconnecting/.test(connection.error) ? connection.error : "Starting radar engine…"))
+        : map.error ? "Radar overlay failed to draw" : ""
+    // The legend in one line, as the window's legend says it: what blank
+    // means, the hidden floor when one is in force, and the folded marker.
+    readonly property bool floorActive: !!scan && session.weakFloor !== null && scan.scale > 0
+    readonly property string legend: !scan || !scan.scanTime ? ""
+        : scan.units + " · blank: no return / outside" + (floorActive ? " / <" + session.weakFloor + " " + scan.units + " hidden" : "") + " · X: folded"
     signal expandRequested()
     signal closeRequested()
     implicitWidth: 308
@@ -112,7 +122,9 @@ FocusScope {
                 treatment: card.session.treatment
                 weakFloor: card.session.weakFloor
                 labelSize: 10
-                radarOpacity: card.condition === "unavailable" ? .6 : 1
+                // Cached frames under a feed the engine cannot reach or
+                // that has gone quiet sit back the same way; the basemap keeps its strength.
+                radarOpacity: card.condition === "unavailable" || card.condition === "offline" ? .6 : 1
                 onTilesNeeded: (z, x0, y0, x1, y1) => connection.send({type: "tiles_needed", z: z, x0: x0, y0: y0, x1: x1, y1: y1})
                 function applyView() {
                     if (!card.session.hasView) return;
@@ -142,15 +154,17 @@ FocusScope {
                     implicitWidth: time.implicitWidth + 10; implicitHeight: 20
                     color: Qt.alpha(card.theme.background, .92)
                     Label { id: time; anchors.centerIn: parent; font.pixelSize: 10; opacity: .8
-                        text: card.scan && card.scan.scanTime ? Qt.formatDateTime(new Date(card.scan.scanTime), card.condition === "archived" ? "yyyy-MM-dd HH:mm t" : "HH:mm t") : "" }
+                        color: card.cached ? card.statusColor : card.theme.foreground
+                        text: !card.scan || !card.scan.scanTime ? "" : (card.cached ? "CACHED " : "")
+                            + Qt.formatDateTime(new Date(card.scan.scanTime), card.condition === "archived" ? "yyyy-MM-dd HH:mm t" : "HH:mm t") }
                 }
             }
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: card.expandRequested() }
             Label {
                 anchors.centerIn: parent; width: parent.width - 24; wrapMode: Text.Wrap
                 horizontalAlignment: Text.AlignHCenter
-                visible: !card.state
-                text: card.session.startupError || connection.error
+                visible: card.notice !== ""
+                text: card.notice
             }
             Rectangle {
                 anchors.fill: parent
@@ -165,17 +179,24 @@ FocusScope {
                     anchors.centerIn: parent
                     width: parent.width - 32
                     spacing: 10
-                    Label { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "CHOOSE A LOCATION"; font.bold: true; font.pixelSize: 13 }
                     Label { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; opacity: .7; font.pixelSize: 11
-                        text: "Search a town of 5,000+ people, or enter latitude and longitude in the window." }
+                        text: "No location yet. Search a town of 5,000+ people, or enter latitude and longitude in the window." }
                     Control { Layout.alignment: Qt.AlignHCenter; text: "CHOOSE A LOCATION"; onClicked: { card.session.requestLocationPicker(); card.expandRequested(); } }
                 }
             }
         }
+        // The engine's answer to this card's last command stands first
+        // (docs/protocol.md, error); otherwise the feed condition's
+        // explanation while frames are not arriving.
         Label {
             Layout.fillWidth: true
-            visible: !!connection.rejection
-            text: connection.rejection; color: card.theme.accent; wrapMode: Text.Wrap
+            visible: text !== ""
+            text: connection.rejection || card.detail
+            color: connection.rejection ? card.theme.accent : card.statusColor
+            opacity: connection.rejection ? 1 : .85
+            font.pixelSize: 10
+            wrapMode: Text.Wrap
+            elide: Text.ElideNone
         }
         RowLayout {
             Layout.fillWidth: true
@@ -212,6 +233,12 @@ FocusScope {
                     Label { font.pixelSize: 10; opacity: .55; text: card.condition === "ok" ? "now" : card.frames.length ? Qt.formatTime(new Date(card.frames[card.frames.length - 1].scanTime), "HH:mm") : "" }
                 }
             }
+        }
+        Label {
+            Layout.fillWidth: true; font.pixelSize: 9; opacity: .55
+            visible: card.legend !== ""
+            text: card.legend
+            wrapMode: Text.Wrap; elide: Text.ElideNone
         }
         RowLayout {
             Layout.fillWidth: true

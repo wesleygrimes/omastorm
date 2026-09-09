@@ -479,7 +479,7 @@ Item {
     ShaderEffect {
         id: radarEffect
         visible: map.drawable
-        // The radar alone, not the basemap: .6 under UNAVAILABLE.
+        // The radar alone, not the basemap: .6 under UNAVAILABLE and OFFLINE.
         opacity: map.radarOpacity
         anchors.fill: parent
         onStatusChanged: if (status === ShaderEffect.Error) map.error = "Radar GPU shader failed: " + log

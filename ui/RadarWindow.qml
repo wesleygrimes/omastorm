@@ -7,6 +7,7 @@ import "Sites.js" as Sites
 import "Keys.js" as KeyMap
 import "Location.js" as Location
 import "Timeline.js" as Timeline
+import "Status.js" as Status
 
 Item {
     id: app
@@ -38,7 +39,13 @@ Item {
     // Every station, product, and source string on screen comes from the engine.
     readonly property string siteId: state ? state.site.id : ""
     readonly property string siteName: engine.site ? engine.site.name.toUpperCase() : ""
-    readonly property string sourceBadge: state ? state.source.toUpperCase() : ""
+    // The header badge follows the connection, not the source (Status.js):
+    // LIVE only while the feed is ok, the condition's word otherwise, so a
+    // stale, silent, or unreachable feed never reads LIVE. ARCHIVED stays
+    // for an archived scan.
+    readonly property string feed: Status.condition(state)
+    readonly property string sourceBadge: Status.badge(feed)
+    readonly property color badgeColor: alert ? conditionColor : theme.accent
     // The timeline (DESIGN.md): the station's frames oldest
     // first with the sweep in progress last; the engine owns the position.
     readonly property var frames: state ? state.timeline : []
@@ -60,20 +67,10 @@ Item {
     // The engine gives the newest complete frame's age, ticking once a
     // second; an older frame on screen adds the distance between the two
     // scan times, so no local clock is consulted.
-    readonly property int shownAge: !state || !scan || !scan.scanTime || !newestComplete ? -1
-        : Math.max(0, state.connection.ageSeconds + Math.round((Date.parse(newestComplete.scanTime) - Date.parse(scan.scanTime)) / 1000))
+    readonly property int shownAge: Status.shownAge(state, scan)
     readonly property string ageText: condition && shownAge >= 0 ? ago(shownAge) : ""
-    function ago(seconds) {
-        var m = Math.floor(seconds / 60);
-        if (m < 1) return "just now";
-        if (m < 60) return m + " min ago";
-        var h = Math.floor(m / 60);
-        return h < 24 ? h + "h " + (m % 60) + "m ago" : Math.floor(h / 24) + "d " + (h % 24) + "h ago";
-    }
-    function lasting(seconds) {
-        var m = Math.floor(seconds / 60), h = Math.floor(m / 60);
-        return m < 60 ? m + " MIN" : h < 24 ? h + "H " + (m % 60) + "M" : Math.floor(h / 24) + "D " + (h % 24) + "H";
-    }
+    function ago(seconds) { return Status.ago(seconds); }
+    function lasting(seconds) { return Status.lasting(seconds).toUpperCase(); }
     readonly property string sourceDetail: {
         if (!state) return "";
         if (state.source === "archived") return "ARCHIVED SCAN";
@@ -90,7 +87,7 @@ Item {
     }
     // Clock readings are the machine's local time; the wire is UTC. `zone`
     // appends the zone's abbreviation where the reading stands alone.
-    function clock(iso, zone) { return iso ? Qt.formatTime(new Date(iso), zone ? "HH:mm t" : "HH:mm") : ""; }
+    function clock(iso, zone) { return Status.clock(iso, zone); }
     function span(fromIso, toIso) {
         var minutes = Math.round((Date.parse(toIso) - Date.parse(fromIso)) / 60000);
         return minutes >= 60 ? Math.floor(minutes / 60) + "h " + (minutes % 60) + "m" : minutes + "m";
@@ -244,7 +241,8 @@ Item {
             return JSON.stringify({sheet: sheet.open, menu: treatmentMenu.opened, treatment: app.treatment, weakFloor: app.weakFloor === null ? "off" : app.weakFloor, error: app.configError,
                                    span: Math.round(map.span * 10) / 10, lat: Math.round(map.centerLat * 1000) / 1000, lon: Math.round(map.centerLon * 1000) / 1000,
                                    locationSource: app.store.locationSource, needsLocation: app.store.needsLocation,
-                                   site: app.siteId, locked: app.locked, lockSource: app.store.lockSource, outsideCoverage: app.outsideCoverage});
+                                   site: app.siteId, locked: app.locked, lockSource: app.store.lockSource, outsideCoverage: app.outsideCoverage,
+                                   outsideGazetteer: app.outsideGazetteer, badge: app.sourceBadge, condition: app.feed});
         }
     }
     // Site navigation (DESIGN.md, location): the lock pins the radar against
@@ -253,10 +251,18 @@ Item {
     readonly property bool locked: state ? state.site.locked : false
     readonly property bool following: state ? state.site.follow && !state.site.locked : false
     readonly property var resetTarget: Location.resolveReset(Location.configCenter(config.values), config.location)
+    // Whether the view centre lies beyond the active station's dashed
+    // ring, locked or not. The ring is the nominal reflectivity footprint
+    // the scale label names, not a measured gate range; unlocked, the
+    // nearest station can still be farther than that (open water, the
+    // network's edge), and the chip says so rather than implying coverage.
     readonly property bool outsideCoverage: {
         var s = engine.site;
-        return !!(locked && s && Location.distanceKm(map.centerLat, map.centerLon, s.lat, s.lon) > map.coverageKm);
+        return !!(s && Location.distanceKm(map.centerLat, map.centerLon, s.lat, s.lon) > map.coverageKm);
     }
+    // The gazetteer behind place search covers the network's envelope
+    // (docs/protocol.md, search_places); beyond it only coordinates work.
+    readonly property bool outsideGazetteer: !Location.inGazetteer(map.centerLat, map.centerLon)
     function toggleLock() {
         if (!state || !siteId) return;
         store.setLock(locked ? "" : siteId, !locked);
@@ -444,7 +450,7 @@ Item {
                 RadarMark { ink: app.theme.accent; Layout.rightMargin: 6 }
                 LabelText { text: "OMASTORM"; font.bold: true; font.letterSpacing: 2; font.pixelSize: app.theme.baseSize + 2 }
                 Item { Layout.fillWidth: true }
-                LabelText { text: app.sourceBadge; color: app.theme.accent; font.letterSpacing: 1.5 }
+                LabelText { text: app.sourceBadge; color: app.badgeColor; font.letterSpacing: 1.5 }
             }
             Rectangle { Layout.fillWidth: true; height: 1; color: Qt.alpha(app.theme.foreground, .25) }
             RowLayout {
@@ -460,7 +466,7 @@ Item {
                     readonly property color ink: app.locked ? app.theme.accent : Qt.alpha(app.theme.foreground, .55)
                     Glyph { glyph: app.locked ? "lock" : "follow"; ink: siteChip.ink }
                     LabelText {
-                        text: app.locked && app.outsideCoverage ? "LOCKED · OUTSIDE COVERAGE" : app.locked ? "LOCKED" : "FOLLOWING"
+                        text: (app.locked ? "LOCKED" : "FOLLOWING") + (app.outsideCoverage ? " · OUTSIDE COVERAGE" : "")
                         visible: !win.compact; color: siteChip.ink; font.pixelSize: 10; font.letterSpacing: 1
                     }
                 }
@@ -491,13 +497,16 @@ Item {
                 }
                 // The engine's answer to this window's last command takes the
                 // status slot while it stands, ahead of any condition; a
-                // config.toml mistake stands there the same way until the
-                // file is fixed. The radar underneath stays clear.
+                // config.toml or state.json mistake stands there the same
+                // way until the file is fixed. Ahead of, not instead of: a
+                // feed that is not delivering keeps its words after the
+                // message. The radar underneath stays clear.
                 LabelText {
-                    text: engine.rejection || app.configError || store.persistError || app.notice || app.sourceDetail
-                    color: engine.rejection || app.configError || store.persistError || app.notice ? app.theme.accent : app.conditionColor
-                    opacity: engine.rejection || app.configError || store.persistError || app.notice || app.alert ? 1 : .5
-                    visible: !win.compact || engine.rejection !== "" || app.configError !== "" || store.persistError !== "" || app.notice !== "" || app.alert
+                    readonly property string leading: engine.rejection || app.configError || store.persistError || app.notice
+                    text: leading ? leading + (app.alert ? " · " + app.sourceDetail : "") : app.sourceDetail
+                    color: leading ? app.theme.accent : app.conditionColor
+                    opacity: leading || app.alert ? 1 : .5
+                    visible: !win.compact || leading !== "" || app.alert
                     horizontalAlignment: Text.AlignRight
                     Layout.fillWidth: true
                 }
@@ -522,7 +531,9 @@ Item {
                     theme: app.theme
                     treatment: app.treatment
                     weakFloor: app.weakFloor
-                    radarOpacity: app.condition === "unavailable" ? .6 : 1
+                    // Cached frames under a feed the engine cannot reach or
+                    // that has gone quiet sit back the same way.
+                    radarOpacity: app.condition === "unavailable" || app.condition === "offline" ? .6 : 1
                     labelSize: win.compact ? 10 : 12
                     locked: app.locked
                     // A settled pan hands the centre to the engine, which switches
@@ -649,8 +660,10 @@ Item {
                         Item { Layout.fillWidth: true }
                         LabelText { text: app.scan && !app.newestShown ? app.clock(app.scan.scanTime) : ""; font.pixelSize: 10; opacity: .65 }
                         Item { Layout.fillWidth: true }
+                        // "now" only while the feed is delivering; a cached
+                        // newest frame is just its time.
                         LabelText {
-                            text: app.frames.length > 1 ? app.clock(app.frames[app.frames.length - 1].scanTime) + (app.state.source === "live" ? " now" : "") : ""
+                            text: app.frames.length > 1 ? app.clock(app.frames[app.frames.length - 1].scanTime) + (app.condition === "ok" ? " now" : "") : ""
                             font.pixelSize: 10; opacity: .65
                         }
                     }
@@ -787,7 +800,9 @@ Item {
             theme: app.theme
             centerLat: map.centerLat
             centerLon: map.centerLon
-            homeSite: ""
+            // The remembered or configured lock leads an empty query and is
+            // marked in its row; nothing else is "home" (home_site is unused).
+            pinnedSite: app.store.lockWanted ? app.store.lockId : ""
             compact: win.compact
             cardTop: layout.anchors.margins + mapFrame.y
             onChosen: site => app.choose(site)
@@ -800,6 +815,7 @@ Item {
             closeOnScrim: !app.store.needsLocation
             centerLat: map.centerLat
             centerLon: map.centerLon
+            outsideGazetteer: app.outsideGazetteer
             compact: win.compact
             cardTop: layout.anchors.margins + mapFrame.y
             onChosen: (lat, lon, name) => {

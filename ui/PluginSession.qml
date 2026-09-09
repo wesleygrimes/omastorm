@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Io
 import "Location.js" as Location
 import "Keys.js" as KeyMap
+import "Status.js" as Status
 
 QtObject {
     id: session
@@ -279,7 +280,9 @@ QtObject {
     // contain spaces; bash will not start in Quickshell's cwd
     // (qrc:/qs-blackhole), so env -C moves it home. Its stderr lands in
     // bootstrap.log beside the socket, and the popover shows the last line
-    // while there is no engine.
+    // while there is no engine, except that the launcher's own socket
+    // timeout (a daemon spawned but not yet answering, issue #6) reads as
+    // the engine starting; the OS line itself stays in the log.
     readonly property string root: Quickshell.env("OMASTORM_ROOT") || Quickshell.env("HOME") + "/.config/omarchy/plugins/com.omastorm.radar"
     readonly property string bootstrapLog: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omastorm/bootstrap.log"
     function bootstrap() {
@@ -291,7 +294,7 @@ QtObject {
         watchChanges: true
         printErrors: false
         onFileChanged: reload()
-        onLoaded: { var lines = text().trim().split("\n"); session.startupError = session.engine.state ? "" : lines[lines.length - 1]; }
+        onLoaded: { var lines = text().trim().split("\n"); session.startupError = session.engine.state ? "" : Status.bootstrapNotice(lines[lines.length - 1]); }
     }
     Component.onCompleted: { applyTreatment(); resolve(); bootstrap(); }
 }

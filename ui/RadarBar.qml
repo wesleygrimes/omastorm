@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import qs.Ui
 import qs.Commons
+import "Status.js" as Status
 
 BarWidget {
     id: root
@@ -10,8 +11,24 @@ BarWidget {
     property bool opened: false
     property bool popoutSwitchClosing: false
     readonly property var state: session.engine.state
-    readonly property bool live: state && state.source === "live" && state.connection.status === "ok"
-    readonly property bool down: !state || state.connection.status === "offline" || state.connection.status === "unavailable"
+    // The feed condition (Status.js), "" while no engine answers. The mark
+    // is full strength only while frames are arriving; each other
+    // condition has its own cue, so loading, stale, a silent station, and
+    // no engine at all never look alike:
+    //   ok / archived   full mark
+    //   loading         dim mark, no dot
+    //   stale           mark near full, yellow dot
+    //   unavailable,
+    //   offline         dim mark, solid urgent dot (cached frames stand)
+    //   no engine       faint mark, hollow dot
+    readonly property string condition: Status.condition(state)
+    readonly property bool live: condition === "ok" || condition === "archived"
+    readonly property bool down: condition === "offline" || condition === "unavailable"
+    readonly property bool stale: condition === "stale"
+    readonly property bool noEngine: !state
+    readonly property color statusInk: stale ? session.theme.snapshot.yellow : Color.urgent
+    Accessible.role: Accessible.Button
+    Accessible.name: Status.summary(state, state ? state.frame : null, session.engine.site ? session.engine.site.name : "")
     function open() {
         popoutSwitchClosing = false;
         opened = true;
@@ -34,8 +51,19 @@ BarWidget {
         active: root.opened
         iconComponent: Component {
             Item {
-                RadarMark { anchors.centerIn: parent; ink: button.foreground; opacity: root.live ? 1 : .6 }
-                Rectangle { anchors.right: parent.right; anchors.bottom: parent.bottom; width: 5; height: 5; color: Color.urgent; visible: root.down }
+                RadarMark {
+                    anchors.centerIn: parent; ink: button.foreground
+                    opacity: root.live ? 1 : root.stale ? .85 : root.noEngine ? .35 : .6
+                }
+                Rectangle {
+                    anchors.right: parent.right; anchors.bottom: parent.bottom
+                    width: 5; height: 5
+                    visible: root.down || root.stale || root.noEngine
+                    color: root.noEngine ? "transparent" : root.statusInk
+                    border.width: root.noEngine ? 1 : 0
+                    border.color: button.foreground
+                    opacity: root.noEngine ? .6 : 1
+                }
             }
         }
         onPressed: b => { if (b === Qt.LeftButton) { if (root.opened) root.close(); else root.open(); } }
