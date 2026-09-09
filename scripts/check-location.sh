@@ -27,6 +27,13 @@ until_field() {
   for _ in {1..100}; do [[ $(field "$1") == "$2" ]] && return; sleep .1; done
   fail "$1 never became $2: $(call status)"
 }
+# The map reports its settled centre back through projection math, so a
+# picked 35.4 may be on disk as 35.39999999999999 moments later; compare
+# the numbers, not the text.
+state_at() { # file, lat, lon
+  jq -e --argjson lat "$2" --argjson lon "$3" \
+    '(.lat - $lat | fabs) < 1e-6 and (.lon - $lon | fabs) < 1e-6' "$1" > /dev/null 2>&1
+}
 
 # Isolated from the machine: a remembered centre is the camera, weather is
 # not read unless OMASTORM_LOCATION names a file.
@@ -74,7 +81,7 @@ until_field locked false
 sleep 0.4
 until_field lat 35.4
 until_field lon -97.5
-grep -q '"lat":35.4' "$check_dir/state-weather.json" || fail "Location picker did not write state" "$(cat "$check_dir/state-weather.json")"
+state_at "$check_dir/state-weather.json" 35.4 -97.5 || fail "Location picker did not write state" "$(cat "$check_dir/state-weather.json")"
 grep -q center_lat "$check_dir/none.toml" && fail "Location picker wrote config.toml"
 # n selects the nearest radar and does not move the camera.
 before_lat=$(field lat); before_lon=$(field lon)

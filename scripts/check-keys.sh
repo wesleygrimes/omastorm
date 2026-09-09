@@ -39,6 +39,13 @@ until_field() { # name, wanted
   for _ in {1..100}; do [[ $(field "$1") == "$2" ]] && return; sleep .1; done
   fail "$1 never became $2: $(call status)"
 }
+# The map reports its settled centre back through projection math, so a
+# picked 35.4 may be on disk as 35.39999999999999 moments later; compare
+# the numbers, not the text.
+state_at() { # file, lat, lon
+  jq -e --argjson lat "$2" --argjson lon "$3" \
+    '(.lat - $lat | fabs) < 1e-6 and (.lon - $lon | fabs) < 1e-6' "$1" > /dev/null 2>&1
+}
 for _ in {1..100}; do call status > /dev/null 2>&1 && break; sleep .1; done
 call status > /dev/null || fail "The window's keys IPC never answered"
 
@@ -101,7 +108,7 @@ quickshell ipc --pid "$pid" call location go 35.4 -97.5 "Moore"
 until_field lat 35.4
 until_field lon -97.5
 until_field locationSource state
-grep -q '"lat":35.4' "$check_dir/state.json" || fail "Shift+H location did not write state.json" "$(cat "$check_dir/state.json")"
+state_at "$check_dir/state.json" 35.4 -97.5 || fail "Shift+H location did not write state.json" "$(cat "$check_dir/state.json")"
 grep -q home_site "$check_dir/config.toml" && fail "Shift+H wrote home_site into config.toml"
 
 # The fix applies through the file watch: no report, the new key in force,
