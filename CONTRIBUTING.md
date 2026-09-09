@@ -114,4 +114,4 @@ Maintainers: [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Conduct
 
-There is no code of conduct file yet.
+Be kind and treat people well.
