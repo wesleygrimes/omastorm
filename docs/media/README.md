@@ -17,9 +17,12 @@ required; the demo also needs Ruby for its temporary harness. Frames are
 grabbed as the scene settles, so the video runs a little faster than real
 time and is not a latency measurement.
 
-- `omastorm-demo.mp4`: one live take, about 37 s, 1280×720, H.264, no audio:
+- `omastorm-demo.mp4`: one take, about 37 s, 1280×720, H.264, no audio:
   the home view, the loop, a pan and zoom to the coast, the three
   treatments, weak returns, the picker switching station, the keys sheet.
+  The script records a live station; the `v0.1.0` assets the README links
+  were taken from the archived KTLX 2013-05-20 fixture, as that release's
+  notes say, and the README captions them so.
 - `omastorm-preview.gif`: the home view and the zoom, cut from the video.
 - `window-live.png`, `popover.png`: live KTLX with the actual scan time.
 
