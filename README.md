@@ -38,7 +38,7 @@ client: it displays those textures in the bar popover and full window.
 
 ## Install
 
-Omarchy 4 on x86_64.
+Omarchy 4 on x86_64 and aarch64.
 
 ```sh
 omarchy plugin add https://github.com/wesleygrimes/omastorm.git --enable
@@ -70,18 +70,6 @@ bash ~/.config/omarchy/plugins/com.omastorm.radar/scripts/install-launcher.sh
 ```
 
 Update with `omarchy plugin update com.omastorm.radar`.
-
-ARM64 (`aarch64`) release packaging is prepared, but its binary is not yet
-published and pinned. Until then, build the engine in the installed plugin
-directory using the contributor toolchain:
-
-```sh
-cd ~/.config/omarchy/plugins/com.omastorm.radar
-mise install
-mise setup
-```
-
-Then open the popover again; it uses the checkout's native engine.
 
 ## Use
 

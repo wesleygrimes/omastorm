@@ -2,12 +2,15 @@
   "schemaVersion": 1,
   "id": "com.omastorm.radar",
   "name": "Omastorm",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "author": "Wes Grimes",
   "license": "MIT",
   "homepage": "https://omastorm.com",
   "description": "Live NEXRAD radar for the Omarchy desktop",
-  "kinds": ["bar-widget", "panel"],
+  "kinds": [
+    "bar-widget",
+    "panel"
+  ],
   "entryPoints": {
     "barWidget": "ui/RadarBar.qml",
     "panel": "ui/Panel.qml"
