@@ -98,13 +98,16 @@ Item {
         var timeStr = stamp12h ? Qt.formatTime(d, "h:mm AP") : Qt.formatTime(d, "HH:mm");
         return dateStr + " · " + timeStr + " " + Qt.formatTime(d, "t");
     }
-    // History fills 60 positions from the left. A full catalog can also
-    // expose an extra live sweep, which stays selectable after those scans.
+    // History fills 60 positions from the left when the strip is wide enough.
+    // Compact widths drop the empty pads — at ~5 px/slot they read as a
+    // dotted cliff after the playhead instead of "room to fill."
     readonly property var slots: {
         var result = [];
         for (var j = 0; j < frames.length; j++)
             result.push({id: frames[j].id, partial: frames[j].status === "partial", empty: false});
-        for (var i = frames.length; i < 60; i++) result.push({empty: true, partial: false});
+        if (!win.compact) {
+            for (var i = frames.length; i < 60; i++) result.push({empty: true, partial: false});
+        }
         return result;
     }
     readonly property int currentSlot: scan ? slots.findIndex(s => !s.empty && s.id === scan.id) : -1
@@ -909,8 +912,12 @@ Item {
                                 y: Math.round((strip.height - height) / 2)
                                 width: tall ? 3 : 2
                                 height: modelData.empty ? 3 : tall ? 14 : 8
+                                // Compact (no empty pads): even weight so a mid-loop
+                                // playhead does not cliff into dimmer stubs.
                                 color: current ? app.theme.accent : modelData.partial ? "transparent"
-                                    : Qt.alpha(app.theme.foreground, modelData.empty ? .10 : index > app.currentSlot ? .28 : .42)
+                                    : Qt.alpha(app.theme.foreground, modelData.empty ? .10
+                                        : win.compact ? .40
+                                        : index > app.currentSlot ? .28 : .42)
                                 border.width: modelData.partial && !current ? 1 : 0
                                 border.color: app.theme.accent
                             }
