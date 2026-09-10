@@ -84,6 +84,13 @@ fn quiet_too_long(since_chunk: Instant, now: Instant) -> bool {
     now.saturating_duration_since(since_chunk) >= QUIET_RESTART
 }
 
+/// A rediscovery (or a respawned poller) that finds only a sweep already
+/// in the catalog must not publish it again. The first join after a
+/// `select_site` still may, so `loading` can clear.
+fn skip_catalogued_replay(skip_known: bool, start_ms: i64, known: &[i64]) -> bool {
+    skip_known && known.contains(&start_ms)
+}
+
 /// What the poller reports to `main.rs`.
 pub enum Event {
     /// An earlier volume's complete lowest cut, fetched on joining: the
@@ -214,11 +221,14 @@ pub fn radials_of(chunk: &Chunk) -> Result<Vec<Radial>, String> {
 
 /// Feed a downloaded chunk to the assembler and report what changed.
 /// `false` when the event channel is closed (the poller was replaced).
+/// `known` is the catalogued (and already-delivered) start times to skip
+/// on a rediscovery; live chunks pass `None` so a growing cut still paints.
 async fn deliver(
     assembler: &mut Assembler,
     site: &str,
     chunk: &DownloadedChunk,
     events: &Sender<Event>,
+    known: Option<&[i64]>,
 ) -> bool {
     let id = &chunk.identifier;
     let volume = format!("{}/{:03}", id.site(), id.volume().as_number());
@@ -231,15 +241,21 @@ async fn deliver(
     };
     let starts = matches!(chunk.chunk, Chunk::Start(_));
     match assembler.feed(starts, &volume, id.name(), radials) {
-        Ok(Some(update)) => events
-            .send(Event::Sweep {
-                site: site.to_owned(),
-                sweep: update.sweep,
-                complete: update.complete,
-                provenance: update.provenance,
-            })
-            .await
-            .is_ok(),
+        Ok(Some(update)) => {
+            if known.is_some_and(|times| skip_catalogued_replay(true, update.sweep.start_ms, times))
+            {
+                return true;
+            }
+            events
+                .send(Event::Sweep {
+                    site: site.to_owned(),
+                    sweep: update.sweep,
+                    complete: update.complete,
+                    provenance: update.provenance,
+                })
+                .await
+                .is_ok()
+        }
         Ok(None) => true,
         Err(e) => {
             live_log(site, format_args!("chunk {}: {e}", id.name()));
@@ -418,10 +434,14 @@ impl Drop for AbortOnDrop {
 
 /// Poll `site` until the task is aborted or the event channel closes.
 /// `cached` holds the start times of the frames already catalogued for the
-/// station, so the backfill does not fetch them again.
-pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>) {
+/// station, so the backfill does not fetch them again and a rediscovery
+/// does not republish them. `skip_known` is true when this poller is a
+/// respawn on a station already on screen (cleanup or reselect).
+pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>, skip_known: bool) {
     let mut back_off = BACK_OFF;
     let mut backfilling: Option<AbortOnDrop> = None;
+    let mut known = cached;
+    let mut skip_known = skip_known;
     loop {
         let init = match timeout(START_TIMEOUT, ChunkIterator::start(&site)).await {
             Ok(Ok(init)) => init,
@@ -485,17 +505,26 @@ pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>) {
                 site.clone(),
                 events.clone(),
                 *newest.identifier.volume(),
-                cached.clone(),
+                known.clone(),
             ))));
         }
         replay.push(newest);
         let mut previous_volume = None;
-        for chunk in &replay {
-            previous_volume = Some(*chunk.identifier.volume());
-            if !deliver(&mut assembler, &site, chunk, &events).await {
-                return;
+        {
+            let replay_known = skip_known.then_some(known.as_slice());
+            for chunk in &replay {
+                previous_volume = Some(*chunk.identifier.volume());
+                if !deliver(&mut assembler, &site, chunk, &events, replay_known).await {
+                    return;
+                }
             }
         }
+        if let Some(start_ms) = assembler.start_ms()
+            && !known.contains(&start_ms)
+        {
+            known.push(start_ms);
+        }
+        skip_known = true;
 
         let mut failures = 0;
         let mut last_chunk = Instant::now();
@@ -512,13 +541,18 @@ pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>) {
                         for skipped in
                             earlier_chunks(&site, &iterator, &chunk.identifier, false).await
                         {
-                            if !deliver(&mut assembler, &site, &skipped, &events).await {
+                            if !deliver(&mut assembler, &site, &skipped, &events, None).await {
                                 return;
                             }
                         }
                     }
-                    if !deliver(&mut assembler, &site, &chunk, &events).await {
+                    if !deliver(&mut assembler, &site, &chunk, &events, None).await {
                         return;
+                    }
+                    if let Some(start_ms) = assembler.start_ms()
+                        && !known.contains(&start_ms)
+                    {
+                        known.push(start_ms);
                     }
                 }
                 Ok(Ok(None)) => {
@@ -594,6 +628,23 @@ mod tests {
         assert!(
             QUIET_RESTART < Duration::from_secs(600),
             "must fire before STALE, so a wedged volume is rediscovered while still LIVE"
+        );
+    }
+
+    #[test]
+    fn a_catalogued_replay_is_skipped_after_the_first_join() {
+        let start = 1_367_082_403_000;
+        assert!(
+            !skip_catalogued_replay(false, start, &[start]),
+            "the first join after select_site still publishes, so loading can clear"
+        );
+        assert!(
+            !skip_catalogued_replay(true, start, &[start + 1]),
+            "a newer volume is not in the catalog"
+        );
+        assert!(
+            skip_catalogued_replay(true, start, &[start]),
+            "a rediscovery of the same sweep must not republish it"
         );
     }
 

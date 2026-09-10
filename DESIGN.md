@@ -108,7 +108,9 @@ Independently, if the poller task has exited, or the newest radial is thirty
 minutes old and discovery has not been tried since, spawn a new poller.
 Reselecting the current station is a no-op while the poller is running; if
 the task has ended, start it again. Cached frames stay on screen through a
-rediscovery.
+rediscovery. A rediscovery that finds only a sweep already in the catalog
+leaves the frame and connection chrome alone; a newer volume still clears
+UNAVAILABLE / OFFLINE.
 
 ## Scope
 

@@ -310,6 +310,11 @@ fn should_restart_live(
     evidence_age.is_some_and(|age| age >= UNAVAILABLE_AFTER.as_secs())
         && since_restart >= UNAVAILABLE_AFTER
 }
+/// A sweep already in the catalog may clear `loading` after `select_site`.
+/// Any other status stays put: rediscovery must not flash `ok`.
+fn known_sweep_clears_loading(status: ConnectionStatus) -> bool {
+    status == ConnectionStatus::Loading
+}
 /// A live station's frame from an assembled sweep: the fixture frame's
 /// product, palette, and bounds (the engine's reflectivity vocabulary), the
 /// sweep's geometry and times, and the station table's coordinates. Texture
@@ -585,9 +590,10 @@ impl Shared {
         Some(now_ms().saturating_sub(newest_ms).max(0) as u64 / 1000)
     }
     /// Abort the current poller, if any, and start another on the selected
-    /// station. Timeline and the frame on screen stay; the next sweep
-    /// clears `unavailable` / `offline`.
-    fn restart_live(&mut self, why: &str) {
+    /// station. Timeline and the frame on screen stay; the next *new* sweep
+    /// clears `unavailable` / `offline`. `skip_known` is true on a respawn
+    /// so a catalogued replay is not published again.
+    fn restart_live(&mut self, why: &str, skip_known: bool) {
         let site = self.state.site.id.clone();
         if site.is_empty() || self.state.source != Source::Live {
             return;
@@ -597,7 +603,12 @@ impl Shared {
             task.abort();
         }
         let cached: Vec<i64> = self.timeline.stored.iter().map(|e| e.start_ms).collect();
-        self.live = Some(tokio::spawn(live::poll(site, self.events.clone(), cached)));
+        self.live = Some(tokio::spawn(live::poll(
+            site,
+            self.events.clone(),
+            cached,
+            skip_known,
+        )));
         self.last_live_restart = Instant::now();
     }
     /// Go live on a station: the newest cached frame (or an empty one)
@@ -609,7 +620,7 @@ impl Shared {
     fn select_site(&mut self, id: &str) -> (bool, Option<String>) {
         if id == self.state.site.id && self.state.source == Source::Live {
             if self.live.as_ref().is_none_or(JoinHandle::is_finished) {
-                self.restart_live("poller ended; restarting on reselect");
+                self.restart_live("poller ended; restarting on reselect", true);
             }
             return (false, None);
         }
@@ -660,7 +671,7 @@ impl Shared {
         self.state.site.id = station.id;
         self.state.source = Source::Live;
         self.state.connection.status = ConnectionStatus::Loading;
-        self.restart_live("polling");
+        self.restart_live("polling", false);
         (true, None)
     }
     /// A pan settled with the map centred at `lat`, `lon`. While following and
@@ -703,6 +714,13 @@ impl Shared {
             scan_time: frame.scan_time.clone(),
             start_ms,
         };
+        if self.timeline.stored.iter().any(|e| e.start_ms == start_ms) {
+            if known_sweep_clears_loading(self.state.connection.status) {
+                self.state.connection.status = ConnectionStatus::Ok;
+                self.broadcast();
+            }
+            return Ok(());
+        }
         let following = self.timeline.following();
         self.state.connection.status = ConnectionStatus::Ok;
         let shown = if complete {
@@ -1607,7 +1625,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
                             shared.evidence_age_secs().unwrap_or(0)
                         )
                     };
-                    shared.restart_live(&why);
+                    shared.restart_live(&why, true);
                 }
             }
         }
@@ -1979,6 +1997,21 @@ mod tests {
             Some(UNAVAILABLE_AFTER.as_secs()),
             cooldown
         ));
+    }
+
+    #[test]
+    fn a_known_sweep_does_not_clear_unavailable() {
+        use ConnectionStatus::*;
+        assert!(
+            known_sweep_clears_loading(Loading),
+            "select_site is still loading until the first join reports"
+        );
+        for held in [Ok, Stale, Unavailable, Offline] {
+            assert!(
+                !known_sweep_clears_loading(held),
+                "{held:?} must not flash ok when rediscovery repeats a catalogued sweep"
+            );
+        }
     }
 
     #[test]

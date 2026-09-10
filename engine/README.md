@@ -59,10 +59,12 @@ failure, but 90 seconds with no chunk at all (higher cuts of a live volume
 still arrive every 4–12 s) means the iterator is parked on a volume the
 bucket has rotated off, so discovery starts over. Independently, the engine
 respawns a poller whose task has exited, or whose newest radial is thirty
-minutes old and has not been rediscovered since. Reselecting the live
-station is a no-op while the poller is running; if the task has ended, the
-reselect starts it again. A reachable feed becomes stale at ten minutes and
-unavailable at thirty minutes without new radials; an empty station is
+minutes old and has not been rediscovered since. A rediscovery that finds
+only a sweep already in the catalog does not republish it or clear
+unavailable. Reselecting the live station is a no-op while the poller is
+running; if the task has ended, the reselect starts it again. A reachable
+feed becomes stale at ten minutes and unavailable at thirty minutes without
+new radials; an empty station is
 unavailable, and an unreachable bucket is offline. Cached frames remain
 usable under every condition.
 
