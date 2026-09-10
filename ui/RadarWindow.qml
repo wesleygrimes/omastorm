@@ -261,6 +261,19 @@ Item {
         if (!state || !siteId) return;
         store.setLock(locked ? "" : siteId, !locked);
     }
+    // MOCK: what the place chip says. OMASTORM_MOCK_GPS stands in for a
+    // receiver so the GPS states can be captured without one.
+    readonly property string mockGps: Quickshell.env("OMASTORM_MOCK_GPS") || ""
+    readonly property string placeState: mockGps === "following" || mockGps === "home" ? "FOLLOWING" : mockGps === "nofix" ? "NO FIX" : ""
+    readonly property string placeLabel: {
+        if (mockGps === "home") return "STOKESDALE";
+        if (mockGps && mockGps !== "paused") return "GPS";
+        var t = app.resetTarget;
+        if (t && Location.distanceKm(map.centerLat, map.centerLon, t.lat, t.lon) < 2) return (t.name || "OMARCHY'S LOCATION").toUpperCase();
+        if (app.store.placeName && Location.distanceKm(map.centerLat, map.centerLon, app.store.centerLat, app.store.centerLon) < 2) return app.store.placeName.toUpperCase();
+        var lat = map.centerLat, lon = map.centerLon;
+        return Math.abs(lat).toFixed(2) + "° " + (lat < 0 ? "S" : "N") + "  " + Math.abs(lon).toFixed(2) + "° " + (lon < 0 ? "W" : "E");
+    }
     property string notice: ""
     Timer { id: noticeTimer; interval: 3000; onTriggered: app.notice = "" }
     function resetView() {
@@ -393,6 +406,8 @@ Item {
                     case "search": ctx.beginPath(); ctx.arc(6.5, 6.5, 4.5, 0, 2 * Math.PI); ctx.stroke(); seg(10, 10, 14, 14); break;
                     case "keys": ctx.strokeRect(1.5, 4.5, 13, 8); seg(4, 7, 5, 7); seg(7, 7, 8, 7); seg(10, 7, 11, 7); seg(4.5, 10, 11.5, 10); break;
                     case "chevron": seg(5, 6.5, 8, 9.5); seg(8, 9.5, 11, 6.5); break;
+                    case "unlock": ctx.strokeRect(3.5, 7.5, 9, 6); ctx.beginPath(); ctx.moveTo(10.5, 7.5); ctx.lineTo(10.5, 4.5); ctx.arc(13, 4.5, 2.5, Math.PI, 0); ctx.lineTo(15.5, 6); ctx.stroke(); break;
+                    case "radar": ctx.beginPath(); ctx.arc(4, 12, 1.5, 0, 2 * Math.PI); ctx.fill(); ctx.beginPath(); ctx.arc(4, 12, 5.5, -Math.PI / 2, 0); ctx.stroke(); ctx.beginPath(); ctx.arc(4, 12, 9.5, -Math.PI / 2, 0); ctx.stroke(); break;
                     }
             }
         }
@@ -415,6 +430,55 @@ Item {
                 color: transport.selected ? app.theme.accent : transport.hovered ? Qt.alpha(app.theme.accent, .18) : "transparent"
                 border.width: 1
                 border.color: transport.selected ? app.theme.accent : Qt.alpha(app.theme.foreground, .22)
+            }
+        }
+        // MOCK: one chip per idea, in two parts. The glyph is a toggle
+        // (crosshair = the map follows the current location, padlock = the
+        // radar is pinned), filled with the accent while on. The name beside
+        // it says what is being followed or held, and opens that picker.
+        component Chip: RowLayout {
+            id: chip
+            property string glyph: "follow"
+            property string label: ""
+            property string tag: ""
+            property bool on: false
+            property bool tagAccent: false
+            property bool enabled: true
+            signal toggled()
+            signal opened()
+            spacing: 0
+            GlyphButton {
+                glyph: chip.glyph; selected: chip.on; enabled: chip.enabled
+                onClicked: chip.toggled()
+            }
+            Button {
+                id: name
+                implicitHeight: 30
+                implicitWidth: contentItem.implicitWidth + (win.compact ? 14 : 22)
+                padding: 0
+                focusPolicy: Qt.NoFocus
+                enabled: chip.enabled
+                visible: !win.compact
+                Layout.leftMargin: -1
+                onClicked: chip.opened()
+                contentItem: RowLayout {
+                    spacing: 7
+                    Item { Layout.fillWidth: true }
+                    LabelText { text: chip.label; opacity: chip.enabled ? 1 : .35 }
+                    LabelText {
+                        text: chip.tag; visible: chip.tag !== ""
+                        color: chip.tagAccent ? app.theme.accent : app.theme.foreground
+                        opacity: chip.tagAccent ? .9 : .55
+                        font.pixelSize: 10; font.letterSpacing: 1
+                    }
+                    Glyph { glyph: "chevron"; implicitWidth: 12; fade: .6 }
+                    Item { Layout.fillWidth: true }
+                }
+                background: Rectangle {
+                    color: name.hovered ? Qt.alpha(app.theme.accent, .18) : "transparent"
+                    border.width: 1
+                    border.color: Qt.alpha(app.theme.foreground, .22)
+                }
             }
         }
         Rectangle {
@@ -449,30 +513,51 @@ Item {
             Rectangle { Layout.fillWidth: true; height: 1; color: Qt.alpha(app.theme.foreground, .25) }
             RowLayout {
                 Layout.fillWidth: true
-                LabelText { text: app.siteId || "—"; font.pixelSize: app.theme.baseSize + 7; font.bold: true }
-                LabelText { text: app.siteName; visible: !win.compact; opacity: .65 }
-                // FOLLOWING or LOCKED after the site name (DESIGN.md, window
-                // chrome); nothing when following is off and no lock is set.
-                RowLayout {
-                    id: siteChip
-                    spacing: 5
-                    visible: app.locked || app.following
-                    readonly property color ink: app.locked ? app.theme.accent : Qt.alpha(app.theme.foreground, .55)
-                    Glyph { glyph: app.locked ? "lock" : "follow"; ink: siteChip.ink }
-                    LabelText {
-                        text: app.locked && app.outsideCoverage ? "LOCKED · OUTSIDE COVERAGE" : app.locked ? "LOCKED" : "FOLLOWING"
-                        visible: !win.compact; color: siteChip.ink; font.pixelSize: 10; font.letterSpacing: 1
+                // MOCK: the station title is the radar control. Click it to
+                // pick a station; the padlock beside it pins the one on screen.
+                Button {
+                    id: siteTitle
+                    implicitHeight: 30
+                    implicitWidth: contentItem.implicitWidth + 12
+                    padding: 0
+                    focusPolicy: Qt.NoFocus
+                    enabled: !!app.state
+                    onClicked: picker.show("")
+                    Layout.leftMargin: -6
+                    contentItem: RowLayout {
+                        spacing: 8
+                        Item { width: 6 }
+                        LabelText { text: app.siteId || "—"; font.pixelSize: app.theme.baseSize + 7; font.bold: true }
+                        // The padlock right after the call sign: closed and
+                        // accent while locked, open and quiet while following.
+                        Rectangle {
+                            id: lockButton
+                            implicitWidth: 24; implicitHeight: 24
+                            radius: 2
+                            color: lockArea.containsMouse ? Qt.alpha(app.theme.accent, .18) : "transparent"
+                            Glyph {
+                                anchors.centerIn: parent
+                                glyph: app.locked ? "lock" : "unlock"
+                                ink: app.locked ? app.theme.accent : app.theme.foreground
+                                fade: app.locked ? 1 : .45
+                            }
+                            MouseArea { id: lockArea; anchors.fill: parent; hoverEnabled: true; onClicked: app.toggleLock() }
+                        }
+                        LabelText { text: app.siteName; visible: !win.compact; opacity: .65 }
+                        Glyph { glyph: "chevron"; implicitWidth: 12; fade: siteTitle.hovered ? 1 : .5 }
+                        Item { width: 2 }
+                    }
+                    background: Rectangle {
+                        color: siteTitle.hovered ? Qt.alpha(app.theme.accent, .18) : "transparent"
+                        border.width: 1
+                        border.color: siteTitle.hovered ? Qt.alpha(app.theme.foreground, .22) : "transparent"
                     }
                 }
                 LabelText {
-                    visible: !win.compact && !!app.resetTarget && Location.distanceKm(map.centerLat, map.centerLon, app.resetTarget.lat, app.resetTarget.lon) < 2
-                    text: !app.resetTarget ? ""
-                        : app.resetTarget.source === "weather"
-                        ? "LOCATION · " + (app.resetTarget.name || "OMARCHY'S LOCATION").toUpperCase()
-                        : "LOCATION · CONFIG.TOML"
-                    color: Qt.alpha(app.theme.foreground, .55)
+                    text: "OUTSIDE COVERAGE"
+                    visible: !win.compact && app.locked && app.outsideCoverage
+                    color: app.theme.accent
                     font.pixelSize: 10; font.letterSpacing: 1
-                    Layout.leftMargin: 10
                 }
                 Item { Layout.fillWidth: true }
                 LabelText { text: !app.scan ? "" : app.scan.productName.toUpperCase() + (app.scan.scanTime ? " / " + app.scan.elevationDeg.toFixed(1) + "°" : "") }
@@ -546,7 +631,21 @@ Item {
                     onTilesNeeded: (z, x0, y0, x1, y1) => engine.send({type: "tiles_needed", z: z, x0: x0, y0: y0, x1: x1, y1: y1})
                 }
                 Connections { target: engine; function onTileReady(tile) { map.tileReady(tile); } }
-                LabelText { anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 12; text: "N ↑"; opacity: .75 }
+                // MOCK: the crosshair alone, top-left, ahead of N ↑. Filled
+                // while the map follows the current location; a pan turns it
+                // off, a click turns it on and recenters.
+                Rectangle {
+                    id: followChip
+                    anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10
+                    width: 26; height: 26
+                    readonly property bool on: app.mockGps === "following" || app.mockGps === "home"
+                    color: on ? app.theme.accent : followArea.containsMouse ? Qt.alpha(app.theme.accent, .18) : Qt.alpha(app.theme.background, .9)
+                    border.width: 1; border.color: on ? app.theme.accent : Qt.alpha(app.theme.foreground, .22)
+                    visible: !!app.state
+                    Glyph { anchors.centerIn: parent; glyph: "follow"; ink: followChip.on ? app.theme.background : app.theme.foreground }
+                    MouseArea { id: followArea; anchors.fill: parent; hoverEnabled: true }
+                }
+                LabelText { anchors.verticalCenter: followChip.verticalCenter; anchors.left: followChip.right; anchors.leftMargin: 10; text: "N ↑"; opacity: .75 }
                 // The `?` chip in the map's top-right corner (DESIGN.md, window
                 // chrome) opens the keys sheet, as does the key itself.
                 Rectangle {
@@ -570,7 +669,7 @@ Item {
                 LabelText {
                     anchors.bottom: parent.bottom; anchors.right: parent.right; anchors.margins: 12
                     anchors.left: parent.horizontalCenter; horizontalAlignment: Text.AlignRight
-                    text: map.osmOnScreen && app.state && app.state.basemap ? app.state.basemap.osm.attribution : "NATURAL EARTH · OFFLINE"
+                    text: "NOAA / NEXRAD · " + (map.osmOnScreen && app.state && app.state.basemap ? app.state.basemap.osm.attribution : "NATURAL EARTH · OFFLINE")
                     visible: !!app.scan
                     font.pixelSize: 10; opacity: .7
                 }
@@ -719,31 +818,28 @@ Item {
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 5
-                // SEARCH and the lock control lead the row (DESIGN.md, search
-                // placement); the lock is selected while locked.
-                Button {
-                    id: searchButton
-                    implicitHeight: 30
-                    implicitWidth: contentItem.implicitWidth + (win.compact ? 14 : 24)
-                    padding: 0
-                    focusPolicy: Qt.NoFocus
-                    enabled: !!app.state
-                    onClicked: picker.show("")
-                    contentItem: RowLayout {
-                        spacing: 6
-                        Item { Layout.fillWidth: true }
-                        Glyph { glyph: "search"; fade: searchButton.enabled ? 1 : .35 }
-                        LabelText { text: "SEARCH"; visible: !win.compact; opacity: searchButton.enabled ? 1 : .35 }
-                        Item { Layout.fillWidth: true }
-                    }
-                    background: Rectangle {
-                        color: searchButton.hovered ? Qt.alpha(app.theme.accent, .18) : "transparent"
-                        border.width: 1
-                        border.color: Qt.alpha(app.theme.foreground, .22)
-                    }
+                // MOCK: the bar is hidden. Radar moved to the header, the
+                // place to the map, treatment and zoom to the keys and wheel.
+                visible: false
+                Chip {
+                    glyph: "follow"
+                    label: app.placeLabel
+                    tag: app.placeState
+                    on: app.mockGps === "following" || app.mockGps === "home"
+                    tagAccent: on
+                    onOpened: locationPicker.show("")
                 }
-                GlyphButton { glyph: app.locked ? "lock" : "follow"; selected: app.locked; enabled: !!app.state; onClicked: app.toggleLock() }
-                Control { text: win.compact ? "⌂" : "⌂ LOCATION"; onClicked: locationPicker.show("") }
+                Chip {
+                    glyph: "lock"
+                    label: app.siteId || "—"
+                    tag: app.locked && app.outsideCoverage ? "LOCKED · OUTSIDE COVERAGE" : app.locked ? "LOCKED" : "FOLLOWING"
+                    on: app.locked
+                    tagAccent: app.locked
+                    enabled: !!app.state
+                    onToggled: app.toggleLock()
+                    onOpened: picker.show("")
+                }
+                Item { width: 6 }
                 Item { Layout.fillWidth: true }
                 // The treatment chip (DESIGN.md, treatment control): one
                 // low-emphasis control naming the treatment; click opens the
@@ -771,11 +867,11 @@ Item {
                 Rectangle { width: 1; height: 18; color: Qt.alpha(app.theme.foreground, .22); Layout.leftMargin: 4; Layout.rightMargin: 4; visible: !win.compact }
                 Control { text: "−"; visible: !win.compact; onClicked: map.zoom(Math.min(map.span,map.maxSpan)*1.25) }
                 Control { text: "+"; visible: !win.compact; onClicked: map.zoom(Math.min(map.span,map.maxSpan)/1.25) }
-                Control { text: "RESET"; onClicked: app.resetView() }
             }
             LabelText {
                 Layout.fillWidth: true
                 text: "NOAA / NEXRAD · Natural Earth"
+                visible: false // MOCK: folded into the map's attribution corner
                 font.pixelSize: 10; opacity: .7
             }
           }
