@@ -4,8 +4,7 @@ Open-source, live NEXRAD radar for the Omarchy desktop. Beta.
 
 [![Omastorm window: live take with loop, search, keys, and treatments](https://github.com/wesleygrimes/omastorm/releases/download/media-2026-09-10/omastorm-preview.gif)](https://github.com/wesleygrimes/omastorm/releases/download/media-2026-09-10/omastorm-demo.mp4)
 
-Live KJAX demo: playback, pan and zoom, treatments, weak returns, station
-search, and keyboard controls.
+Live KJAX: the refactored window chrome, timeline ticks, and playback loop.
 
 A radar that lives in your bar. The popover shows the station nearest you with
 the actual scan time. Click the map (or press Enter) for the full window: every
