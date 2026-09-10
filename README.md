@@ -201,7 +201,7 @@ Quickshell UI is the client. `manifest.json` is the Omarchy plugin.
 - `engine/` Rust daemon: NEXRAD decode, cache, and the socket protocol
 - `ui/` Quickshell QML for the bar popover and window
 - `scripts/` setup, checks, captures, install, and release
-- `data/` fixture provenance and checksums (`data/raw/` is downloaded)
+- `data/` fixture provenance, checksums, and vendored archives (`data/raw/` is extracted)
 - `golden/` decoder answer key for the archived KTLX scan
 - `docs/` protocol, configuration, and releasing
 - `site/` omastorm.com
