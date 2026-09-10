@@ -460,7 +460,8 @@ Item {
                     readonly property color ink: app.locked ? app.theme.accent : Qt.alpha(app.theme.foreground, .55)
                     Glyph { glyph: app.locked ? "lock" : "follow"; ink: siteChip.ink }
                     LabelText {
-                        text: app.locked && app.outsideCoverage ? "LOCKED · OUTSIDE COVERAGE" : app.locked ? "LOCKED" : "FOLLOWING"
+                        text: app.locked && app.outsideCoverage ? "LOCKED · OUTSIDE COVERAGE" : app.locked ? "LOCKED"
+                            : app.store.locationSource === "gps" ? "FOLLOWING · GPS" : "FOLLOWING"
                         visible: !win.compact; color: siteChip.ink; font.pixelSize: 10; font.letterSpacing: 1
                     }
                 }

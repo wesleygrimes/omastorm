@@ -60,6 +60,10 @@ center_lon = -79.97948
 # Omit to restore the UI lock, or select automatically when no lock is remembered.
 # locked_radar = "KFCX"
 
+# Optional: follow a GPS receiver on the local gpsd. The map centre tracks the
+# fix and the radar hands off as you drive; a lock still holds.
+# gpsd = true
+
 treatment = "GLYPHS" # PIXELS, GLYPHS, or STIPPLE at launch; Glyphs when omitted
 weak_floor = 5       # dBZ; false draws every measured return
 
@@ -81,6 +85,16 @@ zoom_in = "+ ="
   the map. Unlocking in the UI affects the session and remembered lock;
   config applies again on launch. Remove this setting and unlock in the UI
   to keep automatic selection across launches.
+- `gpsd`: `true` relays the local gpsd through `gpspipe -w` (part of the
+  gpsd package). While a receiver has a 2D-or-better fix, each fix that has
+  moved more than 100 m becomes the map centre — the source reads `gps`,
+  the chip `FOLLOWING · GPS` — and the engine's ordinary hand-off picks
+  the nearest radar, with its own hysteresis, exactly as a pan would. A
+  lock holds the radar while the map keeps following. The remembered view
+  is written like any other centre, so the last fix is where a relaunch
+  opens. A lost fix leaves the view where the receiver last was; gpsd not
+  answering is retried every five seconds while the key is on. Off when
+  omitted.
 
 A Jacksonville map center with `locked_radar = "KFCX"` is valid. Honor both
 settings even when the sweep is outside the view. Show the selected station

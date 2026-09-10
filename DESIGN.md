@@ -81,6 +81,15 @@ selected radar" when that radar's coverage is outside the view. UI navigation
 and unlocking can change the active session; explicit config applies again
 on launch.
 
+A GPS receiver is a map centre that moves on its own. With `gpsd = true`,
+each fix from the local gpsd that has moved more than 100 m becomes the
+centre, and the radar follows it by the same nearest-with-hysteresis
+hand-off a pan gets; the chip reads `FOLLOWING · GPS`. A lock still holds
+the radar while the map follows. The fix is remembered like any centre, so
+a relaunch opens where the receiver last was, and a lost fix moves
+nothing. Nothing is drawn at the fix: a position marker is its own
+decision, against the overlay's collision layout.
+
 A station with no frame yet is the map without radar. Show no loading animation.
 Display one radar station’s sweep at a time.
 

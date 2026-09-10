@@ -92,8 +92,8 @@ if step build bash scripts/cargo.sh test --offline --locked --no-run; then
   # OMASTORM_ARCHIVE names the volume (a shipped daemon starts with no frame).
   export OMASTORM_ARCHIVE="$PWD/data/raw/KTLX20130520_201643_V06.gz"
   tests & lanes+=($!)
-  # check-picker and check-keys select stations for real, so they run last.
-  lane window check-engine-ui check-map-sites check-map-network check-location check-picker check-keys & lanes+=($!)
+  # check-picker, check-keys and check-gps select stations for real, so they run last.
+  lane window check-engine-ui check-map-sites check-map-network check-location check-picker check-keys check-gps & lanes+=($!)
   lane alone check-bind check-link-plugin check-launcher check-theme check-map-tiles check-engine-install check-engine-release check-popover & lanes+=($!)
   for pid in "${lanes[@]}"; do wait "$pid" || failed=1; done
   lanes=()

@@ -120,12 +120,15 @@ Explicit center coordinates win on every launch. Without them, Omastorm
 restores your last view, then falls back to the weather location or location
 picker. Radar selection is independent: a configured lock wins, otherwise a
 remembered lock is restored, otherwise the nearest radar follows the map.
+With a GPS receiver on a running `gpsd`, `gpsd = true` makes the map follow
+the receiver instead, handing the radar off as you drive.
 
 ```toml
 # Optional: always open here. Omit both to remember the last map position.
 center_lat = 36.23708
 center_lon = -79.97948
 # locked_radar = "KFCX" # optional radar override; coordinates do not imply a lock
+# gpsd = true           # optional: follow a GPS receiver on the local gpsd
 
 treatment = "GLYPHS" # PIXELS, GLYPHS, or STIPPLE at launch
 weak_floor = 5       # dBZ; false draws every measured return

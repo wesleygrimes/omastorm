@@ -40,6 +40,31 @@ QtObject {
     // { name, lat, lon } from weather.json, or null when the file is
     // missing, unreadable, or has no coordinates.
     property var location: null
+    // The live fix from gpsd while `gpsd = true` and a receiver has one
+    // (DESIGN.md, gpsd follow as built), or null. gpspipe -w relays gpsd's
+    // JSON stream; a TPV with a 2D-or-better fix is a position, mode 1 is
+    // a receiver with none. The relay exits when gpsd is not answering and
+    // comes back every five seconds until it is, or until the key is off.
+    readonly property bool gpsd: values.gpsd === true
+    property var fix: null
+    property Process gps: Process {
+        running: root.gpsd
+        command: ["gpspipe", "-w"]
+        stdout: SplitParser {
+            onRead: line => {
+                try {
+                    var msg = JSON.parse(line);
+                    if (msg.class !== "TPV") return;
+                    var lat = Number(msg.lat), lon = Number(msg.lon);
+                    if (msg.mode >= 2 && isFinite(lat) && isFinite(lon)) root.fix = { lat: lat, lon: lon };
+                    else if (msg.mode !== undefined && msg.mode < 2) root.fix = null;
+                } catch (e) {}
+            }
+        }
+        onExited: { root.fix = null; if (root.gpsd) gpsRetry.restart(); }
+    }
+    property Timer gpsRetry: Timer { interval: 5000; onTriggered: if (root.gpsd && !root.gps.running) root.gps.running = true }
+    onGpsdChanged: { if (!gpsd) { gps.running = false; fix = null; } }
     property FileView file: FileView {
         path: root.path
         watchChanges: true
