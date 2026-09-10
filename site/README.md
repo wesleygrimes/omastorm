@@ -20,7 +20,7 @@ ffmpeg -y -ss 2.5 -i docs/media/omastorm-demo.mp4 -frames:v 1 site/take-poster.p
 ```
 
 The site copy is encoded lighter than the release asset (about 6 MB against
-under ~12 MB); the caption links the full-quality file on the `media-2026-09-09` release.
+under ~12 MB); the caption links the full-quality file on the `media-2026-09-10` release.
 
 `popover.png` is the bar-popover still shown under the take. Keep it next to
 `take.mp4` when deploying; it is small enough to commit if you want the site
