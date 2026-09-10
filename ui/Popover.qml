@@ -2,7 +2,6 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "Keys.js" as KeyMap
-import "Timeline.js" as Timeline
 
 FocusScope {
     id: card
@@ -12,7 +11,15 @@ FocusScope {
     readonly property var state: connection.state
     readonly property var scan: state ? state.frame : null
     readonly property var frames: state ? state.timeline : []
-    readonly property var slots: Timeline.slots(frames)
+    // Popover is too narrow for the window's fixed 60 empties. One tick per
+    // frame, no gap stubs, pixel-snapped — same language, denser strip.
+    readonly property var slots: {
+        var result = [];
+        for (var j = 0; j < frames.length; j++)
+            result.push({id: frames[j].id, partial: frames[j].status === "partial"});
+        return result;
+    }
+    readonly property int currentSlot: scan ? slots.findIndex(s => s.id === scan.id) : -1
     readonly property string condition: state ? state.source === "archived" ? "archived" : state.connection.status : "offline"
     readonly property color statusColor: condition === "stale" ? theme.yellow
         : condition === "offline" || condition === "unavailable" ? theme.red : theme.accent
@@ -31,7 +38,10 @@ FocusScope {
     signal expandRequested()
     signal closeRequested()
     implicitWidth: 308
-    implicitHeight: layout.implicitHeight
+    // Match RadarBar's fixed KeyboardPanel contentHeight (400 − 28 inset).
+    // Do not track layout.implicitHeight — time labels and status text
+    // settling after open made the panel shrink and grow.
+    implicitHeight: 372
     Engine { id: connection }
     function step(delta) { if (state) connection.send({type: "step", delta: delta}); }
     function play() { if (state) connection.send({type: state.playing ? "pause" : "play"}); }
@@ -84,6 +94,8 @@ FocusScope {
         id: layout
         anchors.left: parent.left
         anchors.right: parent.right
+        anchors.top: parent.top
+        height: card.implicitHeight
         spacing: 10
         RowLayout {
             Layout.fillWidth: true
@@ -195,39 +207,41 @@ FocusScope {
                 Layout.fillWidth: true
                 spacing: 3
                 Item {
+                    id: strip
                     Layout.fillWidth: true
-                    implicitHeight: 16
+                    implicitHeight: 14
                     Repeater {
                         model: card.slots
                         Rectangle {
                             required property var modelData
                             required property int index
-                            readonly property bool current: card.scan && modelData.id === card.scan.id
-                            x: card.slots.length < 2 ? parent.width - width : index * (parent.width - width) / (card.slots.length - 1)
-                            anchors.bottom: parent.bottom
-                            width: current ? 3 : 2
-                            height: current ? 16 : modelData.stub ? 3 : 10
-                            color: modelData.partial ? "transparent" : current ? card.theme.accent : Qt.alpha(card.theme.foreground, .35)
-                            border.width: modelData.partial ? 1 : 0
+                            readonly property bool current: index === card.currentSlot
+                            x: card.slots.length > 1 ? Math.round(index * (strip.width - width) / (card.slots.length - 1)) : Math.round((strip.width - width) / 2)
+                            y: Math.round((strip.height - height) / 2)
+                            width: current || modelData.partial ? 3 : 2
+                            height: current || modelData.partial ? 14 : 10
+                            color: current ? card.theme.accent : modelData.partial ? "transparent"
+                                : Qt.alpha(card.theme.foreground, .40)
+                            border.width: modelData.partial && !current ? 1 : 0
                             border.color: card.theme.accent
                         }
                     }
                 }
                 RowLayout {
                     Layout.fillWidth: true
-                    Label { font.pixelSize: 10; opacity: .55; text: card.frames.length ? Qt.formatTime(new Date(card.frames[0].scanTime), Qt.locale().timeFormat(Locale.ShortFormat)) : "" }
+                    Layout.preferredHeight: 12
+                    Label { font.pixelSize: 10; opacity: .55; text: card.frames.length ? Qt.formatTime(new Date(card.frames[0].scanTime), Qt.locale().timeFormat(Locale.ShortFormat)) : " " }
                     Item { Layout.fillWidth: true }
-                    Label { font.pixelSize: 10; opacity: .55; text: card.condition === "ok" ? "now" : card.frames.length ? Qt.formatTime(new Date(card.frames[card.frames.length - 1].scanTime), Qt.locale().timeFormat(Locale.ShortFormat)) : "" }
+                    Label { font.pixelSize: 10; opacity: .55; text: card.condition === "ok" ? "now" : card.frames.length ? Qt.formatTime(new Date(card.frames[card.frames.length - 1].scanTime), Qt.locale().timeFormat(Locale.ShortFormat)) : " " }
                 }
             }
         }
-        RowLayout {
+        Label {
             Layout.fillWidth: true
-            Label {
-                Layout.fillWidth: true; font.pixelSize: 8; opacity: .5; elide: Text.ElideRight
-                text: map.osmOnScreen ? "NOAA · © OpenStreetMap" : "NOAA · Natural Earth"
-            }
-            Control { text: "EXPAND"; onClicked: card.expandRequested() }
+            font.pixelSize: 8
+            opacity: .5
+            elide: Text.ElideRight
+            text: map.osmOnScreen ? "NOAA · © OpenStreetMap" : "NOAA · Natural Earth"
         }
     }
 }

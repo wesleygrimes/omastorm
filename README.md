@@ -74,7 +74,8 @@ Update with `omarchy plugin update com.omastorm.radar`.
 ## Use
 
 Click the mark in the bar for the popover: the map at your location, LIVE or
-the connection condition, the actual scan time, step and play, and EXPAND.
+the connection condition, the actual scan time, and step and play. Click the
+map (or press Enter) to expand.
 If no location is known, the popover offers “Choose a location,” which opens
 the picker in the window. Click the radar or press Enter for the window; it
 opens on the same station, frame, and camera. Closing preserves your view

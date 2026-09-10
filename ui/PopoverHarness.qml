@@ -21,7 +21,7 @@ ShellRoot {
                 RadarMark { x: 294; y: 8; ink: theme.snapshot.foreground }
             }
             Rectangle {
-                x: 22; y: 42; width: 336; height: popover.implicitHeight + 28
+                x: 22; y: 42; width: 336; height: 400
                 color: theme.snapshot.background
                 border.width: 2; border.color: theme.snapshot.accent
                 visible: !harness.expanded

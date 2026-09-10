@@ -27,12 +27,11 @@ until_field() {
   for _ in {1..100}; do [[ $(field "$1") == "$2" ]] && return; sleep .1; done
   fail "$1 never became $2: $(call status)"
 }
-# The map reports its settled centre back through projection math, so a
-# picked 35.4 may be on disk as 35.39999999999999 moments later; compare
-# the numbers, not the text.
-state_at() { # file, lat, lon
+# rememberView keeps a picked centre within 1e-6° (#32); assert the exact
+# values the picker wrote, not a Mercator round-trip.
+state_exact() { # file, lat, lon
   jq -e --argjson lat "$2" --argjson lon "$3" \
-    '(.lat - $lat | fabs) < 1e-6 and (.lon - $lon | fabs) < 1e-6' "$1" > /dev/null 2>&1
+    '.lat == $lat and .lon == $lon' "$1" > /dev/null 2>&1
 }
 
 # Isolated from the machine: a remembered centre is the camera, weather is
@@ -77,11 +76,12 @@ until_field lat 35.4
 until_field lon -97.5
 until_field locationSource state
 until_field locked false
-# A queued settle from the previous camera must not pull the view back.
-sleep 0.4
+# A queued settle from the previous camera must not pull the view back, and
+# must not rewrite the pick as floating-point noise (#32).
+sleep 0.6
 until_field lat 35.4
 until_field lon -97.5
-state_at "$check_dir/state-weather.json" 35.4 -97.5 || fail "Location picker did not write state" "$(cat "$check_dir/state-weather.json")"
+state_exact "$check_dir/state-weather.json" 35.4 -97.5 || fail "Location picker did not keep exact centre" "$(cat "$check_dir/state-weather.json")"
 grep -q center_lat "$check_dir/none.toml" && fail "Location picker wrote config.toml"
 # n selects the nearest radar and does not move the camera.
 before_lat=$(field lat); before_lon=$(field lon)

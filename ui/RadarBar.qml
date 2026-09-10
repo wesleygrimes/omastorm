@@ -46,12 +46,13 @@ BarWidget {
         bar: root.bar
         owner: root
         open: root.opened
-        // The reviewed card has 308 px content within 336: the 14 px inset
-        // includes the 2 px border (KeyboardPanel adds border to padding).
+        // Fixed height: binding to the Loader item jumps from the 440
+        // fallback to a settling layout on every open (shrink/grow jitter).
+        // Card geometry is stable (308×372 content + 28 inset around it).
         padding: 12
         borderSpec: Border.flat(Color.accent, 2)
         contentWidth: 336
-        contentHeight: content.item ? content.item.implicitHeight + 28 : 440
+        contentHeight: 400
         focusTarget: content.item
         Loader {
             id: content

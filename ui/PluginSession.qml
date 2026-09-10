@@ -125,9 +125,16 @@ QtObject {
         if (needsLocation) return;
         if (!Location.validPair(lat, lon)) return;
         var next = Location.clampSpan(spanKm);
-        if (hasView && centerLat === lat && centerLon === lon && span === next) return;
-        centerLat = lat;
-        centerLon = lon;
+        // Mercator round-trip after applyView can report 35.39999999999999
+        // for a pick of 35.4 (#32). Keep the stored centre; only take span.
+        var sameCenter = hasView
+            && Math.abs(centerLat - lat) < 1e-6
+            && Math.abs(centerLon - lon) < 1e-6;
+        if (sameCenter && span === next) return;
+        if (!sameCenter) {
+            centerLat = lat;
+            centerLon = lon;
+        }
         span = next;
         hasView = true;
         persistTimer.restart();
