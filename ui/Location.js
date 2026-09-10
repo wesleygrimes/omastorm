@@ -121,12 +121,19 @@ function parseState(raw) {
     } catch (e) { return empty; }
 }
 
-function stateObject(viewLat, viewLon, span, lock, name) {
+// The remembered view, plus what is on screen right now (docs/configuration.md,
+// remembered state and view export): `site` is the station shown, `scan` the
+// frame's RFC 3339 time, `live` whether that frame is the live head. Those
+// three are for other programs to read; launch never reads them back.
+function stateObject(viewLat, viewLon, span, lock, name, site, scan, live) {
     var o = {};
     if (validPair(viewLat, viewLon)) { o.lat = viewLat; o.lon = viewLon; }
     if (typeof span === "number" && isFinite(span) && span > 0) o.span = span;
     if (lock) o.lock = lock;
     if (name) o.name = name;
+    if (site) o.site = site;
+    if (scan) o.scan = scan;
+    if (site) o.live = live === true;
     return o;
 }
 
