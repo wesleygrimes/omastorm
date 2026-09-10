@@ -221,6 +221,29 @@ QtObject {
             engine.send({type: "select_site", id: id});
     }
 
+    // A GPS fix (DESIGN.md, gpsd follow as built) is a view centre that
+    // moves on its own: the map goes to it, and the engine's ordinary
+    // hand-off — nearest radar to the centre, with its own hysteresis —
+    // picks the station, exactly as a pan would. A lock still holds: the
+    // chaser who pinned a radar keeps it while the map follows the car. The
+    // receiver's jitter while parked is under 100 m; nothing moves for it.
+    property var appliedFix: null
+    function followFix(fix) {
+        if (!fix) { appliedFix = null; return; }
+        if (appliedFix && Location.distanceKm(fix.lat, fix.lon, appliedFix.lat, appliedFix.lon) < 0.1) return;
+        appliedFix = fix;
+        placeName = "GPS";
+        locationSource = "gps";
+        needsLocation = false;
+        pendingLocationPicker = false;
+        centerLat = fix.lat;
+        centerLon = fix.lon;
+        hasView = true;
+        persist();
+        viewChanged();
+        applyRadar();
+    }
+
     function applyRadar() {
         if (!engine.state || !ready) return;
         if (needsLocation) return;
@@ -242,6 +265,8 @@ QtObject {
         resolve();
         applyRadar();
         persist();
+        // A receiver that had a fix before the engine answered.
+        if (config.fix) followFix(config.fix);
     }
 
     function applyTreatment() {
@@ -263,6 +288,7 @@ QtObject {
         function onReadyChanged() { session.resolve(); session.initialize(); }
         function onValuesChanged() { if (session.initialized) { session.resolve(); session.applyRadar(); } }
         function onLocationChanged() { if (!session.hasView) session.resolve(); if (session.initialized) session.applyRadar(); }
+        function onFixChanged() { if (session.initialized) session.followFix(session.config.fix); }
         function onTreatmentChanged() { session.applyTreatment(); }
         function onWeakFloorChanged() { session.applyTreatment(); }
     }
