@@ -6,15 +6,9 @@ import Quickshell.Io
 import "Sites.js" as Sites
 import "Keys.js" as KeyMap
 import "Location.js" as Location
-import "Metar.js" as Metar
 
 Item {
     id: app
-    // Component composition/inspection uses the existing connection and visual
-    // items directly; integration harnesses never rewrite component source.
-    property alias connection: engine
-    property alias mapItem: map
-    property alias surfaceItem: surface
     // A standalone launcher owns its process; a plugin never does.
     property var session: null
     property var shell: null
@@ -23,7 +17,6 @@ Item {
     property bool opened: session === null
     function open(payload) {
         opened = true;
-        focusToggle = null;
         if (session) session.windowOpen = true;
         applyView();
         if (store.pendingLocationPicker) Qt.callLater(() => locationPicker.show(""));
@@ -37,15 +30,15 @@ Item {
     }
     function dismiss() {
         if (!session) Qt.quit();
-        else if (shell) shell.hide(Runtime.pluginId);
+        else if (shell) shell.hide("com.omastorm.radar");
         else close();
     }
     readonly property var state: engine.state
     readonly property var scan: state ? state.frame : null
     // Every station, product, and source string on screen comes from the engine.
-    readonly property string siteId: engine.selectedSiteId
-    readonly property string siteName: engine.site ? engine.site.name.toUpperCase() : (engine.source && !engine.site ? engine.source.name.toUpperCase() : "")
-    readonly property string sourceBadge: state ? state.mode.toUpperCase() : ""
+    readonly property string siteId: state ? state.site.id : ""
+    readonly property string siteName: engine.site ? engine.site.name.toUpperCase() : ""
+    readonly property string sourceBadge: state ? state.source.toUpperCase() : ""
     // The timeline (DESIGN.md): the station's frames oldest
     // first with the sweep in progress last; the engine owns the position.
     readonly property var frames: state ? state.timeline : []
@@ -56,8 +49,8 @@ Item {
     // LIVE / ARCHIVED is the badge; a light beside it carries health.
     // Age under the product line is how stale the frame on screen is.
     // Prose is reserved for rejections, config mistakes, and notices.
-    readonly property string condition: state && state.mode === "live" ? state.connection.status : ""
-    readonly property bool alert: condition !== "" && condition !== "ok" && condition !== "idle"
+    readonly property string condition: state && state.source === "live" ? state.connection.status : ""
+    readonly property bool alert: condition !== "" && condition !== "ok"
     readonly property bool scanning: !!scan && scan.status === "partial" && !!scan.scanTime
     readonly property color conditionColor: condition === "stale" ? theme.yellow
         : condition === "loading" ? theme.accent
@@ -66,7 +59,7 @@ Item {
     // red when the feed is down; pulses while loading or a sweep is painting.
     readonly property color statusLightColor: {
         if (!state) return theme.foreground;
-        if (state.mode === "archived") return theme.accent;
+        if (state.source === "archived") return theme.accent;
         if (condition === "stale") return theme.yellow;
         if (condition === "unavailable" || condition === "offline") return theme.red;
         return theme.accent;
@@ -77,16 +70,6 @@ Item {
     readonly property int shownAge: !state || !scan || !scan.scanTime || !newestComplete ? -1
         : Math.max(0, state.connection.ageSeconds + Math.round((Date.parse(newestComplete.scanTime) - Date.parse(scan.scanTime)) / 1000))
     readonly property string ageText: condition && shownAge >= 0 ? ago(shownAge) : ""
-    // First sweep or COMP is still in flight: the map has tiles and no radar.
-    readonly property bool awaitingRadar: !!state && !map.radarReady
-        && (condition === "loading" || !!scan && !!scan.scanTime)
-    property bool loadingNotice: false
-    onAwaitingRadarChanged: if (!awaitingRadar) loadingNotice = false
-    Timer {
-        interval: 180
-        running: app.awaitingRadar
-        onTriggered: app.loadingNotice = true
-    }
     function ago(seconds) {
         var m = Math.floor(seconds / 60);
         if (m < 1) return "Now";
@@ -219,8 +202,7 @@ Item {
     // `[keys]` table over the defaults, asking Qt whether each sequence
     // parses; a bad value or a key bound twice keeps the default and is
     // named in the status slot, like a rejection, until the file is fixed.
-    // The treatment, weak_floor, and focus_mode settings are judged the
-    // same way.
+    // The treatment and weak_floor settings are judged the same way.
     // OMASTORM_STYLE and OMASTORM_WEAK, set by the capture scripts, outrank
     // the file.
     property var bindings: ({})
@@ -231,8 +213,6 @@ Item {
     function applySettings() {
         var errors = Location.configErrors(config.values);
         var wanted = KeyMap.treatment(config.treatment, errors), floor = KeyMap.weakFloor(config.weakFloor, errors);
-        KeyMap.focusMode(config.focusMode, errors);
-        KeyMap.popoverScale(config.popoverScale, errors);
         var resolved = KeyMap.resolve(config.keys, canon);
         bindings = resolved.bindings;
         configErrors = errors.concat(resolved.errors);
@@ -241,30 +221,10 @@ Item {
     }
     Component.onCompleted: applySettings()
     readonly property bool overlayOpen: locationPicker.open || sheet.open
-    // Focus mode (DESIGN.md, window chrome): config.toml's focus_mode when
-    // the window opens and whenever that value changes; the focus key
-    // overrides it until the window closes and never writes the file.
-    // The reset follows the raw value, so removing the key or making it
-    // invalid also drops the override; edits to other settings keep it.
-    readonly property bool configuredFocus: KeyMap.focusMode(config.focusMode, [])
-    readonly property string focusSetting: String(JSON.stringify(config.focusMode))
-    property var focusToggle: null
-    readonly property bool focusMode: focusToggle !== null ? focusToggle : configuredFocus
-    onFocusSettingChanged: focusToggle = null
-    // Harnesses read this surface's METAR state.
-    readonly property alias metarState: metar
-    Metars {
-        id: metar
-        // `app.connection`: a bare `engine` here names this object's own property.
-        engine: app.connection
-        session: app.store
-        view: map
-    }
     function run(action) {
         switch (action) {
         case "search": treatmentMenu.close(); locationPicker.show(""); break;
         case "nearest": nearest(); break;
-        case "mosaic": coveringMosaic(); break;
         case "lock": toggleLock(); break;
         case "locate": locateMe(); break;
         case "pan_left": map.pan(-1, 0); break;
@@ -281,10 +241,8 @@ Item {
         case "newest": jump(true); break;
         case "pixels": case "glyphs": case "stipple": treatment = action.toUpperCase(); treatmentMenu.close(); break;
         case "weak": weakFloor = weakFloor === null ? configuredFloor : null; break;
-        case "aviation": metar.toggle(); break;
-        case "focus": focusToggle = !focusMode; break;
         case "help": treatmentMenu.close(); if (sheet.open) sheet.close(); else sheet.show(); break;
-        case "close": if (metar.selected) metar.selected = null; else dismiss(); break;
+        case "close": dismiss(); break;
         }
     }
     // Drives the keyboard map from outside for checks and captures:
@@ -297,28 +255,40 @@ Item {
         function menu(open: bool): void { if (open) treatmentMenu.show(); else treatmentMenu.close(); }
         function field(name: string): string { var value = JSON.parse(status())[name]; return value === undefined ? "" : String(value); }
         function status(): string {
-            return JSON.stringify({sheet: sheet.open, menu: treatmentMenu.opened, treatment: app.treatment, weakFloor: app.weakFloor === null ? "off" : app.weakFloor, error: app.configError, layout: win.layout,
+            return JSON.stringify({sheet: sheet.open, menu: treatmentMenu.opened, treatment: app.treatment, weakFloor: app.weakFloor === null ? "off" : app.weakFloor, error: app.configError,
                                    span: Math.round(map.span * 10) / 10, lat: Math.round(map.centerLat * 1000) / 1000, lon: Math.round(map.centerLon * 1000) / 1000,
                                    locationSource: app.store.locationSource, needsLocation: app.store.needsLocation, locating: app.store.locating,
-                                   site: app.siteId, source: engine.source ? engine.source.id : "", locked: app.locked, lockSource: app.store.lockSource, outsideCoverage: app.outsideCoverage});
+                                   site: app.siteId, locked: app.locked, lockSource: app.store.lockSource, outsideCoverage: app.outsideCoverage});
         }
     }
     // Site navigation (DESIGN.md, location): the lock pins the radar against
     // hand-offs; `n` releases it and selects the nearest radar without moving
     // the camera. The site picker locks and centres on that station.
-    readonly property bool locked: state && state.navigation ? state.navigation.locked : false
+    readonly property bool locked: state ? state.site.locked : false
+    readonly property bool following: state ? state.site.follow && !state.site.locked : false
+    readonly property var resetTarget: Location.resolveReset(Location.configCenter(config.values), config.location)
     readonly property bool outsideCoverage: {
-        if (!locked) return false;
-        if (engine.site && engine.site.coverage)
-            return !Location.containsCoverage(engine.site.coverage, map.centerLat, map.centerLon, engine.site.lat, engine.site.lon);
-        if (engine.source && engine.source.coverage)
-            return !Location.containsCoverage(engine.source.coverage, map.centerLat, map.centerLon);
-        return false;
+        var s = engine.site;
+        return !!(locked && s && Location.distanceKm(map.centerLat, map.centerLon, s.lat, s.lon) > map.coverageKm);
     }
     function toggleLock() {
-        if (!state || !state.selection) return;
-        store.setLock(locked ? null : state.selection, !locked);
+        if (!state || !siteId) return;
+        store.setLock(locked ? "" : siteId, !locked);
     }
+    readonly property string placeLabel: {
+        var t = app.resetTarget;
+        if (t && Location.distanceKm(map.centerLat, map.centerLon, t.lat, t.lon) < 2) return (t.name || "OMARCHY'S LOCATION").toUpperCase();
+        if (app.store.placeName && Location.distanceKm(map.centerLat, map.centerLon, app.store.centerLat, app.store.centerLon) < 2) {
+            var name = app.store.placeName.toUpperCase();
+            return app.store.locationSource === "ip" ? "IP NEAR " + name : name;
+        }
+        if (app.store.locationSource === "ip" && Location.distanceKm(map.centerLat, map.centerLon, app.store.centerLat, app.store.centerLon) < 2)
+            return "IP NEAR YOU";
+        var lat = map.centerLat, lon = map.centerLon;
+        return Math.abs(lat).toFixed(2) + "° " + (lat < 0 ? "S" : "N") + "  " + Math.abs(lon).toFixed(2) + "° " + (lon < 0 ? "W" : "E");
+    }
+    property string notice: ""
+    Timer { id: noticeTimer; interval: 3000; onTriggered: app.notice = "" }
     property string mapNotice: ""
     Timer { id: mapNoticeTimer; interval: Quickshell.env("OMASTORM_CAPTURE") ? 20000 : 3000; onTriggered: app.mapNotice = "" }
     function flashMap(text) {
@@ -328,24 +298,16 @@ Item {
     }
     function resetView() {
         store.resetView();
+        applyView();
     }
     function nearest() {
         var s = map.nearest();
         if (!state || !s) return;
         store.followNearest(s.id);
     }
-    // Shift+N toggles like focus mode: lock the mosaic covering the center,
-    // camera staying put, or hand a mosaic back to the nearest station.
-    function coveringMosaic() {
-        if (!state) return;
-        if (engine.source && engine.source.kind === "mosaic") { nearest(); return; }
-        var m = Location.coveringMosaic(engine.sources, map.centerLat, map.centerLon);
-        if (!m) { flashMap("No mosaic covers this area"); return; }
-        store.setLock(Location.mosaicLock(m.id), true);
-    }
     function locateMe() {
         if (!store.hasView || store.needsLocation) return;
-        if (!state || state.mode !== "live") {
+        if (!state || state.source !== "live") {
             flashMap("Archived views never locate");
             return;
         }
@@ -354,6 +316,7 @@ Item {
     function choose(s) {
         if (!state || !s) return;
         store.chooseRadar(s.id, Number(s.lat), Number(s.lon), s.name || s.id);
+        applyView();
     }
     function acceptSearch(row) {
         if (!row) return;
@@ -361,11 +324,11 @@ Item {
             app.choose(row.site);
             return;
         }
-        if (row.kind === "mosaic") {
-            app.store.chooseMosaic(row.id, Number(row.lat), Number(row.lon), row.label || row.place || row.id);
-            return;
-        }
         app.store.setPlace(row.lat, row.lon, row.name || row.label || "");
+        app.applyView();
+        var name = row.name || row.label || "";
+        app.notice = name ? "LOCATION · " + name.toUpperCase() : "LOCATION · " + row.lat.toFixed(4) + ", " + row.lon.toFixed(4);
+        noticeTimer.restart();
     }
     // Drives the picker from outside for checks and captures:
     // quickshell ipc --pid <pid> call picker open tul
@@ -376,7 +339,7 @@ Item {
         function close(): void { locationPicker.close(); }
         function move(delta: int): void { locationPicker.move(delta); }
         function matches(): string {
-            return JSON.stringify(locationPicker.rows.map(r => r.kind === "site" ? r.site.id : (r.kind === "mosaic" ? r.id : (r.label || r.name))));
+            return JSON.stringify(locationPicker.rows.map(r => r.kind === "site" ? r.site.id : (r.label || r.name)));
         }
         function status(): string {
             return JSON.stringify({open: locationPicker.open, query: locationPicker.query, selected: locationPicker.selected, total: locationPicker.siteRanked.total, focused: locationPicker.fieldFocused});
@@ -391,7 +354,7 @@ Item {
         function move(delta: int): void { locationPicker.move(delta); }
         function go(lat: string, lon: string, name: string): void { locationPicker.go(Number(lat), Number(lon), name); }
         function matches(): string {
-            return JSON.stringify(locationPicker.rows.map(r => r.kind === "site" ? r.site.id : (r.kind === "mosaic" ? r.id : (r.where ? (r.name + ", " + r.where) : (r.label || r.name)))));
+            return JSON.stringify(locationPicker.rows.map(r => r.kind === "site" ? r.site.id : (r.where ? (r.name + ", " + r.where) : (r.label || r.name))));
         }
         function status(): string {
             return JSON.stringify({open: locationPicker.open, query: locationPicker.query, selected: locationPicker.selected, focused: locationPicker.fieldFocused, count: locationPicker.rows.length, error: locationPicker.coordError});
@@ -413,6 +376,7 @@ Item {
         target: app.session
         function onTreatmentChanged() { app.treatment = app.session.treatment; }
         function onWeakFloorChanged() { app.weakFloor = app.session.weakFloor; }
+        function onLocationPickerRequested() { if (app.opened) locationPicker.show(""); }
     }
     // Quickshell keeps the process alive after its last window closes, which
     // left 400-600 MB orphans behind every close. Quit with the window; the
@@ -428,14 +392,30 @@ Item {
         minimumSize: Qt.size(360 * Math.max(1, app.theme.baseSize/12), 360 * Math.max(1, app.theme.baseSize/12))
         color: app.theme.background
         property bool compact: width < 560
-        readonly property string layout: KeyMap.layout(width, height, app.theme.baseSize, app.focusMode)
 
         component LabelText: Text {
-            textFormat: Text.PlainText
             color: app.theme.foreground
             font.family: app.theme.font
             font.pixelSize: app.theme.baseSize
             elide: Text.ElideRight
+        }
+        component Control: Button {
+            id: button
+            property bool selected: false
+            implicitHeight: 30
+            implicitWidth: Math.max(30, contentItem.implicitWidth + 18)
+            padding: 6
+            contentItem: LabelText {
+                text: button.text
+                color: button.selected ? app.theme.background : app.theme.foreground
+                horizontalAlignment: Text.AlignHCenter
+                verticalAlignment: Text.AlignVCenter
+            }
+            background: Rectangle {
+                color: button.selected ? app.theme.accent : button.hovered || button.activeFocus ? Qt.alpha(app.theme.accent, .18) : "transparent"
+                border.width: 1
+                border.color: button.selected || button.activeFocus ? app.theme.accent : Qt.alpha(app.theme.foreground, .22)
+            }
         }
         // Chrome icons as Nerd Font glyphs (same Material Design Icons set
         // Omarchy's shell uses for media / panels). The theme's monospace
@@ -456,7 +436,6 @@ Item {
                 "radar": "󰐷"
             })
             Text {
-                textFormat: Text.PlainText
                 anchors.centerIn: parent
                 text: glyphRoot.icons[glyphRoot.glyph] || ""
                 color: glyphRoot.ink
@@ -487,6 +466,54 @@ Item {
                 border.color: transport.selected ? app.theme.accent : Qt.alpha(app.theme.foreground, .22)
             }
         }
+        // MOCK: one chip per idea, in two parts. The name opens the picker;
+        // the glyph to its right is the toggle (crosshair = follow place,
+        // padlock = pin radar), filled with the accent while on.
+        component Chip: RowLayout {
+            id: chip
+            property string glyph: "locate"
+            property string label: ""
+            property string tag: ""
+            property bool on: false
+            property bool tagAccent: false
+            property bool enabled: true
+            signal toggled()
+            signal opened()
+            spacing: 0
+            Button {
+                id: name
+                implicitHeight: 30
+                implicitWidth: contentItem.implicitWidth + (win.compact ? 14 : 22)
+                padding: 0
+                focusPolicy: Qt.NoFocus
+                enabled: chip.enabled
+                visible: !win.compact
+                onClicked: chip.opened()
+                contentItem: RowLayout {
+                    spacing: 7
+                    Item { Layout.fillWidth: true }
+                    LabelText { text: chip.label; opacity: chip.enabled ? 1 : .35 }
+                    LabelText {
+                        text: chip.tag; visible: chip.tag !== ""
+                        color: chip.tagAccent ? app.theme.accent : app.theme.foreground
+                        opacity: chip.tagAccent ? .9 : .55
+                        font.pixelSize: 10; font.letterSpacing: 1
+                    }
+                    Glyph { glyph: "chevron"; implicitWidth: 12; fade: .6 }
+                    Item { Layout.fillWidth: true }
+                }
+                background: Rectangle {
+                    color: name.hovered ? Qt.alpha(app.theme.accent, .18) : "transparent"
+                    border.width: 1
+                    border.color: Qt.alpha(app.theme.foreground, .22)
+                }
+            }
+            GlyphButton {
+                glyph: chip.glyph; selected: chip.on; enabled: chip.enabled
+                Layout.leftMargin: -1
+                onClicked: chip.toggled()
+            }
+        }
         Rectangle {
           id: surface
           anchors.fill: parent
@@ -509,10 +536,6 @@ Item {
             anchors.fill: parent
             anchors.margins: win.compact ? 12 : 20
             spacing: 10
-            // Layouts (DESIGN.md, window chrome): FULL shows every row; LEAN,
-            // chosen when FULL does not fit, drops the brand row and the
-            // legend and puts a small mark in the site row; FOCUS is the map
-            // stage alone with the focus stamp on it.
             // Chrome names (use these when tweaking):
             //   brand row     — mark, OMASTORM, status light, LIVE/ARCHIVED
             //   site row      — station title, radar lock (yellow when outside coverage)
@@ -528,11 +551,9 @@ Item {
             //   tick strip    — frame ticks
             //   strip stamp   — date/time/zone above the tick strip
             //   frame index   — N / available frames above the strip
-            //   focus stamp   — scan time and age or ARCHIVED, on the map in FOCUS
             RowLayout {
                 id: brandRow
                 Layout.fillWidth: true
-                visible: win.layout === "FULL"
                 RadarMark { ink: app.theme.accent; size: 20; Layout.rightMargin: 8 }
                 LabelText { text: "OMASTORM"; font.bold: true; font.letterSpacing: 2.5; font.pixelSize: app.theme.baseSize + 5 }
                 Item { Layout.fillWidth: true }
@@ -556,28 +577,14 @@ Item {
                     LabelText { text: app.sourceBadge; color: app.theme.accent; font.letterSpacing: 1.5 }
                 }
             }
-            Rectangle { Layout.fillWidth: true; height: 1; color: Qt.alpha(app.theme.foreground, .25); visible: brandRow.visible }
+            Rectangle { Layout.fillWidth: true; height: 1; color: Qt.alpha(app.theme.foreground, .25) }
             RowLayout {
                 id: siteRow
                 Layout.fillWidth: true
-                visible: win.layout !== "FOCUS"
-                // Fixed height: polar↔mosaic product/age changes must not
-                // resize the map (a source hand-off is not a layout event).
-                Layout.preferredHeight: 30
-                Layout.minimumHeight: 30
-                Layout.maximumHeight: 30
-                // MOCK: the station title is the radar control. Click it to
+// MOCK: the station title is the radar control. Click it to
                 // pick a station; the padlock beside it pins that radar (not
                 // the map — the crosshair on the map is place-follow).
                 // No border or hover fill on the title — it reads as text.
-                // LEAN keeps the brand as a small mark ahead of it.
-                RadarMark {
-                    visible: win.layout === "LEAN"
-                    ink: app.theme.accent
-                    size: 14
-                    Layout.alignment: Qt.AlignVCenter
-                    Layout.rightMargin: 4
-                }
                 Button {
                     id: siteTitle
                     implicitHeight: 30
@@ -588,7 +595,7 @@ Item {
                     Layout.alignment: Qt.AlignTop
                     contentItem: RowLayout {
                         spacing: 8
-                        LabelText { text: app.siteId || (engine.source ? engine.source.id : "—"); font.pixelSize: app.theme.baseSize + 7; font.bold: true }
+                        LabelText { text: app.siteId || "—"; font.pixelSize: app.theme.baseSize + 7; font.bold: true }
                         LabelText { text: app.siteName; visible: !win.compact; opacity: .65 }
                         Glyph { glyph: "chevron"; implicitWidth: 12; fade: .5 }
                     }
@@ -627,48 +634,39 @@ Item {
                 ColumnLayout {
                     id: productStack
                     spacing: 2
-                    Layout.fillWidth: true
-                    Layout.minimumWidth: 0
-                    Layout.maximumWidth: implicitWidth
                     Layout.alignment: Qt.AlignTop | Qt.AlignRight
                     RowLayout {
                         id: productLine
                         spacing: 8
-                        Layout.fillWidth: true
+                        visible: !!app.scan
                         LabelText {
-                            text: !app.scan ? "" : app.scan.productName.toUpperCase()
+                            text: !app.scan ? "" : app.scan.productName.toUpperCase() + (app.scan.scanTime ? " / " + app.scan.elevationDeg.toFixed(1) + "°" : "")
                         }
                         LabelText {
-                            id: tiltLabel
-                            // Reserve the tilt while a polar frame is loading.
-                            // Metadata appearing must not push the product name.
-                            visible: !!app.scan && app.scan.kind !== "mosaic"
-                            text: app.scan && app.scan.scanTime && app.scan.kind !== "mosaic"
-                                ? "/ " + app.scan.elevationDeg.toFixed(1) + "°" : "/ —°"
-                            opacity: app.scan && app.scan.scanTime ? 1 : 0
-                            Layout.minimumWidth: tiltMetrics.width
-                            Layout.preferredWidth: tiltMetrics.width
-                            Layout.maximumWidth: tiltMetrics.width
-                            TextMetrics { id: tiltMetrics; font: tiltLabel.font; text: "/ 00.0°" }
-                        }
-                        LabelText {
-                            text: !app.scan ? "" : (engine.source ? engine.source.attribution : (app.scan.kind === "mosaic" ? "" : "NOAA NEXRAD"))
+                            text: "NOAA NEXRAD"
                             font.letterSpacing: 1; opacity: .55
-                            Layout.fillWidth: true
-                            Layout.minimumWidth: 0
                         }
                     }
                     LabelText {
                         id: metaLine
                         Layout.alignment: Qt.AlignRight
-                        Layout.minimumHeight: 12
-                        // Without the brand row its badge moves here, so an
-                        // archived frame is still labelled.
-                        text: app.ageText || (!brandRow.visible && app.state && app.state.mode === "archived" ? app.sourceBadge : "")
+                        visible: app.ageText !== ""
+                        text: app.ageText
                         color: app.alert && app.condition !== "loading" ? app.conditionColor : app.theme.foreground
-                        opacity: text === "" ? 0 : (app.alert && app.condition !== "loading" ? 1 : .75)
+                        opacity: app.alert && app.condition !== "loading" ? 1 : .75
                     }
                 }
+            }
+            // Rejections, config mistakes, and notices only — feed health is
+            // the light beside LIVE, not a prose status row.
+            LabelText {
+                Layout.fillWidth: true
+                Layout.topMargin: -4
+                text: engine.rejection || app.configError || store.persistError || app.notice || store.updateNotice
+                color: app.theme.accent
+                opacity: 1
+                visible: text !== ""
+                horizontalAlignment: Text.AlignRight
             }
             Rectangle {
                 id: mapFrame
@@ -686,10 +684,7 @@ Item {
                     texture: engine.texture
                     azimuthLut: engine.azimuthLut
                     siteId: app.siteId
-                    sourceId: engine.source ? engine.source.id : ""
                     sites: engine.sites
-                    coverage: engine.site && engine.site.coverage ? engine.site.coverage
-                        : (engine.source && engine.source.coverage ? engine.source.coverage : null)
                     tileRoot: "file://" + engine.runtime
                     theme: app.theme
                     treatment: app.treatment
@@ -697,9 +692,6 @@ Item {
                     radarOpacity: app.condition === "unavailable" ? .6 : 1
                     labelSize: win.compact ? 10 : 12
                     locked: app.locked
-                    metarMode: metar.shown
-                    metars: metar.metars
-                    metarMark: Metar.markFromConfig(app.config.values) || "pin"
                     interactive: !app.store.needsLocation && !locationPicker.open
                     onNavigated: (lat, lon, spanKm) => app.store.userNavigated(lat, lon, spanKm)
                     // A settled pan hands the centre to the engine, which switches
@@ -715,65 +707,14 @@ Item {
                             return;
                         engine.send({type: "view_center", lat: lat, lon: lon});
                         app.store.rememberView(lat, lon, map.span);
-                        metar.request();
                     }
                     onResetRequested: app.resetView()
                     Component.onCompleted: app.applyView()
                     // The map asks for tiles when its camera settles and the
                     // engine answers this window alone, tile by tile.
                     onTilesNeeded: (z, x0, y0, x1, y1) => engine.send({type: "tiles_needed", z: z, x0: x0, y0: y0, x1: x1, y1: y1})
-                    onMetarPicked: report => metar.selected = report
                 }
                 Connections { target: engine; function onTileReady(tile) { map.tileReady(tile); } }
-                Rectangle {
-                    id: metarCard
-                    visible: !!metar.selected
-                    // Bottom-right, 80% of the map, sitting above the OSM
-                    // credit so the scale bar and attribution stay clear.
-                    anchors.right: parent.right
-                    anchors.bottom: parent.bottom
-                    anchors.rightMargin: 12
-                    anchors.bottomMargin: 36
-                    width: Math.round(parent.width * 0.8)
-                    height: metarColumn.implicitHeight + 16
-                    color: Qt.alpha(app.theme.background, .95)
-                    border.width: 1
-                    border.color: Qt.alpha(app.theme.foreground, .22)
-                    MouseArea { anchors.fill: parent }
-                    Column {
-                        id: metarColumn
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.margins: 8
-                        spacing: 4
-                        Row {
-                            spacing: 8
-                            Rectangle {
-                                width: 10; height: 10; radius: 5
-                                anchors.verticalCenter: parent.verticalCenter
-                                color: Metar.color(metar.selected ? metar.selected.category : "") || app.theme.foreground
-                            }
-                            LabelText {
-                                text: (metar.selected ? metar.selected.name || metar.selected.id : "")
-                                    + (Metar.label(metar.selected ? metar.selected.category : "") ? "  " + Metar.label(metar.selected.category) : "")
-                                font.bold: true
-                            }
-                            Item { width: 8; height: 1 }
-                            LabelText {
-                                text: "NOAA/NWS AWC"
-                                opacity: .55
-                                font.pixelSize: 10
-                            }
-                        }
-                        LabelText {
-                            width: metarCard.width - 16
-                            wrapMode: Text.Wrap
-                            font.family: "monospace"
-                            text: metar.selected ? metar.selected.raw : ""
-                        }
-                    }
-                }
                 // Locate (DESIGN.md): map marker, top-left; north sits beside it.
                 Row {
                     id: mapTopLeft
@@ -784,7 +725,7 @@ Item {
                         id: locateChip
                         width: 26; height: 22
                         readonly property bool pending: app.store.locating && app.store.locateKind === "locate"
-                        readonly property bool canLocate: !!app.state && app.store.hasView && app.state.mode === "live"
+                        readonly property bool canLocate: !!app.state && app.store.hasView && app.state.source === "live"
                         color: pending ? app.theme.accent : locateArea.containsMouse && canLocate ? Qt.alpha(app.theme.accent, .18) : Qt.alpha(app.theme.background, .9)
                         border.width: 1; border.color: pending ? app.theme.accent : Qt.alpha(app.theme.foreground, .22)
                         visible: app.store.hasView
@@ -903,38 +844,6 @@ Item {
                         }
                     }
                 }
-                // Focus stamp: with every row hidden the radar's age stays on
-                // the map (DESIGN.md, show actual scan times): the status
-                // light, the strip stamp, then the age or ARCHIVED. A METAR
-                // card takes this corner, so the stamp sits above it.
-                Rectangle {
-                    id: focusStamp
-                    anchors.bottom: parent.bottom; anchors.right: parent.right
-                    anchors.rightMargin: metarCard.visible ? metarCard.anchors.rightMargin : 10
-                    anchors.bottomMargin: metarCard.visible ? metarCard.anchors.bottomMargin + metarCard.height + 6 : 30
-                    width: focusRow.implicitWidth + 16; height: 22
-                    color: Qt.alpha(app.theme.background, .9)
-                    visible: win.layout === "FOCUS" && !!app.scan && !!app.scan.scanTime
-                    RowLayout {
-                        id: focusRow
-                        anchors.centerIn: parent
-                        spacing: 6
-                        Rectangle { width: 6; height: 6; radius: 3; color: app.statusLightColor }
-                        LabelText {
-                            text: app.scan && app.scan.scanTime ? app.stamp(app.scan.scanTime) : ""
-                            font.pixelSize: 10; opacity: .75
-                        }
-                        LabelText {
-                            readonly property string tail: app.state && app.state.mode === "archived" ? app.sourceBadge : app.ageText
-                            text: tail ? "· " + tail : ""
-                            visible: text !== ""
-                            font.pixelSize: 10
-                            color: app.state && app.state.mode === "archived" ? app.theme.accent
-                                : app.alert && app.condition !== "loading" ? app.conditionColor : app.theme.foreground
-                            opacity: app.alert || (app.state && app.state.mode === "archived") ? 1 : .75
-                        }
-                    }
-                }
                 // OSM ODbL safe harbour: short credit in a map corner. Full
                 // catalogue (NOAA, Natural Earth, GeoNames, …) stays in README.
                 LabelText {
@@ -943,49 +852,7 @@ Item {
                     visible: !!app.scan
                     font.pixelSize: 10; opacity: .55
                 }
-                Rectangle {
-                    anchors.centerIn: parent
-                    visible: app.loadingNotice && app.awaitingRadar && !(map.error || engine.error)
-                    width: loadText.implicitWidth + 20
-                    height: 28
-                    color: Qt.alpha(app.theme.background, .88)
-                    border.width: 1
-                    border.color: Qt.alpha(app.theme.foreground, .22)
-                    z: 2
-                    LabelText {
-                        id: loadText
-                        anchors.centerIn: parent
-                        text: "Loading..."
-                        color: app.theme.accent
-                    }
-                }
-                Rectangle {
-                    anchors.centerIn: parent; width: parent.width - 24
-                    height: errorNotice.implicitHeight + 16
-                    color: app.theme.background
-                    visible: errorNotice.text.length > 0
-                    LabelText {
-                        id: errorNotice
-                        anchors.centerIn: parent; width: parent.width - 16; wrapMode: Text.Wrap
-                        horizontalAlignment: Text.AlignHCenter
-                        text: map.error || engine.error
-                    }
-                }
-                // Rejections and update copy sit on the map. A layout row
-                // here used to grow the chrome and shift the stage whenever
-                // OPERA loaded, a place was accepted, or the feed rejected.
-                LabelText {
-                    anchors.top: parent.top
-                    anchors.horizontalCenter: parent.horizontalCenter
-                    anchors.topMargin: 10
-                    width: Math.min(implicitWidth, parent.width - 80)
-                    wrapMode: Text.Wrap
-                    horizontalAlignment: Text.AlignHCenter
-                    text: engine.rejection || app.configError || store.persistError || store.updateNotice
-                    color: app.theme.accent
-                    visible: text !== ""
-                    z: 2
-                }
+                LabelText { anchors.centerIn: parent; width: parent.width-24; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter; text: map.error || engine.error; visible: text.length > 0 }
                 Rectangle {
                     id: mapToast
                     visible: app.mapNotice !== ""
@@ -1005,22 +872,15 @@ Item {
                     }
                 }
             }
-            // legend — colors for the map above. Height is pinned so a
-            // polar↔OPERA scan replace (Repeater rebuild, or no frame over
-            // the ocean) cannot grow or shrink the map stage.
+            // legend — colors for the map above
             ColumnLayout {
                 id: legend
                 Layout.fillWidth: true
-                visible: win.layout === "FULL"
-                Layout.preferredHeight: 22
-                Layout.minimumHeight: 22
-                Layout.maximumHeight: 22
                 spacing: 4
-                opacity: app.state && app.bands > 0 ? 1 : 0
+                visible: !!app.scan
                 Item {
                     Layout.fillWidth: true
-                    implicitHeight: 22
-                    height: 22
+                    implicitHeight: legendRow.implicitHeight
                     RowLayout {
                         id: legendRow
                         anchors.fill: parent; spacing: 0
@@ -1066,16 +926,9 @@ Item {
             }
             // Timestamp and frame index above the ticks; transport alongside.
             RowLayout {
-                id: playbackRow
                 Layout.fillWidth: true
-                visible: win.layout !== "FOCUS"
-                // Empty timestamps and the first tick reserve the same space.
-                Layout.minimumHeight: 32
-                Layout.preferredHeight: 32
-                Layout.maximumHeight: 32
                 spacing: 12
-                opacity: app.state ? 1 : 0
-                enabled: !!app.state
+                visible: !!app.scan
                 RowLayout {
                     id: transport
                     Layout.alignment: Qt.AlignBottom
@@ -1091,25 +944,23 @@ Item {
                     spacing: 4
                     RowLayout {
                         Layout.fillWidth: true
-                        Layout.preferredHeight: 14
-                        Layout.minimumHeight: 14
-                        Layout.maximumHeight: 14
                         spacing: 8
                         LabelText {
                             id: stripStamp
                             Layout.fillWidth: true
-                            text: app.scan && app.scan.scanTime ? app.stamp(app.scan.scanTime) : ""
+                            visible: !!app.scan && !!app.scan.scanTime
+                            text: app.scan ? app.stamp(app.scan.scanTime) : ""
                             font.pixelSize: 10
-                            opacity: text !== "" ? .65 : 0
+                            opacity: .65
                             horizontalAlignment: Text.AlignLeft
                             elide: Text.ElideRight
                         }
                         LabelText {
-                            visible: !win.compact
+                            visible: !win.compact && app.frameIndex >= 0
                             horizontalAlignment: Text.AlignRight
-                            text: app.frameIndex >= 0 ? ((app.frameIndex + 1) + " / " + app.frames.length) : ""
+                            text: (app.frameIndex + 1) + " / " + app.frames.length
                             font.pixelSize: 10
-                            opacity: text !== "" ? .65 : 0
+                            opacity: .65
                         }
                     }
                     Item {
@@ -1156,6 +1007,59 @@ Item {
                     }
                 }
             }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 5
+                // MOCK: the bar is hidden. Radar moved to the header, the
+                // place to the map, treatment and zoom to the keys and wheel.
+                visible: false
+                Chip {
+                    glyph: "locate"
+                    label: app.placeLabel
+                    on: false
+                    onOpened: locationPicker.show("")
+                    onToggled: app.run("locate")
+                }
+                Chip {
+                    glyph: "lock"
+                    label: app.siteId || "—"
+                    tag: app.locked ? "LOCKED" : "FOLLOWING"
+                    on: app.locked
+                    tagAccent: app.locked
+                    enabled: !!app.state
+                    onToggled: app.toggleLock()
+                    onOpened: locationPicker.show("", "sites")
+                }
+                Item { width: 6 }
+                Item { Layout.fillWidth: true }
+                // The treatment chip (DESIGN.md, treatment control): one
+                // low-emphasis control naming the treatment; click opens the
+                // three in the picker's row style above it, 1 2 3 choose.
+                Button {
+                    id: treatmentChip
+                    implicitHeight: 30
+                    implicitWidth: contentItem.implicitWidth + 18
+                    padding: 0
+                    opacity: treatmentMenu.opened || hovered || activeFocus ? 1 : .7
+                    onClicked: treatmentMenu.opened ? treatmentMenu.close() : treatmentMenu.show()
+                    contentItem: RowLayout {
+                        spacing: 6
+                        Item { Layout.fillWidth: true }
+                        LabelText { text: app.treatment }
+                        Glyph { glyph: "chevron"; implicitWidth: 12 }
+                        Item { Layout.fillWidth: true }
+                    }
+                    background: Rectangle {
+                        color: treatmentMenu.opened || treatmentChip.hovered || treatmentChip.activeFocus ? Qt.alpha(app.theme.accent, .18) : "transparent"
+                        border.width: 1
+                        border.color: treatmentMenu.opened || treatmentChip.activeFocus ? app.theme.accent : Qt.alpha(app.theme.foreground, .22)
+                    }
+                }
+                Rectangle { width: 1; height: 18; color: Qt.alpha(app.theme.foreground, .22); Layout.leftMargin: 4; Layout.rightMargin: 4; visible: !win.compact }
+                Control { text: "−"; visible: !win.compact; onClicked: map.zoom(Math.min(map.span,map.maxSpan)*1.25) }
+                Control { text: "+"; visible: !win.compact; onClicked: map.zoom(Math.min(map.span,map.maxSpan)/1.25) }
+            }
           }
           LocationPicker {
             id: locationPicker
@@ -1165,8 +1069,6 @@ Item {
             theme: app.theme
             engine: engine
             sites: engine.sites
-            sources: engine.sources
-            selectedSourceId: engine.source ? engine.source.id : ""
             closeOnScrim: !app.store.needsLocation
             centerLat: map.centerLat
             centerLon: map.centerLon
@@ -1176,7 +1078,7 @@ Item {
           }
           // The treatment menu over the surface (not a Popup, which the
           // window overlay would draw outside the captured surface): a card
-          // in the map's bottom-right corner in the picker's row style, the
+          // above the chip's right edge in the picker's row style, the
           // current and the hovered row in accent, each row's key at the
           // right. A click outside, Escape, a treatment key, or a choice
           // closes it; Up, Down, and Return choose from the keyboard.
@@ -1201,7 +1103,7 @@ Item {
             MouseArea { anchors.fill: parent; onClicked: treatmentMenu.close() }
             Rectangle {
                 id: treatmentCard
-                readonly property point anchor: treatmentMenu.opened ? mapFrame.mapToItem(treatmentMenu, mapFrame.width - 8, mapFrame.height - 8) : Qt.point(0, 0)
+                readonly property point anchor: treatmentMenu.opened ? treatmentChip.mapToItem(treatmentMenu, treatmentChip.width, 0) : Qt.point(0, 0)
                 x: Math.round(anchor.x - width)
                 y: Math.round(anchor.y - height - 6)
                 width: 168

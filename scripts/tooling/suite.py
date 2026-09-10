@@ -14,9 +14,11 @@ import time
 from runtime import ROOT, Process, binary, run, wait_until
 
 UI = ('engine-ui', 'radar-handoff', 'map-sites', 'map-network', 'location', 'picker', 'keys',
-      'ip-location', 'theme', 'map-tiles', 'popover', 'metar-handoff', 'texture-guard', 'reconnect')
+      'gps', 'ip-location', 'theme', 'map-tiles', 'popover', 'metar-handoff', 'texture-guard',
+      'reconnect')
 INSTALLER = ('bind', 'launcher', 'pin')
-NO_DAEMON = {'bind', 'launcher', 'pin', 'theme', 'map-tiles', 'ip-location', 'metar-handoff', 'texture-guard'}
+NO_DAEMON = {'bind', 'launcher', 'pin', 'theme', 'map-tiles', 'ip-location', 'metar-handoff',
+             'texture-guard', 'gps'}
 
 
 @contextlib.contextmanager
