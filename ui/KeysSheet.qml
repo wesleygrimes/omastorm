@@ -110,8 +110,9 @@ Item {
                 font.pixelSize: 10
                 opacity: .55
                 lineHeight: 1.4
-                text: "The window is a normal Hyprland window: a global key to open it lives in bindings.lua, separate from these. "
-                    + (sheet.closeKeys ? sheet.closeKeys + " with nothing open closes the window." : "No key closes the window.")
+                text: sheet.closeKeys
+                    ? "With nothing else open, " + sheet.closeKeys + " closes the window."
+                    : "No key closes the window."
             }
         }
     }

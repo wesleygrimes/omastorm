@@ -31,13 +31,14 @@ the ids and comments in `ui/RadarWindow.qml`.
 | Name | What it is |
 |---|---|
 | **brand row** | Mark, OMASTORM, status light, LIVE / ARCHIVED |
-| **site row** | Station title, radar lock, outside coverage |
+| **site row** | Station title, radar lock (yellow when the camera is outside that radar's rings) |
 | **product stack** | Right column: product line + meta line |
 | **product line** | Product name / tilt and NOAA NEXRAD |
 | **meta line** | Age, right-aligned under the product line |
 | **map stage** | Radar map frame |
 | **follow chip** | Crosshair on the map (place follow) |
 | **help chip** | Keys / `?` on the map |
+| **scale bar** | Ground distance under the map, left; locale picks km or mi; label updates with zoom |
 | **legend** | dBZ scale directly under the map |
 | **transport** | Playback buttons |
 | **tick strip** | Frame ticks on the timeline |
@@ -53,7 +54,8 @@ line is the age only, right-aligned under that row.
 
 **Time.** Age on the meta line is how stale the frame on screen is. The
 strip stamp is the absolute observation time (date, time, zone). Locale
-picks date order and 12/24h only; dates stay numeric. The tick strip is
+picks date order and 12/24h only; dates stay numeric. Locale also picks
+kilometres or miles for the scale bar and picker distances. The tick strip is
 position in the loop, not a second clock. It has 60 positions.
 An extra live sweep beyond 60 completed scans adds a selectable tick and is
 included in the frame count. Available frames fill from the left;
@@ -113,8 +115,9 @@ initial view; subsequent weather changes do not overwrite a remembered view.
 
 Explicit coordinates are honored on every launch and do not imply a radar
 lock. A configured center far from a locked radar is valid: preserve both,
-show the station and lock clearly, and offer "Use nearest radar" and "Go to
-selected radar" when that radar's coverage is outside the view. UI navigation
+show the station and lock clearly (yellow lock when coverage is outside the
+view), and offer "Use nearest radar" and "Go to selected radar" when that
+radar's coverage is outside the view. UI navigation
 and unlocking can change the active session; explicit config applies again
 on launch.
 

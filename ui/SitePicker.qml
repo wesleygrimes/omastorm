@@ -32,7 +32,7 @@ Item {
         verticalAlignment: Text.AlignVCenter
     }
     signal chosen(var site)
-    readonly property var ranked: open ? Sites.rank(sites, query, centerLat, centerLon, limit) : ({ rows: [], total: 0 })
+    readonly property var ranked: open ? Sites.rank(sites, query, centerLat, centerLon, limit, Qt.locale().measurementSystem === Locale.MetricSystem) : ({ rows: [], total: 0 })
     readonly property var rows: ranked.rows
     visible: open
     function show(text) {

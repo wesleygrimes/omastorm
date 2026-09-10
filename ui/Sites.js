@@ -33,7 +33,12 @@ function bearingDeg(lat1, lon1, lat2, lon2) {
     return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
 }
 function compass(deg) { return ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(deg / 45) % 8]; }
-function where(km, deg) { return km < 1 ? "< 1 km" : Math.round(km) + " km " + compass(deg); }
+// `metric` from the caller's locale (Locale.MetricSystem); kilometres otherwise miles.
+function where(km, deg, metric) {
+    if (metric) return km < 1 ? "< 1 km" : Math.round(km) + " km " + compass(deg);
+    var mi = km / 1.609344;
+    return mi < 1 ? "< 1 mi" : Math.round(mi) + " mi " + compass(deg);
+}
 
 function range(from, count) { var out = []; for (var i = 0; i < count; i++) out.push(from + i); return out; }
 // Index where `needle` starts a word of `text` (the start, or after a space or comma), or -1.
@@ -83,13 +88,13 @@ function match(site, query) {
 // first within a tier, cut to `limit` rows: { rows, total }. Each row has
 // the station, its distance and bearing from the centre, and the matched
 // letter positions for the two columns.
-function rank(sites, query, lat, lon, limit) {
+function rank(sites, query, lat, lon, limit, metric) {
     var all = [];
     for (var site of sites) {
         var m = match(site, query);
         if (!m) continue;
         var km = distanceKm(lat, lon, site.lat, site.lon);
-        all.push({ site: site, tier: m.tier, km: km, where: where(km, bearingDeg(lat, lon, site.lat, site.lon)),
+        all.push({ site: site, tier: m.tier, km: km, where: where(km, bearingDeg(lat, lon, site.lat, site.lon), metric),
                    idHits: m.idHits, placeHits: m.placeHits, place: place(site) });
     }
     all.sort((a, b) => a.tier - b.tier || a.km - b.km || (a.site.id < b.site.id ? -1 : 1));

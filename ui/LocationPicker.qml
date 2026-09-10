@@ -43,7 +43,7 @@ Item {
             var where = bits.join(", ");
             if (!where) {
                 var km = Location.validPair(centerLat, centerLon) ? Location.distanceKm(centerLat, centerLon, p.lat, p.lon) : 0;
-                where = Location.validPair(centerLat, centerLon) ? Sites.where(km, Sites.bearingDeg(centerLat, centerLon, p.lat, p.lon)) : (p.class || "").toUpperCase();
+                where = Location.validPair(centerLat, centerLon) ? Sites.where(km, Sites.bearingDeg(centerLat, centerLon, p.lat, p.lon), Qt.locale().measurementSystem === Locale.MetricSystem) : (p.class || "").toUpperCase();
             }
             out.push({ name: p.name, lat: p.lat, lon: p.lon, kind: p.class || "place",
                        where: where, label: p.region ? p.name + ", " + p.region : p.name });

@@ -378,45 +378,32 @@ Item {
                 border.color: button.selected || button.activeFocus ? app.theme.accent : Qt.alpha(app.theme.foreground, .22)
             }
         }
-        // Glyphs on the canvas's 16 px grid (DESIGN.md): transport,
-        // lock, and follow, drawn rather than typed so the monospace font's
-        // coverage does not decide their shape.
-        component Glyph: Canvas {
-            id: glyphCanvas
+        // Chrome icons as Nerd Font glyphs (same Material Design Icons set
+        // Omarchy's shell uses for media / panels). The theme's monospace
+        // alias resolves to JetBrainsMono Nerd Font on Omarchy.
+        component Glyph: Item {
+            id: glyphRoot
             property string glyph: "play"
             property color ink: app.theme.foreground
             property real fade: 1
             implicitWidth: 16
             implicitHeight: 16
-            onInkChanged: requestPaint()
-            onFadeChanged: requestPaint()
-            onGlyphChanged: requestPaint()
-            onWidthChanged: requestPaint()
-            onHeightChanged: requestPaint()
-            onPaint: {
-                    var ctx = getContext("2d");
-                    ctx.reset();
-                    ctx.clearRect(0, 0, width, height);
-                    ctx.translate(Math.round((width - 16) / 2), Math.round((height - 16) / 2));
-                    ctx.fillStyle = ink; ctx.strokeStyle = ink; ctx.lineWidth = 1.5; ctx.globalAlpha = fade;
-                    function tri(x1, y1, x2, y2, x3, y3) { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.lineTo(x3, y3); ctx.closePath(); ctx.fill(); }
-                    function bar(x) { ctx.beginPath(); ctx.moveTo(x, 3); ctx.lineTo(x, 13); ctx.stroke(); }
-                    function seg(x1, y1, x2, y2) { ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke(); }
-                    switch (glyphCanvas.glyph) {
-                    case "play": tri(4, 2.5, 4, 13.5, 12.5, 8); break;
-                    case "pause": ctx.fillRect(4, 3, 3, 10); ctx.fillRect(9, 3, 3, 10); break;
-                    case "back": bar(4); tri(13, 3.5, 13, 12.5, 6, 8); break;
-                    case "fwd": bar(12); tri(3, 3.5, 3, 12.5, 10, 8); break;
-                    case "first": bar(3); tri(8, 3.5, 8, 12.5, 4.5, 8); tri(14, 3.5, 14, 12.5, 10.5, 8); break;
-                    case "last": bar(13); tri(2, 3.5, 2, 12.5, 5.5, 8); tri(8, 3.5, 8, 12.5, 11.5, 8); break;
-                    case "lock": ctx.strokeRect(3.5, 7.5, 9, 6); ctx.beginPath(); ctx.moveTo(5.5, 7.5); ctx.lineTo(5.5, 5); ctx.arc(8, 5, 2.5, Math.PI, 0); ctx.lineTo(10.5, 7.5); ctx.stroke(); break;
-                    case "follow": ctx.beginPath(); ctx.arc(8, 8, 4, 0, 2 * Math.PI); ctx.stroke(); seg(8, 1, 8, 4); seg(8, 12, 8, 15); seg(1, 8, 4, 8); seg(12, 8, 15, 8); break;
-                    case "search": ctx.beginPath(); ctx.arc(6.5, 6.5, 4.5, 0, 2 * Math.PI); ctx.stroke(); seg(10, 10, 14, 14); break;
-                    case "keys": ctx.strokeRect(1.5, 4.5, 13, 8); seg(4, 7, 5, 7); seg(7, 7, 8, 7); seg(10, 7, 11, 7); seg(4.5, 10, 11.5, 10); break;
-                    case "chevron": seg(5, 6.5, 8, 9.5); seg(8, 9.5, 11, 6.5); break;
-                    case "unlock": ctx.strokeRect(3.5, 7.5, 9, 6); ctx.beginPath(); ctx.moveTo(10.5, 7.5); ctx.lineTo(10.5, 4.5); ctx.arc(13, 4.5, 2.5, Math.PI, 0); ctx.lineTo(15.5, 6); ctx.stroke(); break;
-                    case "radar": ctx.beginPath(); ctx.arc(4, 12, 1.5, 0, 2 * Math.PI); ctx.fill(); ctx.beginPath(); ctx.arc(4, 12, 5.5, -Math.PI / 2, 0); ctx.stroke(); ctx.beginPath(); ctx.arc(4, 12, 9.5, -Math.PI / 2, 0); ctx.stroke(); break;
-                    }
+            // Codepoints match Omarchy media (play/pause/prev/next) and common
+            // MDI lock / keyboard / crosshair / search / chevron glyphs.
+            readonly property var icons: ({
+                "play": "󰐊", "pause": "󰏤", "back": "󰒮", "fwd": "󰒭",
+                "first": "󰒫", "last": "󰒬", "lock": "󰌾", "unlock": "󰌿",
+                "keys": "󰌌", "follow": "󰆣", "search": "󰍉", "chevron": "󰅀",
+                "radar": "󰐷"
+            })
+            Text {
+                anchors.centerIn: parent
+                text: glyphRoot.icons[glyphRoot.glyph] || ""
+                color: glyphRoot.ink
+                opacity: glyphRoot.fade
+                font.family: app.theme.font
+                font.pixelSize: 14
+                renderType: Text.NativeRendering
             }
         }
         // A 30 px control showing one glyph. Never takes keyboard focus: the
@@ -512,13 +499,14 @@ Item {
             spacing: 10
             // Chrome names (use these when tweaking):
             //   brand row     — mark, OMASTORM, status light, LIVE/ARCHIVED
-            //   site row      — station title, radar lock, outside coverage
+            //   site row      — station title, radar lock (yellow when outside coverage)
             //   product stack — product line + meta line (right of site row)
             //   product line  — REFLECTIVITY / tilt + NOAA NEXRAD
             //   meta line     — age, right-aligned under the product line
             //   map stage     — radar map frame
             //   follow chip   — crosshair (place follow) on the map
             //   help chip     — ? keys on the map
+            //   scale bar     — ground distance, bottom-left of the map
             //   legend        — dBZ scale under the map
             //   transport     — playback buttons
             //   tick strip    — frame ticks
@@ -527,8 +515,8 @@ Item {
             RowLayout {
                 id: brandRow
                 Layout.fillWidth: true
-                RadarMark { ink: app.theme.accent; Layout.rightMargin: 6 }
-                LabelText { text: "OMASTORM"; font.bold: true; font.letterSpacing: 2; font.pixelSize: app.theme.baseSize + 2 }
+                RadarMark { ink: app.theme.accent; size: 20; Layout.rightMargin: 8 }
+                LabelText { text: "OMASTORM"; font.bold: true; font.letterSpacing: 2.5; font.pixelSize: app.theme.baseSize + 5 }
                 Item { Layout.fillWidth: true }
                 // LIVE / ARCHIVED as text; the light carries feed health.
                 RowLayout {
@@ -575,19 +563,23 @@ Item {
                     background: Item {}
                 }
                 // Pins the radar on screen; chip outline so it reads as a toggle.
+                // Yellow (same stale cue as the status light) when the camera
+                // sits outside that radar's rings — no banner.
                 Rectangle {
                     id: lockButton
                     implicitWidth: 30; implicitHeight: 30
                     radius: 2
                     Layout.alignment: Qt.AlignTop
                     opacity: !!app.state ? 1 : .35
-                    color: lockArea.containsMouse && !!app.state ? Qt.alpha(app.theme.accent, .18) : "transparent"
+                    readonly property color lockColor: !app.locked ? app.theme.foreground
+                        : app.outsideCoverage ? app.theme.yellow : app.theme.accent
+                    color: lockArea.containsMouse && !!app.state ? Qt.alpha(lockColor, .18) : "transparent"
                     border.width: 1
-                    border.color: app.locked ? app.theme.accent : Qt.alpha(app.theme.foreground, .22)
+                    border.color: app.locked ? lockColor : Qt.alpha(app.theme.foreground, .22)
                     Glyph {
                         anchors.centerIn: parent
                         glyph: app.locked ? "lock" : "unlock"
-                        ink: app.locked ? app.theme.accent : app.theme.foreground
+                        ink: app.locked ? lockButton.lockColor : app.theme.foreground
                         fade: app.locked ? 1 : .45
                     }
                     MouseArea {
@@ -597,14 +589,6 @@ Item {
                         enabled: !!app.state
                         onClicked: app.toggleLock()
                     }
-                }
-                LabelText {
-                    text: "OUTSIDE COVERAGE"
-                    visible: !win.compact && app.locked && app.outsideCoverage
-                    color: app.theme.accent
-                    font.pixelSize: 10; font.letterSpacing: 1
-                    Layout.alignment: Qt.AlignTop
-                    Layout.topMargin: 8
                 }
                 Item { Layout.fillWidth: true }
                 // product stack: compact product line; age right-aligned under it.
@@ -724,10 +708,87 @@ Item {
                     }
                     MouseArea { id: helpArea; anchors.fill: parent; hoverEnabled: true; onClicked: app.run("help") }
                 }
+                // Scale bar (DESIGN.md): fixed-length tick; the label is the
+                // round distance that length currently spans. Locale picks
+                // kilometres or miles (same measurementSystem as the OS).
                 Rectangle {
+                    id: scaleBar
                     anchors.bottom: parent.bottom; anchors.left: parent.left; anchors.margins: 10
-                    width: scaleLabel.implicitWidth+12; height: win.compact ? 32 : 24; color: app.theme.background
-                    LabelText { id: scaleLabel; anchors.centerIn: parent; text: win.compact ? "RINGS 50 km\nDASHED ~460 km" : "RINGS 50 km · DASHED: NOMINAL 460 km"; font.pixelSize: 10; opacity: .7 }
+                    visible: !!app.scan && map.pixelsPerKm > 0
+                    readonly property bool metric: Qt.locale().measurementSystem === Locale.MetricSystem
+                    readonly property real kmPerMile: 1.609344
+                    readonly property var steps: metric
+                        ? [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000, 2000]
+                        : [0.5, 1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500, 1000]
+                    readonly property real barPx: 72
+                    property real nice: metric ? 25 : 10
+                    property bool wasMetric: metric
+                    width: barPx + 16
+                    height: 28
+                    color: Qt.alpha(app.theme.background, .9)
+                    function nearest(raw) {
+                        var best = steps[0], err = Math.abs(steps[0] - raw);
+                        for (var i = 1; i < steps.length; i++) {
+                            var e = Math.abs(steps[i] - raw);
+                            if (e < err) { err = e; best = steps[i]; }
+                        }
+                        return best;
+                    }
+                    function stabilize() {
+                        if (map.pixelsPerKm <= 0) return;
+                        if (wasMetric !== metric) {
+                            wasMetric = metric;
+                            nice = metric ? 25 : 10;
+                        }
+                        var exactKm = barPx / map.pixelsPerKm;
+                        var exact = metric ? exactKm : exactKm / kmPerMile;
+                        // Stay on the current step while exact is closer to it
+                        // than to its neighbours (wide band around each step).
+                        if (Math.abs(exact - nice) <= nice * 0.35) return;
+                        nice = nearest(exact);
+                    }
+                    Connections {
+                        target: map
+                        function onPixelsPerKmChanged() { scaleBar.stabilize() }
+                        function onSpanChanged() { scaleBar.stabilize() }
+                    }
+                    onMetricChanged: stabilize()
+                    Component.onCompleted: stabilize()
+                    onVisibleChanged: if (visible) stabilize()
+                    Item {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: scaleBar.barPx
+                        height: 16
+                        LabelText {
+                            anchors.horizontalCenter: parent.horizontalCenter
+                            anchors.top: parent.top
+                            text: {
+                                var u = scaleBar.metric ? "km" : "mi";
+                                var n = scaleBar.nice;
+                                if (scaleBar.metric && n >= 1000) return (n / 1000) + "k " + u;
+                                if (!scaleBar.metric && n < 1) return n + " " + u;
+                                return n + " " + u;
+                            }
+                            font.pixelSize: 10
+                            opacity: .75
+                        }
+                        Rectangle {
+                            anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom
+                            height: 1
+                            color: Qt.alpha(app.theme.foreground, .65)
+                        }
+                        Rectangle {
+                            anchors.left: parent.left; anchors.bottom: parent.bottom
+                            width: 1; height: 5
+                            color: Qt.alpha(app.theme.foreground, .65)
+                        }
+                        Rectangle {
+                            anchors.right: parent.right; anchors.bottom: parent.bottom
+                            width: 1; height: 5
+                            color: Qt.alpha(app.theme.foreground, .65)
+                        }
+                    }
                 }
                 // OSM ODbL safe harbour: short credit in a map corner. Full
                 // catalogue (NOAA, Natural Earth, GeoNames, …) stays in README.
@@ -891,7 +952,7 @@ Item {
                 Chip {
                     glyph: "lock"
                     label: app.siteId || "—"
-                    tag: app.locked && app.outsideCoverage ? "LOCKED · OUTSIDE COVERAGE" : app.locked ? "LOCKED" : "FOLLOWING"
+                    tag: app.locked ? "LOCKED" : "FOLLOWING"
                     on: app.locked
                     tagAccent: app.locked
                     enabled: !!app.state

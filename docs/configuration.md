@@ -86,8 +86,8 @@ A Jacksonville map center with `locked_radar = "KFCX"` is valid. Honor both
 settings even when the sweep is outside the view. Show the selected station
 and lock, with "Use nearest radar" and "Go to selected radar" available when
 coverage is outside the view. Never relocate the camera or discard the lock
-silently. The chrome says `LOCKED · OUTSIDE COVERAGE` when the camera sits
-outside that radar's rings.
+silently. The lock control uses the theme yellow when the camera sits outside
+that radar's rings.
 
 For agent-assisted installation, write coordinate overrides only when the
 user requests a fixed launch location. Ordinary installation leaves them
