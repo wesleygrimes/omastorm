@@ -8,6 +8,9 @@ trap 'rm -rf "$scratch"' EXIT
 for task in engine-bump engine-tag engine-verify engine-pin build-release release; do
   rg -q "\[tasks\.$task\]" mise.toml || fail "mise.toml is missing $task"
 done
+if rg -n 'git fetch\b.*\bmain\b' scripts/release-engine.sh scripts/tag-engine-release.sh scripts/require-origin-main.sh; then
+  fail 'release tooling must not fetch the moving main ref'
+fi
 toml=$(sha256sum engine/Cargo.toml Cargo.lock)
 current=$(awk -F'"' '/^version = /{print $2; exit}' engine/Cargo.toml)
 if bash scripts/bump-engine-version.sh not-a-version > "$scratch/bump.err" 2>&1; then
@@ -82,7 +85,7 @@ rg -q 'more than the engine version' "$scratch/bump-bad.log" \
 [[ $(sha256sum "$scratch/bump-bad/engine/Cargo.toml" "$scratch/bump-bad/Cargo.lock") == "$before_bad" ]] \
   || fail 'Rejected bump left Cargo.toml or Cargo.lock dirty'
 mkdir -p "$scratch"/{scripts,engine,target/dist,bin,published}
-cp scripts/{engine-pin,package-engine-release,pin-engine-release,tag-engine-release}.sh "$scratch/scripts/"
+cp scripts/{engine-pin,package-engine-release,pin-engine-release,require-origin-main,tag-engine-release}.sh "$scratch/scripts/"
 cp engine/{Cargo.toml,release.pin} "$scratch/engine/"
 git -C "$scratch" init -q
 git -C "$scratch" -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false commit -qm fixture --allow-empty
@@ -92,6 +95,52 @@ if bash "$scratch/scripts/tag-engine-release.sh" > "$scratch/tag.err" 2>&1; then
 fi
 rg -q 'engine tags are pushed from main' "$scratch/tag.err" \
   || fail "unclear tag refusal: $(cat "$scratch/tag.err")"
+git -C "$scratch" branch -m topic main
+printf 'dirty\n' > "$scratch/dirty-tree"
+if bash "$scratch/scripts/tag-engine-release.sh" > "$scratch/tag.err" 2>&1; then
+  fail 'tag-engine-release.sh tagged a dirty tree'
+fi
+rg -q 'working tree is not clean' "$scratch/tag.err" \
+  || fail "unclear dirty-tree refusal: $(cat "$scratch/tag.err")"
+rm -f "$scratch/dirty-tree"
+git -C "$scratch" branch -m main topic
+fixture_git() {
+  git -c user.name=Fixture -c user.email=fixture@example.invalid -c commit.gpgsign=false "$@"
+}
+origin=$scratch/origin.git
+work=$scratch/guard
+mkdir -p "$work/scripts"
+cp scripts/require-origin-main.sh "$work/scripts/"
+git -C "$work" init -q
+fixture_git -C "$work" add scripts/require-origin-main.sh
+fixture_git -C "$work" commit -qm fixture
+git -C "$work" branch -m main
+git init --bare -q "$origin"
+git -C "$work" remote add origin "$origin"
+git -C "$work" push -q origin main
+git -C "$origin" symbolic-ref HEAD refs/heads/main
+if ! bash "$work/scripts/require-origin-main.sh" tag > "$scratch/guard.ok" 2>&1; then
+  fail "require-origin-main.sh refused a HEAD that matches origin/main: $(cat "$scratch/guard.ok")"
+fi
+printf 'ahead\n' > "$work/ahead"
+fixture_git -C "$work" add ahead
+fixture_git -C "$work" commit -qm ahead
+if bash "$work/scripts/require-origin-main.sh" tag > "$scratch/guard.ahead" 2>&1; then
+  fail 'require-origin-main.sh accepted a commit origin does not have'
+fi
+rg -q 'origin does not have|HEAD is not the commit at origin/main' "$scratch/guard.ahead" \
+  || fail "unclear ahead refusal: $(cat "$scratch/guard.ahead")"
+git -C "$work" reset -q --hard origin/main
+git clone -q "$origin" "$scratch/origin-push"
+printf 'remote-ahead\n' > "$scratch/origin-push/remote-ahead"
+fixture_git -C "$scratch/origin-push" add remote-ahead
+fixture_git -C "$scratch/origin-push" commit -qm remote-ahead
+git -C "$scratch/origin-push" push -q origin main
+if bash "$work/scripts/require-origin-main.sh" tag > "$scratch/guard.behind" 2>&1; then
+  fail 'require-origin-main.sh accepted a HEAD behind origin/main'
+fi
+rg -q 'HEAD is not the commit at origin/main' "$scratch/guard.behind" \
+  || fail "unclear behind refusal: $(cat "$scratch/guard.behind")"
 source_commit=$(git -C "$scratch" rev-parse HEAD)
 version=$(awk -F'"' '/^version = /{print $2; exit}' engine/Cargo.toml)
 # Header fixtures exercise architecture checks; these files are never executed.

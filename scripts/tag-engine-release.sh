@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Push engine-<version> from main so CI drafts the GitHub Release.
 # Run as `mise engine-tag`. Does not publish, verify assets, or write the pin.
+# Refuses unless on main, clean, and HEAD is the full commit currently at
+# origin's main.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -11,9 +13,7 @@ command -v git > /dev/null 2>&1 || die 'Need git on PATH; run this as mise engin
 branch=$(git rev-parse --abbrev-ref HEAD)
 [[ $branch == main ]] || die "On $branch; engine tags are pushed from main."
 [[ -z $(git status --porcelain) ]] || die 'The working tree is not clean.'
-git fetch -q origin main
-[[ $(git rev-parse HEAD) == $(git rev-parse origin/main) ]] \
-  || die 'main is not even with origin/main; push or pull first so the tag names a commit everyone has.'
+bash scripts/require-origin-main.sh tag
 
 command -v gh > /dev/null 2>&1 || die 'Need gh on PATH; run this as mise engine-tag.'
 gh auth status > /dev/null 2>&1 || die 'gh is not logged in (gh auth login).'

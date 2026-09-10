@@ -71,9 +71,10 @@ the build machine's newer Arch glibc.
    It writes `engine/Cargo.toml` and `Cargo.lock`. Run `mise check`, commit
    both files, and push to `main`.
 2. Wait for Engine builds CI on that commit to finish on both architectures.
-3. From clean `main`, even with `origin/main`, run `mise engine-tag`. It
-   pushes an annotated `engine-<version>` tag. CI drafts the GitHub Release
-   with both binaries, build metadata, `SHA256SUMS`, and the candidate pin.
+3. From clean `main` whose HEAD is origin's current `main` commit, run
+   `mise engine-tag`. It pushes an annotated `engine-<version>` tag. CI
+   drafts the GitHub Release with both binaries, build metadata,
+   `SHA256SUMS`, and the candidate pin.
 4. Review the draft and publish it. Never pin a draft or add assets after
    publishing.
 5. Download the published `release.pin` or the `engine-release` workflow
@@ -98,8 +99,8 @@ is created.
 
 `mise release` remains the one-shot local path
 ([scripts/release-engine.sh](../scripts/release-engine.sh)). From clean
-`main`, even with `origin/main`, and with GitHub CLI authentication and
-release access:
+`main` whose HEAD is origin's current `main` commit, and with GitHub CLI
+authentication and release access:
 
 1. After the version bump is on `main`, run `mise release --dry-run`. It
    builds the native stripped candidate, verifies both binaries' source

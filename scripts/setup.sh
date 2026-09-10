@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Fresh-checkout setup, run through `mise setup` so the mise tools are on
-# PATH. Checks the desktop packages mise does not manage, downloads the
-# fixture and geography, fetches crates, and builds the debug engine. Launch
-# never calls this; it is the one step that touches the network on purpose.
+# PATH. Checks the desktop packages mise does not manage, extracts verified
+# fixtures, fetches crates, and builds the debug engine. Launch never calls
+# this. Fixture bytes come from data/fixtures/; cargo fetch is the remaining
+# network step.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
