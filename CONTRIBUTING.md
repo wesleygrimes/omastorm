@@ -27,7 +27,7 @@ rules. [docs/protocol.md](docs/protocol.md) defines the engine/client contract;
 [engine/README.md](engine/README.md) maps the backend.
 
 Use an Omarchy desktop with Quickshell and OpenGL, `qt6-shadertools`, and
-`socat`, and `unzip` for fixture setup. Install [mise](https://mise.jdx.dev), then from a checkout:
+`socat`. `unzip` is only needed to refresh vendored fixtures. Install [mise](https://mise.jdx.dev), then from a checkout:
 
 ```sh
 mise install
@@ -35,7 +35,7 @@ mise setup
 mise start
 ```
 
-Setup checks desktop dependencies, downloads verified fixtures, and builds the
+Setup checks desktop dependencies, extracts verified fixtures, and builds the
 engine. Rust comes from mise; use `mise exec -- cargo …` for Cargo commands.
 [mise.toml](mise.toml) is the task and toolchain reference (`mise tasks` lists
 jobs). For an offline archived scan:

@@ -2,7 +2,7 @@
 .tools/
 target/
 
-# Fixture and geography downloads (scripts/setup-fixture.sh)
+# Fixture working copies (scripts/setup-fixture.sh extracts data/fixtures here)
 data/raw/
 
 # Generated captures, check output, and README media

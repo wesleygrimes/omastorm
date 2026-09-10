@@ -1,24 +1,34 @@
 #!/usr/bin/env bash
-# Fixture sources (development only). Downloads the archived Level II volume
-# that the engine embeds at build time, the Natural Earth files that
-# `engine/build.rs` converts into the embedded geography (DESIGN.md, basemap
-# tiles: coastline, lakes, country and state lines at 1:10m and 1:50m, plus
-# populated places for map labels), and GeoNames cities5000 for the location
-# picker, then verifies data/SHA256SUMS. data/raw is ignored, so a fresh
-# checkout runs this once before `cargo build`. Launch never calls it.
+# Fixture sources (development only). Copies the archived Level II volume and
+# extracts the Natural Earth files that `engine/build.rs` converts into the
+# embedded geography (DESIGN.md, basemap tiles: coastline, lakes, country and
+# state lines at 1:10m and 1:50m, plus populated places for map labels) and
+# GeoNames cities5000 for the location picker from data/fixtures/, then
+# verifies data/SHA256SUMS. data/raw is ignored, so a fresh checkout runs
+# this once before `cargo build`. Launch never calls it. Live upstream URLs
+# are only for `scripts/refresh-fixtures.sh` (data/README.md).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p data/raw
-curl -fL --retry 2 'https://unidata-nexrad-level2.s3.amazonaws.com/2013/05/20/KTLX/KTLX20130520_201643_V06.gz' -o data/raw/KTLX20130520_201643_V06.gz
-ne='https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson'
-curl -fL --retry 2 "$ne/ne_10m_populated_places_simple.geojson" -o data/raw/places.geojson
-curl -fL --retry 2 'https://download.geonames.org/export/dump/cities5000.zip' -o data/raw/cities5000.zip
-unzip -p data/raw/cities5000.zip cities5000.txt > data/raw/cities5000.txt
-rm -f data/raw/cities5000.zip
-curl -fL --retry 2 'https://download.geonames.org/export/dump/admin1CodesASCII.txt' -o data/raw/admin1CodesASCII.txt
-for scale in 10m 50m; do
-  for theme in coastline lakes admin_0_boundary_lines_land admin_1_states_provinces_lines; do
-    curl -fL --retry 2 "$ne/ne_${scale}_${theme}.geojson" -o "data/raw/ne_${scale}_${theme}.geojson"
-  done
-done
+if sha256sum -c data/SHA256SUMS >/dev/null 2>&1; then
+  echo 'Fixtures already verified.'
+  exit 0
+fi
+[[ -d data/fixtures ]] || {
+  printf 'Missing data/fixtures/ (see data/README.md).\n' >&2
+  exit 1
+}
+while read -r _ path; do
+  [[ -n ${path:-} ]] || continue
+  name=${path#data/raw/}
+  dest=data/raw/$name
+  if [[ -f data/fixtures/$name ]]; then
+    cp -f "data/fixtures/$name" "$dest"
+  elif [[ -f data/fixtures/$name.gz ]]; then
+    gzip -dc "data/fixtures/$name.gz" >"$dest"
+  else
+    printf 'Missing vendored fixture for %s (see data/README.md).\n' "$name" >&2
+    exit 1
+  fi
+done <data/SHA256SUMS
 sha256sum -c data/SHA256SUMS

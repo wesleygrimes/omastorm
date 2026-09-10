@@ -31,23 +31,39 @@ The location picker searches [GeoNames](https://www.geonames.org/)
 `cities5000` (populated places with population ≥ 5000) clipped to that
 same envelope, with admin-1 names from `admin1CodesASCII.txt`.
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Map labels do
-not use this table. The city-list checksum covers the official 2026-09-09
-snapshot (69,700 records). The upstream URL is updated daily; a changed
-download must be reviewed and repinned, never accepted without verification.
+not use this table. The city-list checksum covers the official 2026-09-10
+snapshot (69,705 records).
 
 ## Fetching
 
 The engine embeds the Natural Earth geography and the GeoNames gazetteer at
 build time; the archived
 volume is read at run time by the decoder tests and by a daemon started with
-`OMASTORM_ARCHIVE` (the checks and captures). `data/raw/` is ignored, so a
-fresh checkout runs `bash scripts/setup-fixture.sh` once: it downloads the
-volume, the Natural Earth files, and the GeoNames gazetteer, then verifies
-`data/SHA256SUMS`. A build without those files stops with a message naming
-the script; a shipped daemon embeds nothing archived. The geography URLs
-reference upstream master; if upstream changes, checksum verification stops
-rather than silently changing the fixture. Installing and launching the plugin
-needs none of this; only a checkout build does.
+`OMASTORM_ARCHIVE` (the checks and captures). Compressed copies live in
+`data/fixtures/`; `data/raw/` is ignored. A fresh checkout runs
+`bash scripts/setup-fixture.sh` once: it copies and extracts the vendored
+files, then verifies `data/SHA256SUMS`. Ordinary setup, `mise check`, cargo
+builds, and CI do not download these files. A build without those files stops
+with a message naming the script; a shipped daemon embeds nothing archived.
+Installing and launching the plugin needs none of this; only a checkout
+build does.
+
+## Refreshing
+
+Leave the vendored bytes alone until you mean to take a new snapshot. To
+refresh:
+
+1. `bash scripts/refresh-fixtures.sh` downloads the live NEXRAD, Natural
+   Earth master, and GeoNames URLs, rewrites `data/fixtures/` and
+   `data/SHA256SUMS`, and extracts into `data/raw/`.
+2. Review the checksum diff. Update the dates and GeoNames record count in
+   this file.
+3. Build the engine and run `mise check` against the new geography and
+   gazetteer.
+4. Commit the vendor files, `data/SHA256SUMS`, and this README together.
+
+A changed download must be reviewed and repinned, never accepted without
+verification. `scripts/setup-fixture.sh` never hits those live URLs.
 
 ## Decoder and rendering contract
 
