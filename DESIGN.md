@@ -36,7 +36,7 @@ the ids and comments in `ui/RadarWindow.qml`.
 | **product line** | Product name / tilt and NOAA NEXRAD |
 | **meta line** | Age, right-aligned under the product line |
 | **map stage** | Radar map frame |
-| **follow chip** | Crosshair on the map (place follow) |
+| **follow chip** | Crosshair on the map (place follow); hidden until GPS is wired |
 | **help chip** | Keys / `?` on the map |
 | **scale bar** | Ground distance under the map, left; locale picks km or mi; label updates with zoom |
 | **legend** | dBZ scale directly under the map |

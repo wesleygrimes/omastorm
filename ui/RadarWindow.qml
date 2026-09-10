@@ -504,7 +504,7 @@ Item {
             //   product line  — REFLECTIVITY / tilt + NOAA NEXRAD
             //   meta line     — age, right-aligned under the product line
             //   map stage     — radar map frame
-            //   follow chip   — crosshair (place follow) on the map
+            //   follow chip   — crosshair (place follow); hidden until GPS
             //   help chip     — ? keys on the map
             //   scale bar     — ground distance, bottom-left of the map
             //   legend        — dBZ scale under the map
@@ -674,10 +674,9 @@ Item {
                     onTilesNeeded: (z, x0, y0, x1, y1) => engine.send({type: "tiles_needed", z: z, x0: x0, y0: y0, x1: x1, y1: y1})
                 }
                 Connections { target: engine; function onTileReady(tile) { map.tileReady(tile); } }
-                // MOCK: the crosshair alone, top-left, ahead of N ↑. Filled
-                // while the map follows the current location; a pan turns it
-                // off, a click turns it on and recenters. Radar lock stays
-                // beside the station title — a lock here would read as map pin.
+                // Place-follow (crosshair) stays out of the release until GPS
+                // is wired; keep the mock chip for captures via OMASTORM_MOCK_GPS.
+                // N ↑ is map orientation only — not a control.
                 Rectangle {
                     id: followChip
                     anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10
@@ -685,11 +684,15 @@ Item {
                     readonly property bool on: app.mockGps === "following" || app.mockGps === "home"
                     color: on ? app.theme.accent : followArea.containsMouse ? Qt.alpha(app.theme.accent, .18) : Qt.alpha(app.theme.background, .9)
                     border.width: 1; border.color: on ? app.theme.accent : Qt.alpha(app.theme.foreground, .22)
-                    visible: !!app.state
+                    visible: false
                     Glyph { anchors.centerIn: parent; glyph: "follow"; ink: followChip.on ? app.theme.background : app.theme.foreground }
                     MouseArea { id: followArea; anchors.fill: parent; hoverEnabled: true }
                 }
-                LabelText { anchors.verticalCenter: followChip.verticalCenter; anchors.left: followChip.right; anchors.leftMargin: 10; text: "N ↑"; opacity: .75 }
+                LabelText {
+                    anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10
+                    text: "N ↑"; opacity: .75
+                    visible: !!app.state
+                }
                 // The `?` chip in the map's top-right corner (DESIGN.md, window
                 // chrome) opens the keys sheet, as does the key itself.
                 Rectangle {
