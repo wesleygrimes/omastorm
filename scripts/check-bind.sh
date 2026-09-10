@@ -13,7 +13,7 @@ rg -F -- "$bind" README.md >/dev/null \
 # shellcheck disable=SC2088 # the literal path as the README prints it
 rg -F -- '~/.config/hypr/bindings.lua' README.md >/dev/null \
   || fail 'README.md does not name ~/.config/hypr/bindings.lua'
-rg -F -- 'omarchy plugin add https://github.com/wesleygrimes/omastorm --enable' README.md >/dev/null \
+rg -- 'omarchy plugin add https://github\.com/wesleygrimes/omastorm(\.git)? --enable' README.md >/dev/null \
   || fail 'README.md does not name omarchy plugin add https://github.com/wesleygrimes/omastorm --enable'
 
 # Omarchy never writes this file, and neither do install or launch.

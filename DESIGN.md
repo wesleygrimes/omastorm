@@ -23,6 +23,43 @@ below-threshold stay distinct from measured values. Whatever a change hides
 is named in the legend. Keep OSM (ODbL) and Natural Earth attribution with
 the data and on screen.
 
+## Window chrome
+
+Use these names when discussing or changing the expanded window. They are
+the ids and comments in `ui/RadarWindow.qml`.
+
+| Name | What it is |
+|---|---|
+| **brand row** | Mark, OMASTORM, status light, LIVE / ARCHIVED |
+| **site row** | Station title, radar lock, outside coverage |
+| **product stack** | Right column: product line + meta line |
+| **product line** | Product name / tilt and NOAA NEXRAD |
+| **meta line** | Age, right-aligned under the product line |
+| **map stage** | Radar map frame |
+| **follow chip** | Crosshair on the map (place follow) |
+| **help chip** | Keys / `?` on the map |
+| **legend** | dBZ scale directly under the map |
+| **transport** | Playback buttons |
+| **tick strip** | Frame ticks on the timeline |
+| **strip stamp** | Date / time / zone above the tick strip |
+| **frame index** | `N / total` above the strip, right-aligned; counts available frames only |
+
+**Bottom chrome order.** Map stage, then legend, then transport + tick
+strip, with the strip stamp left-aligned and frame index right-aligned
+on one row above the ticks. Playback buttons align with the track at the bottom.
+
+**Product stack.** Compact product line (name, then NOAA NEXRAD). The meta
+line is the age only, right-aligned under that row.
+
+**Time.** Age on the meta line is how stale the frame on screen is. The
+strip stamp is the absolute observation time (date, time, zone). Locale
+picks date order and 12/24h only; dates stay numeric. The tick strip is
+position in the loop, not a second clock. It has 60 positions.
+An extra live sweep beyond 60 completed scans adds a selectable tick and is
+included in the frame count. Available frames fill from the left;
+unused positions are faint, short, and cannot be sought. Each available tick
+represents one frame, without extra gap ticks or a baseline.
+
 ## Location, onboarding, and map
 
 Map center and radar source are independent. The center is the place the

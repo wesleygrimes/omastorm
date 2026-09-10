@@ -142,7 +142,15 @@ FocusScope {
                     implicitWidth: time.implicitWidth + 10; implicitHeight: 20
                     color: Qt.alpha(card.theme.background, .92)
                     Label { id: time; anchors.centerIn: parent; font.pixelSize: 10; opacity: .8
-                        text: card.scan && card.scan.scanTime ? Qt.formatDateTime(new Date(card.scan.scanTime), card.condition === "archived" ? "yyyy-MM-dd HH:mm t" : "HH:mm t") : "" }
+                        text: {
+                            if (!card.scan || !card.scan.scanTime) return "";
+                            var loc = Qt.locale(), d = new Date(card.scan.scanTime);
+                            var timeFmt = loc.timeFormat(Locale.ShortFormat) + " t";
+                            return card.condition === "archived"
+                                ? Qt.formatDateTime(d, loc.dateFormat(Locale.ShortFormat) + " " + timeFmt)
+                                : Qt.formatTime(d, timeFmt);
+                        }
+                    }
                 }
             }
             MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: card.expandRequested() }
@@ -207,9 +215,9 @@ FocusScope {
                 }
                 RowLayout {
                     Layout.fillWidth: true
-                    Label { font.pixelSize: 10; opacity: .55; text: card.frames.length ? Qt.formatTime(new Date(card.frames[0].scanTime), "HH:mm") : "" }
+                    Label { font.pixelSize: 10; opacity: .55; text: card.frames.length ? Qt.formatTime(new Date(card.frames[0].scanTime), Qt.locale().timeFormat(Locale.ShortFormat)) : "" }
                     Item { Layout.fillWidth: true }
-                    Label { font.pixelSize: 10; opacity: .55; text: card.condition === "ok" ? "now" : card.frames.length ? Qt.formatTime(new Date(card.frames[card.frames.length - 1].scanTime), "HH:mm") : "" }
+                    Label { font.pixelSize: 10; opacity: .55; text: card.condition === "ok" ? "now" : card.frames.length ? Qt.formatTime(new Date(card.frames[card.frames.length - 1].scanTime), Qt.locale().timeFormat(Locale.ShortFormat)) : "" }
                 }
             }
         }

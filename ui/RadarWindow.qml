@@ -6,7 +6,6 @@ import Quickshell.Io
 import "Sites.js" as Sites
 import "Keys.js" as KeyMap
 import "Location.js" as Location
-import "Timeline.js" as Timeline
 
 Item {
     id: app
@@ -43,62 +42,72 @@ Item {
     // first with the sweep in progress last; the engine owns the position.
     readonly property var frames: state ? state.timeline : []
     readonly property int frameIndex: scan ? frames.findIndex(f => f.id === scan.id) : -1
-    readonly property bool newestShown: frameIndex >= 0 && frameIndex === frames.length - 1
     readonly property bool playing: state ? state.playing : false
     readonly property var newestComplete: { var done = frames.filter(f => f.status === "complete"); return done.length ? done[done.length - 1] : null; }
     // The connection condition while live (DESIGN.md):
-    // the header's third row shows the age of the frame on screen beside
-    // its time, and its status slot names the condition or the sweep in
-    // progress. LIVE under ten minutes says only the age; STALE turns it
-    // yellow; LOADING is accent; UNAVAILABLE and OFFLINE are red with the
-    // last time. Archived, the badge and ARCHIVED SCAN say it all.
+    // LIVE / ARCHIVED is the badge; a light beside it carries health.
+    // Age under the product line is how stale the frame on screen is.
+    // Prose is reserved for rejections, config mistakes, and notices.
     readonly property string condition: state && state.source === "live" ? state.connection.status : ""
     readonly property bool alert: condition !== "" && condition !== "ok"
+    readonly property bool scanning: !!scan && scan.status === "partial" && !!scan.scanTime
     readonly property color conditionColor: condition === "stale" ? theme.yellow
         : condition === "loading" ? theme.accent
         : condition === "unavailable" || condition === "offline" ? theme.red : theme.foreground
-    // The engine gives the newest complete frame's age, ticking once a
-    // second; an older frame on screen adds the distance between the two
-    // scan times, so no local clock is consulted.
+    // Light beside LIVE: accent when healthy (or archived), yellow stale,
+    // red when the feed is down; pulses while loading or a sweep is painting.
+    readonly property color statusLightColor: {
+        if (!state) return theme.foreground;
+        if (state.source === "archived") return theme.accent;
+        if (condition === "stale") return theme.yellow;
+        if (condition === "unavailable" || condition === "offline") return theme.red;
+        return theme.accent;
+    }
+    readonly property bool statusLightPulse: condition === "loading" || (condition === "ok" && scanning)
+    // Age of the frame on screen: newest complete age, plus how far the
+    // playhead sits behind that sweep. No local clock.
     readonly property int shownAge: !state || !scan || !scan.scanTime || !newestComplete ? -1
         : Math.max(0, state.connection.ageSeconds + Math.round((Date.parse(newestComplete.scanTime) - Date.parse(scan.scanTime)) / 1000))
     readonly property string ageText: condition && shownAge >= 0 ? ago(shownAge) : ""
     function ago(seconds) {
         var m = Math.floor(seconds / 60);
-        if (m < 1) return "just now";
+        if (m < 1) return "Now";
         if (m < 60) return m + " min ago";
         var h = Math.floor(m / 60);
         return h < 24 ? h + "h " + (m % 60) + "m ago" : Math.floor(h / 24) + "d " + (h % 24) + "h ago";
     }
-    function lasting(seconds) {
-        var m = Math.floor(seconds / 60), h = Math.floor(m / 60);
-        return m < 60 ? m + " MIN" : h < 24 ? h + "H " + (m % 60) + "M" : Math.floor(h / 24) + "D " + (h % 24) + "H";
+    // Stamp above the tick strip: locale picks date order and 12/24h only.
+    readonly property bool stamp12h: {
+        var fmt = Qt.locale().timeFormat(Locale.ShortFormat);
+        return fmt.indexOf("A") >= 0 || fmt.indexOf("a") >= 0;
     }
-    readonly property string sourceDetail: {
-        if (!state) return "";
-        if (state.source === "archived") return "ARCHIVED SCAN";
-        var last = newestComplete ? clock(newestComplete.scanTime, true) : "";
-        switch (condition) {
-        case "loading": return siteId ? "LOADING · " + siteId : "NO STATION · PAN OR SEARCH";
-        case "stale": return "STALE · LAST SWEEP " + last;
-        case "unavailable": return !newestComplete ? siteId + " UNAVAILABLE · NO DATA"
-            : siteId + " UNAVAILABLE" + (win.compact ? "" : " · NO DATA FOR " + lasting(state.connection.ageSeconds)) + " · LAST " + last;
-        case "offline": return !scan.scanTime ? "OFFLINE · NOTHING CACHED"
-            : "OFFLINE · " + (win.compact ? "" : "SHOWING ") + "CACHED " + clock(scan.scanTime, true) + " · " + ago(shownAge).toUpperCase();
-        default: return scan.status === "partial" && scan.scanTime ? "SCANNING · " + Math.max(0, scan.rays - 1) + " RADIALS" : "";
-        }
+    readonly property string stampDateOrder: {
+        var fmt = Qt.locale().dateFormat(Locale.ShortFormat);
+        var y = fmt.indexOf("y"), m = fmt.indexOf("M"), d = fmt.indexOf("d");
+        if (y >= 0 && (m < 0 || y < m) && (d < 0 || y < d)) return "ymd";
+        if (d >= 0 && m >= 0 && d < m) return "dmy";
+        return "mdy";
     }
-    // Clock readings are the machine's local time; the wire is UTC. `zone`
-    // appends the zone's abbreviation where the reading stands alone.
-    function clock(iso, zone) { return iso ? Qt.formatTime(new Date(iso), zone ? "HH:mm t" : "HH:mm") : ""; }
-    function span(fromIso, toIso) {
-        var minutes = Math.round((Date.parse(toIso) - Date.parse(fromIso)) / 60000);
-        return minutes >= 60 ? Math.floor(minutes / 60) + "h " + (minutes % 60) + "m" : minutes + "m";
+    function pad2(n) { return (n < 10 ? "0" : "") + n; }
+    function stamp(iso) {
+        if (!iso) return "";
+        var d = new Date(iso), y = d.getFullYear(), mo = d.getMonth() + 1, day = d.getDate();
+        var dateStr = stampDateOrder === "ymd" ? y + "-" + pad2(mo) + "-" + pad2(day)
+            : stampDateOrder === "dmy" ? pad2(day) + "/" + pad2(mo) + "/" + String(y).slice(2)
+            : pad2(mo) + "/" + pad2(day) + "/" + String(y).slice(2);
+        var timeStr = stamp12h ? Qt.formatTime(d, "h:mm AP") : Qt.formatTime(d, "HH:mm");
+        return dateStr + " · " + timeStr + " " + Qt.formatTime(d, "t");
     }
-    // One slot per tick: a frame, or a stub where the feed skipped one (a
-    // gap of about two or more median intervals, at most three stubs).
-    readonly property var slots: Timeline.slots(frames)
-    readonly property int currentSlot: scan ? slots.findIndex(s => s.id === scan.id) : -1
+    // History fills 60 positions from the left. A full catalog can also
+    // expose an extra live sweep, which stays selectable after those scans.
+    readonly property var slots: {
+        var result = [];
+        for (var j = 0; j < frames.length; j++)
+            result.push({id: frames[j].id, partial: frames[j].status === "partial", empty: false});
+        for (var i = frames.length; i < 60; i++) result.push({empty: true, partial: false});
+        return result;
+    }
+    readonly property int currentSlot: scan ? slots.findIndex(s => !s.empty && s.id === scan.id) : -1
     function togglePlay() { if (frames.length > 1) engine.send({type: playing ? "pause" : "play"}); }
     function step(delta) { if (frames.length > 1) engine.send({type: "step", delta: delta}); }
     function jump(toNewest) { if (frames.length > 1) engine.send({type: "seek", id: frames[toNewest ? frames.length - 1 : 0].id}); }
@@ -118,7 +127,6 @@ Item {
             if (weakFloor < scan.bounds[i + 1]) return (i + (weakFloor - scan.bounds[i]) / (scan.bounds[i + 1] - scan.bounds[i])) / bands;
         return 1;
     }
-    readonly property string weakKey: (bindings.weak || []).map(KeyMap.pretty)[0] || ""
     // Which legend numbers fit: the last always shows; each earlier one shows
     // only if it clears the previous shown number and the last one. This keeps
     // spacing even at any width and band count instead of hiding by parity.
@@ -432,10 +440,9 @@ Item {
                 border.color: transport.selected ? app.theme.accent : Qt.alpha(app.theme.foreground, .22)
             }
         }
-        // MOCK: one chip per idea, in two parts. The glyph is a toggle
-        // (crosshair = the map follows the current location, padlock = the
-        // radar is pinned), filled with the accent while on. The name beside
-        // it says what is being followed or held, and opens that picker.
+        // MOCK: one chip per idea, in two parts. The name opens the picker;
+        // the glyph to its right is the toggle (crosshair = follow place,
+        // padlock = pin radar), filled with the accent while on.
         component Chip: RowLayout {
             id: chip
             property string glyph: "follow"
@@ -447,10 +454,6 @@ Item {
             signal toggled()
             signal opened()
             spacing: 0
-            GlyphButton {
-                glyph: chip.glyph; selected: chip.on; enabled: chip.enabled
-                onClicked: chip.toggled()
-            }
             Button {
                 id: name
                 implicitHeight: 30
@@ -459,7 +462,6 @@ Item {
                 focusPolicy: Qt.NoFocus
                 enabled: chip.enabled
                 visible: !win.compact
-                Layout.leftMargin: -1
                 onClicked: chip.opened()
                 contentItem: RowLayout {
                     spacing: 7
@@ -479,6 +481,11 @@ Item {
                     border.width: 1
                     border.color: Qt.alpha(app.theme.foreground, .22)
                 }
+            }
+            GlyphButton {
+                glyph: chip.glyph; selected: chip.on; enabled: chip.enabled
+                Layout.leftMargin: -1
+                onClicked: chip.toggled()
             }
         }
         Rectangle {
@@ -503,54 +510,92 @@ Item {
             anchors.fill: parent
             anchors.margins: win.compact ? 12 : 20
             spacing: 10
+            // Chrome names (use these when tweaking):
+            //   brand row     — mark, OMASTORM, status light, LIVE/ARCHIVED
+            //   site row      — station title, radar lock, outside coverage
+            //   product stack — product line + meta line (right of site row)
+            //   product line  — REFLECTIVITY / tilt + NOAA NEXRAD
+            //   meta line     — age, right-aligned under the product line
+            //   map stage     — radar map frame
+            //   follow chip   — crosshair (place follow) on the map
+            //   help chip     — ? keys on the map
+            //   legend        — dBZ scale under the map
+            //   transport     — playback buttons
+            //   tick strip    — frame ticks
+            //   strip stamp   — date/time/zone above the tick strip
+            //   frame index   — N / available frames above the strip
             RowLayout {
+                id: brandRow
                 Layout.fillWidth: true
                 RadarMark { ink: app.theme.accent; Layout.rightMargin: 6 }
                 LabelText { text: "OMASTORM"; font.bold: true; font.letterSpacing: 2; font.pixelSize: app.theme.baseSize + 2 }
                 Item { Layout.fillWidth: true }
-                LabelText { text: app.sourceBadge; color: app.theme.accent; font.letterSpacing: 1.5 }
+                // LIVE / ARCHIVED as text; the light carries feed health.
+                RowLayout {
+                    spacing: 8
+                    Rectangle {
+                        id: statusLight
+                        width: 8; height: 8; radius: 4
+                        Layout.alignment: Qt.AlignVCenter
+                        visible: !!app.state
+                        color: app.statusLightColor
+                        SequentialAnimation on opacity {
+                            running: app.statusLightPulse
+                            loops: Animation.Infinite
+                            NumberAnimation { from: 1; to: .25; duration: 700; easing.type: Easing.InOutSine }
+                            NumberAnimation { from: .25; to: 1; duration: 700; easing.type: Easing.InOutSine }
+                            onRunningChanged: if (!running) statusLight.opacity = 1
+                        }
+                    }
+                    LabelText { text: app.sourceBadge; color: app.theme.accent; font.letterSpacing: 1.5 }
+                }
             }
             Rectangle { Layout.fillWidth: true; height: 1; color: Qt.alpha(app.theme.foreground, .25) }
             RowLayout {
+                id: siteRow
                 Layout.fillWidth: true
                 // MOCK: the station title is the radar control. Click it to
-                // pick a station; the padlock beside it pins the one on screen.
+                // pick a station; the padlock beside it pins that radar (not
+                // the map — the crosshair on the map is place-follow).
+                // No border or hover fill on the title — it reads as text.
                 Button {
                     id: siteTitle
                     implicitHeight: 30
-                    implicitWidth: contentItem.implicitWidth + 12
                     padding: 0
                     focusPolicy: Qt.NoFocus
                     enabled: !!app.state
                     onClicked: picker.show("")
-                    Layout.leftMargin: -6
+                    Layout.alignment: Qt.AlignTop
                     contentItem: RowLayout {
                         spacing: 8
-                        Item { width: 6 }
                         LabelText { text: app.siteId || "—"; font.pixelSize: app.theme.baseSize + 7; font.bold: true }
-                        // The padlock right after the call sign: closed and
-                        // accent while locked, open and quiet while following.
-                        Rectangle {
-                            id: lockButton
-                            implicitWidth: 24; implicitHeight: 24
-                            radius: 2
-                            color: lockArea.containsMouse ? Qt.alpha(app.theme.accent, .18) : "transparent"
-                            Glyph {
-                                anchors.centerIn: parent
-                                glyph: app.locked ? "lock" : "unlock"
-                                ink: app.locked ? app.theme.accent : app.theme.foreground
-                                fade: app.locked ? 1 : .45
-                            }
-                            MouseArea { id: lockArea; anchors.fill: parent; hoverEnabled: true; onClicked: app.toggleLock() }
-                        }
                         LabelText { text: app.siteName; visible: !win.compact; opacity: .65 }
-                        Glyph { glyph: "chevron"; implicitWidth: 12; fade: siteTitle.hovered ? 1 : .5 }
-                        Item { width: 2 }
+                        Glyph { glyph: "chevron"; implicitWidth: 12; fade: .5 }
                     }
-                    background: Rectangle {
-                        color: siteTitle.hovered ? Qt.alpha(app.theme.accent, .18) : "transparent"
-                        border.width: 1
-                        border.color: siteTitle.hovered ? Qt.alpha(app.theme.foreground, .22) : "transparent"
+                    background: Item {}
+                }
+                // Pins the radar on screen; chip outline so it reads as a toggle.
+                Rectangle {
+                    id: lockButton
+                    implicitWidth: 30; implicitHeight: 30
+                    radius: 2
+                    Layout.alignment: Qt.AlignTop
+                    opacity: !!app.state ? 1 : .35
+                    color: lockArea.containsMouse && !!app.state ? Qt.alpha(app.theme.accent, .18) : "transparent"
+                    border.width: 1
+                    border.color: app.locked ? app.theme.accent : Qt.alpha(app.theme.foreground, .22)
+                    Glyph {
+                        anchors.centerIn: parent
+                        glyph: app.locked ? "lock" : "unlock"
+                        ink: app.locked ? app.theme.accent : app.theme.foreground
+                        fade: app.locked ? 1 : .45
+                    }
+                    MouseArea {
+                        id: lockArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        enabled: !!app.state
+                        onClicked: app.toggleLock()
                     }
                 }
                 LabelText {
@@ -558,40 +603,54 @@ Item {
                     visible: !win.compact && app.locked && app.outsideCoverage
                     color: app.theme.accent
                     font.pixelSize: 10; font.letterSpacing: 1
+                    Layout.alignment: Qt.AlignTop
+                    Layout.topMargin: 8
                 }
                 Item { Layout.fillWidth: true }
-                LabelText { text: !app.scan ? "" : app.scan.productName.toUpperCase() + (app.scan.scanTime ? " / " + app.scan.elevationDeg.toFixed(1) + "°" : "") }
+                // product stack: compact product line; age right-aligned under it.
+                ColumnLayout {
+                    id: productStack
+                    spacing: 2
+                    Layout.alignment: Qt.AlignTop | Qt.AlignRight
+                    RowLayout {
+                        id: productLine
+                        spacing: 8
+                        visible: !!app.scan
+                        LabelText {
+                            text: !app.scan ? "" : app.scan.productName.toUpperCase() + (app.scan.scanTime ? " / " + app.scan.elevationDeg.toFixed(1) + "°" : "")
+                        }
+                        LabelText {
+                            text: "NOAA NEXRAD"
+                            font.letterSpacing: 1; opacity: .55
+                        }
+                    }
+                    LabelText {
+                        id: metaLine
+                        Layout.alignment: Qt.AlignRight
+                        visible: app.ageText !== ""
+                        text: app.ageText
+                        color: app.alert && app.condition !== "loading" ? app.conditionColor : app.theme.foreground
+                        opacity: app.alert && app.condition !== "loading" ? 1 : .75
+                    }
+                }
             }
-            RowLayout {
+            // Rejections, config mistakes, and notices only — feed health is
+            // the light beside LIVE, not a prose status row.
+            LabelText {
                 Layout.fillWidth: true
-                // The scan time keeps its full width; only the status text shrinks.
-                LabelText { text: !app.scan || !app.scan.scanTime ? "—" : Qt.formatDateTime(new Date(app.scan.scanTime), "yyyy-MM-dd  HH:mm t"); opacity: .75; Layout.preferredWidth: implicitWidth }
-                // The age of the frame on screen; yellow or red with the condition.
-                LabelText {
-                    text: "· " + app.ageText
-                    visible: app.ageText !== ""
-                    color: app.condition === "loading" ? app.theme.foreground : app.conditionColor
-                    opacity: app.alert && app.condition !== "loading" ? 1 : .75
-                    Layout.preferredWidth: implicitWidth
-                }
-                // The engine's answer to this window's last command takes the
-                // status slot while it stands, ahead of any condition; a
-                // config.toml mistake stands there the same way until the
-                // file is fixed. The radar underneath stays clear.
-                LabelText {
-                    text: engine.rejection || app.configError || store.persistError || app.notice || app.sourceDetail
-                    color: engine.rejection || app.configError || store.persistError || app.notice ? app.theme.accent : app.conditionColor
-                    opacity: engine.rejection || app.configError || store.persistError || app.notice || app.alert ? 1 : .5
-                    visible: !win.compact || engine.rejection !== "" || app.configError !== "" || store.persistError !== "" || app.notice !== "" || app.alert
-                    horizontalAlignment: Text.AlignRight
-                    Layout.fillWidth: true
-                }
+                Layout.topMargin: -4
+                text: engine.rejection || app.configError || store.persistError || app.notice
+                color: app.theme.accent
+                opacity: 1
+                visible: text !== ""
+                horizontalAlignment: Text.AlignRight
             }
             Rectangle {
                 id: mapFrame
                 Layout.fillWidth: true
                 Layout.fillHeight: true
                 Layout.minimumHeight: 100
+                Layout.topMargin: -4
                 color: app.theme.background
                 border.color: Qt.alpha(app.theme.foreground, .17)
                 clip: true
@@ -633,7 +692,8 @@ Item {
                 Connections { target: engine; function onTileReady(tile) { map.tileReady(tile); } }
                 // MOCK: the crosshair alone, top-left, ahead of N ↑. Filled
                 // while the map follows the current location; a pan turns it
-                // off, a click turns it on and recenters.
+                // off, a click turns it on and recenters. Radar lock stays
+                // beside the station title — a lock here would read as map pin.
                 Rectangle {
                     id: followChip
                     anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10
@@ -664,106 +724,27 @@ Item {
                     }
                     MouseArea { id: helpArea; anchors.fill: parent; hoverEnabled: true; onClicked: app.run("help") }
                 }
-                // The engine's attribution verbatim while an osm tile is on
-                // screen (docs/protocol.md, state.basemap); Natural Earth otherwise.
-                LabelText {
-                    anchors.bottom: parent.bottom; anchors.right: parent.right; anchors.margins: 12
-                    anchors.left: parent.horizontalCenter; horizontalAlignment: Text.AlignRight
-                    text: "NOAA / NEXRAD · " + (map.osmOnScreen && app.state && app.state.basemap ? app.state.basemap.osm.attribution : "NATURAL EARTH · OFFLINE")
-                    visible: !!app.scan
-                    font.pixelSize: 10; opacity: .7
-                }
                 Rectangle {
                     anchors.bottom: parent.bottom; anchors.left: parent.left; anchors.margins: 10
                     width: scaleLabel.implicitWidth+12; height: win.compact ? 32 : 24; color: app.theme.background
                     LabelText { id: scaleLabel; anchors.centerIn: parent; text: win.compact ? "RINGS 50 km\nDASHED ~460 km" : "RINGS 50 km · DASHED: NOMINAL 460 km"; font.pixelSize: 10; opacity: .7 }
                 }
+                // OSM ODbL safe harbour: short credit in a map corner. Full
+                // catalogue (NOAA, Natural Earth, GeoNames, …) stays in README.
+                LabelText {
+                    anchors.bottom: parent.bottom; anchors.right: parent.right; anchors.margins: 12
+                    text: "© OpenStreetMap"
+                    visible: !!app.scan
+                    font.pixelSize: 10; opacity: .55
+                }
                 LabelText { anchors.centerIn: parent; width: parent.width-24; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter; text: map.error || engine.error; visible: text.length > 0 }
             }
-            // The timeline row: transport, one tick per frame with the newest
-            // at the right, the first and newest times under the ends and the
-            // shown frame's time between them while it is not the newest.
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 12
-                visible: !!app.scan
-                RowLayout {
-                    spacing: 5
-                    GlyphButton { glyph: "first"; visible: !win.compact; enabled: app.frames.length > 1; onClicked: app.jump(false) }
-                    GlyphButton { glyph: "back"; enabled: app.frames.length > 1; onClicked: app.step(-1) }
-                    GlyphButton { glyph: app.playing ? "pause" : "play"; selected: app.playing; enabled: app.frames.length > 1; onClicked: app.togglePlay() }
-                    GlyphButton { glyph: "fwd"; enabled: app.frames.length > 1; onClicked: app.step(1) }
-                    GlyphButton { glyph: "last"; visible: !win.compact; enabled: app.frames.length > 1; onClicked: app.jump(true) }
-                }
-                ColumnLayout {
-                    Layout.fillWidth: true
-                    spacing: 4
-                    Item {
-                        id: strip
-                        Layout.fillWidth: true
-                        implicitHeight: 14
-                        Rectangle { anchors.bottom: parent.bottom; width: parent.width; height: 1; color: Qt.alpha(app.theme.foreground, .17) }
-                        Repeater {
-                            model: app.slots
-                            Rectangle {
-                                required property var modelData
-                                required property int index
-                                readonly property bool current: !modelData.stub && index === app.currentSlot
-                                readonly property bool tall: current || modelData.partial
-                                x: app.slots.length > 1 ? Math.round(index * (strip.width - width) / (app.slots.length - 1)) : Math.round((strip.width - width) / 2)
-                                y: modelData.stub ? strip.height - height - 1 : Math.round((strip.height - height) / 2)
-                                width: tall ? 3 : 2
-                                height: modelData.stub ? 2 : tall ? 14 : 8
-                                color: current ? app.theme.accent : modelData.partial ? "transparent"
-                                    : Qt.alpha(app.theme.foreground, modelData.stub ? .35 : index > app.currentSlot ? .18 : .42)
-                                border.width: modelData.partial && !current ? 1 : 0
-                                border.color: app.theme.accent
-                            }
-                        }
-                        // Dragging scrubs: the nearest frame under the pointer is sought
-                        // once per frame change; the engine pauses on a seek.
-                        MouseArea {
-                            anchors.fill: parent
-                            anchors.topMargin: -6
-                            anchors.bottomMargin: -18
-                            enabled: app.frames.length > 1
-                            property string target: ""
-                            function scrub(mx) {
-                                var n = app.slots.length;
-                                if (n < 2) return;
-                                var i = Math.round(Math.max(0, Math.min(1, mx / strip.width)) * (n - 1)), lo = i, hi = i;
-                                while (lo >= 0 && app.slots[lo].stub) lo--;
-                                while (hi < n && app.slots[hi].stub) hi++;
-                                var pick = lo < 0 ? hi : hi >= n ? lo : i - lo <= hi - i ? lo : hi;
-                                var id = app.slots[pick].id;
-                                if (id && id !== target) { target = id; engine.send({type: "seek", id: id}); }
-                            }
-                            onPressed: mouse => { target = ""; scrub(mouse.x); }
-                            onPositionChanged: mouse => { if (pressed) scrub(mouse.x); }
-                        }
-                    }
-                    RowLayout {
-                        Layout.fillWidth: true
-                        LabelText { text: app.frames.length ? app.clock(app.frames[0].scanTime) : ""; font.pixelSize: 10; opacity: .65 }
-                        Item { Layout.fillWidth: true }
-                        LabelText { text: app.scan && !app.newestShown ? app.clock(app.scan.scanTime) : ""; font.pixelSize: 10; opacity: .65 }
-                        Item { Layout.fillWidth: true }
-                        LabelText {
-                            text: app.frames.length > 1 ? app.clock(app.frames[app.frames.length - 1].scanTime) + (app.state.source === "live" ? " now" : "") : ""
-                            font.pixelSize: 10; opacity: .65
-                        }
-                    }
-                }
-                LabelText {
-                    visible: !win.compact
-                    text: !app.frames.length ? "" : !app.newestShown && app.frameIndex >= 0 ? (app.frameIndex + 1) + " / " + app.frames.length + " · " + app.clock(app.scan.scanTime, true)
-                        : app.frames.length + (app.frames.length === 1 ? " FRAME" : " FRAMES") + (app.frames.length > 1 ? " · " + app.span(app.frames[0].scanTime, app.frames[app.frames.length - 1].scanTime) : "")
-                    font.pixelSize: 10; opacity: .65
-                }
-            }
+            // legend — colors for the map above
             ColumnLayout {
+                id: legend
                 Layout.fillWidth: true
                 spacing: 4
+                visible: !!app.scan
                 Item {
                     Layout.fillWidth: true
                     implicitHeight: legendRow.implicitHeight
@@ -809,12 +790,90 @@ Item {
                         Rectangle { anchors.right: parent.right; width: 1; height: parent.height; color: app.theme.foreground; opacity: .7 }
                     }
                 }
-                LabelText {
-                    text: !app.scan ? "" : !app.floorActive ? "Blank: no return / outside · " + app.legendLabel(0) + " measured · X: folded"
-                        : "Blank: no return / outside / measured <" + app.weakFloor + " " + app.scan.units + " hidden" + (app.weakKey ? " (" + app.weakKey + " shows)" : "") + " · X: folded"
-                    font.pixelSize: 10; Layout.fillWidth: true; opacity: .65
+            }
+            // Timestamp and frame index above the ticks; transport alongside.
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 12
+                visible: !!app.scan
+                RowLayout {
+                    id: transport
+                    Layout.alignment: Qt.AlignBottom
+                    spacing: 5
+                    GlyphButton { glyph: "first"; visible: !win.compact; enabled: app.frames.length > 1; onClicked: app.jump(false) }
+                    GlyphButton { glyph: "back"; enabled: app.frames.length > 1; onClicked: app.step(-1) }
+                    GlyphButton { glyph: app.playing ? "pause" : "play"; selected: app.playing; enabled: app.frames.length > 1; onClicked: app.togglePlay() }
+                    GlyphButton { glyph: "fwd"; enabled: app.frames.length > 1; onClicked: app.step(1) }
+                    GlyphButton { glyph: "last"; visible: !win.compact; enabled: app.frames.length > 1; onClicked: app.jump(true) }
+                }
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 4
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 8
+                        LabelText {
+                            id: stripStamp
+                            Layout.fillWidth: true
+                            visible: !!app.scan && !!app.scan.scanTime
+                            text: app.scan ? app.stamp(app.scan.scanTime) : ""
+                            font.pixelSize: 10
+                            opacity: .65
+                            horizontalAlignment: Text.AlignLeft
+                            elide: Text.ElideRight
+                        }
+                        LabelText {
+                            visible: !win.compact && app.frameIndex >= 0
+                            horizontalAlignment: Text.AlignRight
+                            text: (app.frameIndex + 1) + " / " + app.frames.length
+                            font.pixelSize: 10
+                            opacity: .65
+                        }
+                    }
+                    Item {
+                        id: strip
+                        Layout.fillWidth: true
+                        implicitHeight: 14
+                        Repeater {
+                            model: app.slots
+                            Rectangle {
+                                required property var modelData
+                                required property int index
+                                readonly property bool current: !modelData.empty && index === app.currentSlot
+                                readonly property bool tall: current || modelData.partial
+                                x: app.slots.length > 1 ? Math.round(index * (strip.width - width) / (app.slots.length - 1)) : Math.round((strip.width - width) / 2)
+                                y: Math.round((strip.height - height) / 2)
+                                width: tall ? 3 : 2
+                                height: modelData.empty ? 3 : tall ? 14 : 8
+                                color: current ? app.theme.accent : modelData.partial ? "transparent"
+                                    : Qt.alpha(app.theme.foreground, modelData.empty ? .10 : index > app.currentSlot ? .28 : .42)
+                                border.width: modelData.partial && !current ? 1 : 0
+                                border.color: app.theme.accent
+                            }
+                        }
+                        // Dragging scrubs: the nearest frame under the pointer is sought
+                        // once per frame change; the engine pauses on a seek.
+                        MouseArea {
+                            anchors.fill: parent
+                            anchors.topMargin: -6
+                            anchors.bottomMargin: -18
+                            enabled: app.frames.length > 1
+                            property string target: ""
+                            function scrub(mx) {
+                                var n = app.slots.length;
+                                if (n < 2) return;
+                                var i = Math.round(Math.max(0, Math.min(1, mx / strip.width)) * (n - 1));
+                                if (app.slots[i].empty) return;
+                                var id = app.slots[i].id;
+                                if (id && id !== target) { target = id; engine.send({type: "seek", id: id}); }
+                            }
+                            onPressed: mouse => { target = ""; scrub(mouse.x); }
+                            onPositionChanged: mouse => { if (pressed) scrub(mouse.x); }
+                        }
+                    }
                 }
             }
+
             RowLayout {
                 Layout.fillWidth: true
                 spacing: 5
@@ -867,12 +926,6 @@ Item {
                 Rectangle { width: 1; height: 18; color: Qt.alpha(app.theme.foreground, .22); Layout.leftMargin: 4; Layout.rightMargin: 4; visible: !win.compact }
                 Control { text: "−"; visible: !win.compact; onClicked: map.zoom(Math.min(map.span,map.maxSpan)*1.25) }
                 Control { text: "+"; visible: !win.compact; onClicked: map.zoom(Math.min(map.span,map.maxSpan)/1.25) }
-            }
-            LabelText {
-                Layout.fillWidth: true
-                text: "NOAA / NEXRAD · Natural Earth"
-                visible: false // MOCK: folded into the map's attribution corner
-                font.pixelSize: 10; opacity: .7
             }
           }
           // The site picker over everything, its card's top on the map's.
