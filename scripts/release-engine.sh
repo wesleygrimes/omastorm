@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Local fallback: publish an engine release from a laptop (docs/RELEASING.md).
 # Prefer `mise engine-tag` after CI builds both architectures. Run this as
-# `mise release`. Refuses unless on main, clean, and even with origin/main,
-# and unless engine/Cargo.toml names a version with no tag or release yet.
+# `mise release`. Refuses unless on main, clean, and HEAD is the full commit
+# currently at origin's main, and unless engine/Cargo.toml names a version
+# with no tag or release yet.
 # Builds the candidate, requires it to answer hello with that version and the
 # protocol ui/Engine.qml accepts, creates the GitHub Release as a draft with
 # both native binaries and SHA256SUMS, asks, and publishes. Releases are immutable, so
@@ -39,9 +40,7 @@ gh auth status > /dev/null 2>&1 || die 'gh is not logged in (gh auth login).'
 branch=$(git rev-parse --abbrev-ref HEAD)
 [[ $branch == main ]] || die "On $branch; engine releases are cut from main."
 [[ -z $(git status --porcelain) ]] || die 'The working tree is not clean.'
-git fetch -q origin main
-[[ $(git rev-parse HEAD) == $(git rev-parse origin/main) ]] \
-  || die 'main is not even with origin/main; push or pull first so the release names a commit everyone has.'
+bash scripts/require-origin-main.sh release
 
 version=$(awk -F'"' '/^version = /{print $2; exit}' engine/Cargo.toml)
 lock_version=$(awk '/^name = "omastorm-engine"$/{getline; print}' Cargo.lock | awk -F'"' '{print $2}')
