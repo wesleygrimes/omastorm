@@ -29,8 +29,8 @@ QtObject {
         onLoaded: { root.parsed = Location.parseState(text()); root.stateRead = true; }
         onLoadFailed: { root.parsed = Location.parseState(""); root.stateRead = true; }
     }
-    function snapshot(viewLat, viewLon, span, lock, name) {
-        var text = JSON.stringify(Location.stateObject(viewLat, viewLon, span, lock, name));
+    function snapshot(viewLat, viewLon, span, lock, name, site, scan, live) {
+        var text = JSON.stringify(Location.stateObject(viewLat, viewLon, span, lock, name, site, scan, live));
         parsed = Location.parseState(text);
         if (!path) return;
         var slash = path.lastIndexOf("/");

@@ -126,17 +126,29 @@ the machine's own state and weather files are not read unless
   reported the same way. `home_site` and `follow` are unused and named if
   present.
 
-## Remembered state
+## Remembered state and view export
 
 `~/.local/state/omastorm/state.json` is written atomically (a temporary file
-renamed into place). It holds the last map centre, span in kilometres, and
-the UI radar lock when one is set:
+renamed into place). It holds the last map centre, span in kilometres, the UI
+radar lock when one is set, and what is on screen right now:
 
 ```json
-{"lat":30.332,"lon":-81.656,"span":210,"lock":"KJAX","name":"Jacksonville"}
+{"lat":30.332,"lon":-81.656,"span":210,"lock":"KJAX","name":"Jacksonville",
+ "site":"KJAX","scan":"2026-09-10T18:42:11Z","live":true}
 ```
 
-Invalid fields are dropped. A missing file is no remembered view.
-`OMASTORM_LOCATION` names another weather.json (`name`, `latitude`,
-`longitude`, written by the shell's weather panel) for checks; coordinates
-outside ±90/±180 are ignored.
+- `lat`, `lon`, `span`, `lock`, `name`: the remembered view, read back at
+  launch (above). Invalid fields are dropped; a missing file is no remembered
+  view.
+- `site`, `scan`, `live`: the **view export** — the station shown, the
+  RFC 3339 scan time of the frame on screen, and whether that frame is the
+  live head (`false` while stepped back or on an archived scan). Written
+  400 ms after the view, the station, or the frame settles, so the file
+  says what Omastorm is showing now, window open or not. They are for other
+  programs to read — a hand-off to a fuller viewer builds its own deep link
+  from them — and launch never reads them back. Omastorm names no such
+  program and opens none. Absent until the engine has a station.
+
+`OMASTORM_STATE` names another state file for checks. `OMASTORM_LOCATION`
+names another weather.json (`name`, `latitude`, `longitude`, written by the
+shell's weather panel) for checks; coordinates outside ±90/±180 are ignored.

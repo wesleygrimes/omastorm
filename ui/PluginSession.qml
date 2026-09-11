@@ -116,9 +116,22 @@ QtObject {
         }
     }
 
+    // What the engine shows now, for the view export (docs/configuration.md):
+    // the station, the frame's scan time, and whether that frame is the
+    // live head — the newest of a live timeline.
+    readonly property string shownSite: engine.state ? engine.state.site.id : ""
+    readonly property string shownScan: engine.state && engine.state.frame ? engine.state.frame.scanTime || "" : ""
+    readonly property bool shownLive: {
+        if (!engine.state || !engine.state.frame || engine.state.source !== "live") return false;
+        var t = engine.state.timeline || [];
+        return t.length > 0 && t[t.length - 1].id === engine.state.frame.id;
+    }
+    readonly property string shownKey: shownSite + "|" + shownScan + "|" + shownLive
+    onShownKeyChanged: if (initialized && hasView) persistTimer.restart()
+
     function persist() {
         if (!hasView) return;
-        remembered.snapshot(centerLat, centerLon, span, lockWanted ? lockId : "", placeName);
+        remembered.snapshot(centerLat, centerLon, span, lockWanted ? lockId : "", placeName, shownSite, shownScan, shownLive);
     }
 
     function rememberView(lat, lon, spanKm) {
