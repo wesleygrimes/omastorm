@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Fresh-checkout setup, run through `mise setup` so the mise tools are on
+# Fresh-checkout bootstrap, run through `mise setup` so the mise tools are on
 # PATH. Checks the desktop packages mise does not manage, extracts verified
 # fixtures, fetches crates, and builds the debug engine. Launch never calls
 # this. Fixture bytes come from data/fixtures/; cargo fetch is the remaining
@@ -22,7 +22,7 @@ fi
 command -v magick > /dev/null 2>&1 || echo 'Optional: imagemagick (captures) is not installed.' >&2
 command -v ffmpeg > /dev/null 2>&1 || echo 'Optional: ffmpeg (demo video) is not installed.' >&2
 
-bash scripts/setup-fixture.sh
+bash scripts/extract-fixtures.sh
 cargo fetch --locked
 cargo build --offline --locked
 echo 'Setup complete. Next: mise start'

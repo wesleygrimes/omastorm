@@ -41,7 +41,7 @@ build time; the archived
 volume is read at run time by the decoder tests and by a daemon started with
 `OMASTORM_ARCHIVE` (the checks and captures). Compressed copies live in
 `data/fixtures/`; `data/raw/` is ignored. A fresh checkout runs
-`bash scripts/setup-fixture.sh` once: it copies and extracts the vendored
+`bash scripts/extract-fixtures.sh` once: it copies and extracts the vendored
 files, then verifies `data/SHA256SUMS`. Ordinary setup, `mise check`, cargo
 builds, and CI do not download these files. A build without those files stops
 with a message naming the script; a shipped daemon embeds nothing archived.
@@ -63,7 +63,7 @@ refresh:
 4. Commit the vendor files, `data/SHA256SUMS`, and this README together.
 
 A changed download must be reviewed and repinned, never accepted without
-verification. `scripts/setup-fixture.sh` never hits those live URLs.
+verification. `scripts/extract-fixtures.sh` never hits those live URLs.
 
 ## Decoder and rendering contract
 

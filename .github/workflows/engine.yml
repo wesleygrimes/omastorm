@@ -55,13 +55,13 @@ jobs:
           fi
       - name: Extract verified fixtures and fetch locked dependencies
         run: |
-          bash scripts/setup-fixture.sh
+          bash scripts/extract-fixtures.sh
           bash scripts/cargo.sh fetch --locked
-      - name: Check engine and installer
+      - name: Check engine pin
         run: |
           mise lint
           mise test
-          bash -x scripts/check-engine-install.sh --published-install-only > target/install-check.log 2>&1 || { cat target/install-check.log; exit 1; }
+          bash -x scripts/test-engine-pin.sh --published-install-only > target/engine-pin-check.log 2>&1 || { cat target/engine-pin-check.log; exit 1; }
           bash scripts/check-engine-release.sh
       - name: Build native release binary
         run: |

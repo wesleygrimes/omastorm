@@ -2,7 +2,7 @@
 .tools/
 target/
 
-# Fixture working copies (scripts/setup-fixture.sh extracts data/fixtures here)
+# Fixture working copies (scripts/extract-fixtures.sh extracts data/fixtures here)
 data/raw/
 
 # Generated captures, check output, and README media

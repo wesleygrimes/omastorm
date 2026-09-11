@@ -11,7 +11,7 @@ use std::{
 };
 
 /// The archived volume the daemons under test start on (`OMASTORM_ARCHIVE`),
-/// extracted once by `scripts/setup-fixture.sh`.
+/// extracted once by `scripts/extract-fixtures.sh`.
 const ARCHIVE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../data/raw/KTLX20130520_201643_V06.gz"

@@ -15,7 +15,7 @@ if [[ ${1:-} == --ensure ]]; then
   if [[ -x target/debug/omastorm-engine ]]; then
     exec target/debug/omastorm-engine ensure
   fi
-  engine=$(bash scripts/install-engine.sh --print-path)
+  engine=$(bash scripts/fetch-engine.sh --print-path)
   exec "$engine" ensure
 fi
 if [[ ! -f ui/shaders/radar.frag.qsb || ! -f ui/shaders/tile.frag.qsb ]]; then

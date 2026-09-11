@@ -51,7 +51,7 @@ Prefer CI. Bump the version on `main`, let
 Linux architectures, push `engine-<version>`, publish the draft, then verify
 the public bytes before writing the pin.
 
-The workflow runs the mise toolchain's lint, Rust tests, installer checks,
+The workflow runs the mise toolchain's lint, Rust tests, engine pin checks,
 and release checks on native `ubuntu-24.04` x86_64 and `ubuntu-24.04-arm`
 aarch64 runners. Every native candidate must answer hello with the engine
 version and UI protocol. GPU/QML checks still require an Omarchy desktop.

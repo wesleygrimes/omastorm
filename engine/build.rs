@@ -1,4 +1,4 @@
-//! Converts the Natural Earth GeoJSON that `scripts/setup-fixture.sh`
+//! Converts the Natural Earth GeoJSON that `scripts/extract-fixtures.sh`
 //! extracts into the geography the binary embeds (DESIGN.md, basemap tiles,
 //! shipped geography): one polyline blob holding the 1:50m world set and the
 //! 1:10m set clipped to the NEXRAD network envelope, and the populated places
@@ -49,7 +49,7 @@ fn main() {
         println!("cargo:rerun-if-changed={}", path.display());
         if !path.is_file() {
             eprintln!(
-                "\nMissing {}.\nThe engine embeds the Natural Earth geography and the GeoNames gazetteer; run `bash scripts/setup-fixture.sh` once to extract and verify \
+                "\nMissing {}.\nThe engine embeds the Natural Earth geography and the GeoNames gazetteer; run `bash scripts/extract-fixtures.sh` once to extract and verify \
                  them (see data/README.md).\n",
                 path.display()
             );

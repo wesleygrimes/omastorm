@@ -9,7 +9,7 @@ die() { printf '%s\n' "$@" >&2; exit 1; }
 
 case ${1:-} in
   ''|--print-path) ;;
-  *) die "usage: install-launcher.sh [--print-path]" ;;
+  *) die "usage: write-desktop-entry.sh [--print-path]" ;;
 esac
 
 root=$PWD

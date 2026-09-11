@@ -17,7 +17,7 @@ rg -- 'omarchy plugin add https://github\.com/wesleygrimes/omastorm(\.git)? --en
   || fail 'README.md does not name omarchy plugin add https://github.com/wesleygrimes/omastorm --enable'
 
 # Omarchy never writes this file, and neither do install or launch.
-if rg -q 'bindings\.lua|hypr/' run.sh scripts/install-engine.sh scripts/install-launcher.sh; then
+if rg -q 'bindings\.lua|hypr/' run.sh scripts/fetch-engine.sh scripts/write-desktop-entry.sh; then
   fail 'run.sh or an installer references Hyprland bindings'
 fi
 

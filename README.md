@@ -65,7 +65,7 @@ o.bind("SUPER + SHIFT + R", "Omastorm", "omarchy shell shell toggle com.omastorm
 To list Omastorm in the app launcher:
 
 ```sh
-bash ~/.config/omarchy/plugins/com.omastorm.radar/scripts/install-launcher.sh
+bash ~/.config/omarchy/plugins/com.omastorm.radar/scripts/write-desktop-entry.sh
 ```
 
 Update with `omarchy plugin update com.omastorm.radar`.
@@ -202,7 +202,7 @@ Quickshell UI is the client. `manifest.json` is the Omarchy plugin.
 
 - `engine/` Rust daemon: NEXRAD decode, cache, and the socket protocol
 - `ui/` Quickshell QML for the bar popover and window
-- `scripts/` setup, checks, captures, install, and release
+- `scripts/` bootstrap, checks, captures, fetch, and release
 - `data/` fixture provenance, checksums, and vendored archives (`data/raw/` is extracted)
 - `golden/` decoder answer key for the archived KTLX scan
 - `docs/` protocol, configuration, and releasing

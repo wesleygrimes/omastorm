@@ -12,7 +12,7 @@ gh = "2"
 
 [tasks.setup]
 description = "Desktop package check, verified fixtures, cargo fetch, debug build"
-run = "bash scripts/setup.sh"
+run = "bash scripts/dev-bootstrap.sh"
 
 [tasks.refresh-fixtures]
 description = "Download upstream fixtures and rewrite data/fixtures plus SHA256SUMS"

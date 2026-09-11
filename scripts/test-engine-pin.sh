@@ -15,7 +15,7 @@ if [[ ${1:-} == --published-install-only ]]; then
   published_runtime=false
   shift
 fi
-[[ $# == 0 ]] || { echo 'Usage: check-engine-install.sh [--published-install-only]' >&2; exit 2; }
+[[ $# == 0 ]] || { echo 'Usage: test-engine-pin.sh [--published-install-only]' >&2; exit 2; }
 cd "$(dirname "$0")/.."
 
 fail() { printf '%s\n' "$@" >&2; exit 1; }
@@ -25,7 +25,7 @@ source scripts/engine-pin.sh
 
 # Several copies of the debug engine and a tree of HEAD: under target/, and
 # gone on exit, pass or fail.
-scratch=$PWD/target/check-engine-install
+scratch=$PWD/target/test-engine-pin
 rm -rf "$scratch"
 mkdir -p "$scratch"
 trap 'rm -rf "$scratch"' EXIT
@@ -51,7 +51,7 @@ sha256_$other=$other_sum
 PIN
 export OMASTORM_ENGINE_PIN=$pin
 dest=$XDG_DATA_HOME/omastorm/bin/omastorm-engine
-install_cmd=(bash scripts/install-engine.sh)
+install_cmd=(bash scripts/fetch-engine.sh)
 
 # A substituted file is refused and leaves no dest.
 printf 'not-the-engine' > "$scratch/bogus"
@@ -65,22 +65,22 @@ rg -q 'sha256 mismatch' "$scratch/mismatch.err" || fail "Mismatch error was uncl
 OMASTORM_ENGINE_ASSET="$debug" "${install_cmd[@]}"
 [[ -x $dest ]] || fail 'Installer did not write an executable dest'
 [[ $(sha256sum -- "$dest" | awk '{print $1}') == "$sum" ]] || fail 'Installed dest does not match the pin'
-path=$(OMASTORM_ENGINE_ASSET="$debug" bash scripts/install-engine.sh --print-path)
+path=$(OMASTORM_ENGINE_ASSET="$debug" bash scripts/fetch-engine.sh --print-path)
 [[ $path == "$dest" ]] || fail "--print-path: $path"
 
 # A dest that already matches is left alone; no asset and no download.
 unset OMASTORM_ENGINE_ASSET
-bash scripts/install-engine.sh
+bash scripts/fetch-engine.sh
 
 # The curl path (file://, no GitHub) verifies and installs too.
 rm -f "$dest"
-OMASTORM_ENGINE_URL="file://$debug" bash scripts/install-engine.sh
+OMASTORM_ENGINE_URL="file://$debug" bash scripts/fetch-engine.sh
 [[ -x $dest && $(sha256sum -- "$dest" | awk '{print $1}') == "$sum" ]] || fail 'file:// install did not match the pin'
 
 # A stale dest is replaced when a matching asset is supplied.
 printf 'stale' > "$dest"
 chmod 755 -- "$dest"
-OMASTORM_ENGINE_ASSET="$debug" bash scripts/install-engine.sh
+OMASTORM_ENGINE_ASSET="$debug" bash scripts/fetch-engine.sh
 [[ $(sha256sum -- "$dest" | awk '{print $1}') == "$sum" ]] || fail 'Stale dest was not replaced'
 
 # Both architectures select their own asset and checksum, including arm64 alias.
@@ -162,7 +162,7 @@ git archive HEAD | tar -x -C "$clone"
 # uncommitted changes to them; everything else is HEAD, as a clone would be.
 mkdir -p "$clone/scripts" "$clone/engine"
 cp -- run.sh "$clone/run.sh"
-cp -- scripts/install-engine.sh "$clone/scripts/install-engine.sh"
+cp -- scripts/fetch-engine.sh "$clone/scripts/fetch-engine.sh"
 cp -- scripts/engine-pin.sh "$clone/scripts/engine-pin.sh"
 install -D -m 644 "$pin" "$clone/engine/release.pin"
 rm -rf "$clone/target"
@@ -195,9 +195,9 @@ unset OMASTORM_ENGINE_ASSET
 export OMASTORM_ENGINE_PIN=$PWD/engine/release.pin
 rm -f "$dest"
 if [[ -f $cache ]]; then
-  OMASTORM_ENGINE_ASSET=$cache bash scripts/install-engine.sh
+  OMASTORM_ENGINE_ASSET=$cache bash scripts/fetch-engine.sh
 elif curl -fsI --max-time 5 https://github.com > /dev/null 2>&1; then
-  bash scripts/install-engine.sh
+  bash scripts/fetch-engine.sh
   install -D -m 755 "$dest" "$cache"
 else
   echo 'Committed pin: GitHub unreachable, the published asset was not verified this run.' >&2

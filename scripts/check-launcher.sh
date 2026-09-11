@@ -16,21 +16,21 @@ desktop=$apps/omastorm.desktop
 mark=$PWD/branding/mark/omastorm-mark-app.svg
 [[ -f $mark ]] || fail "Omastorm mark missing: $mark"
 
-if bash scripts/install-launcher.sh --bogus 2>"$scratch/usage.err"; then
-  fail 'install-launcher.sh accepted an unknown argument'
+if bash scripts/write-desktop-entry.sh --bogus 2>"$scratch/usage.err"; then
+  fail 'write-desktop-entry.sh accepted an unknown argument'
 fi
-rg -q 'usage: install-launcher.sh' "$scratch/usage.err" \
+rg -q 'usage: write-desktop-entry.sh' "$scratch/usage.err" \
   || fail "Unknown-arg error was unclear: $(cat "$scratch/usage.err")"
 
 # Install and launch never write the desktop file.
-if rg -q 'install-launcher' run.sh scripts/install-engine.sh; then
-  fail 'run.sh or install-engine.sh references install-launcher.sh'
+if rg -q 'write-desktop-entry' run.sh scripts/fetch-engine.sh; then
+  fail 'run.sh or fetch-engine.sh references write-desktop-entry.sh'
 fi
 [[ ! -e $desktop ]] || fail 'Scratch already had omastorm.desktop'
 
-path=$(bash scripts/install-launcher.sh --print-path)
+path=$(bash scripts/write-desktop-entry.sh --print-path)
 [[ $path == "$desktop" ]] || fail "--print-path: $path"
-[[ -f $desktop ]] || fail 'install-launcher.sh did not write omastorm.desktop'
+[[ -f $desktop ]] || fail 'write-desktop-entry.sh did not write omastorm.desktop'
 
 rg -q '^Type=Application$' "$desktop" || fail 'desktop Type missing'
 rg -q '^Name=Omastorm$' "$desktop" || fail 'desktop Name is not Omastorm'
@@ -49,7 +49,7 @@ fi
 
 # A second run refreshes the file in place.
 printf 'stale' > "$desktop"
-bash scripts/install-launcher.sh
+bash scripts/write-desktop-entry.sh
 rg -q '^Name=Omastorm$' "$desktop" || fail 'second run did not refresh omastorm.desktop'
 
 # The same DesktopEntries list the Omarchy launcher reads.

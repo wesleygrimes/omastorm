@@ -31,7 +31,7 @@ if rg -q '^\[tasks\.link\]' mise.toml; then
 fi
 rg -q 'link-plugin.sh --rescan' run.sh \
   || fail 'run.sh does not call link-plugin.sh --rescan'
-if rg -q 'link-plugin' scripts/install-engine.sh scripts/install-launcher.sh; then
+if rg -q 'link-plugin' scripts/fetch-engine.sh scripts/write-desktop-entry.sh; then
   fail 'an installer references link-plugin.sh'
 fi
 if rg -q 'OMASTORM_RESCAN_PLUGIN' scripts/check.sh scripts/capture-*.sh; then

@@ -10,7 +10,7 @@ The binary embeds Natural Earth geography, `data/sites.json`, and
 archived radar. A daemon starts with no station; `select_site` starts live
 polling. An `OMASTORM_ARCHIVE` scan is decoded at startup and labeled archived.
 Missing build data
-produces an error naming `scripts/setup-fixture.sh`; vendored archives and checksums
+produces an error naming `scripts/extract-fixtures.sh`; vendored archives and checksums
 are described in [data/README.md](../data/README.md).
 
 ## Runtime and storage
