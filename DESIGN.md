@@ -79,9 +79,10 @@ map center in this order:
 4. The location prompt: use approximate location or choose manually.
 
 When the first three sources have no valid center, show two actions in the
-existing prompt, with no additional dialog. "Use approximate location"
-discloses "Uses your public IP via wttr.in." and runs one bounded `curl` to
-`wttr.in/?format=j2` only on click (UI-side; not an engine command). "Choose
+existing prompt, with no additional dialog. "Use approximate location" runs
+one bounded `curl` to `wttr.in/?format=j2` only on click (UI-side; not an
+engine command); the provider and public-IP use are documented, and a
+successful view is labeled `IP NEAR …`. "Choose
 manually" opens the existing search and coordinates.
 Remember a successful estimate like any chosen view. While it is pending,
 manual selection remains available and takes priority over a late reply.

@@ -46,12 +46,6 @@ ColumnLayout {
         onClicked: prompt.session.requestIpLocation()
     }
     Word {
-        visible: !!prompt.session.engine.state && prompt.session.engine.state.source === "live"
-        text: "Uses your public IP via wttr.in."
-        font.pixelSize: 11
-        opacity: .7
-    }
-    Word {
         visible: !prompt.session.ipLocationDismissed && !!prompt.session.locationError
         text: prompt.session.locationError
         font.pixelSize: 11

@@ -55,6 +55,7 @@ QtObject {
         ipLocationDismissed = true;
         locationPending = false;
         locateAttempt += 1;
+        locator.queued = false;
         if (locator.running) locator.running = false;
     }
 
@@ -85,15 +86,29 @@ QtObject {
         var url = Quickshell.env("OMASTORM_LOCATION_URL") || "https://wttr.in/?format=j2";
         locator.command = ["curl", "-fsS", "--max-time", "10", "-A",
             "omastorm (https://omastorm.com)", url];
+        // Bind the attempt to this launch. If a prior curl is still dying after
+        // cancel, queue one restart instead of overwriting its exit attribution.
+        locator.attempt = locateAttempt;
+        if (locator.running) {
+            locator.queued = true;
+            return;
+        }
+        locator.queued = false;
         locator.running = true;
     }
 
     function acceptIpLocation(place) {
         if (!ready || hasView || ipLocationDismissed || !place
-            || !engine.state || engine.state.source !== "live") return;
+            || !engine.state || engine.state.source !== "live") {
+            locationPending = false;
+            return;
+        }
         // Recheck sources that may have arrived while the lookup was pending.
         resolve();
-        if (hasView) return;
+        if (hasView) {
+            locationPending = false;
+            return;
+        }
         centerLat = place.lat;
         centerLon = place.lon;
         placeName = place.name || "";
@@ -131,10 +146,23 @@ QtObject {
     }
 
     property Process locator: Process {
+        property int attempt: 0
+        property bool queued: false
         command: ["true"]
         stdout: StdioCollector { waitForEnd: true }
         onExited: function (exitCode) {
-            session.finishIpLocation(exitCode, String(stdout.text || ""), session.activeAttempt);
+            // A terminate-then-retry left the old curl running; start the queued
+            // launch and ignore this exit's stdout/code.
+            if (queued) {
+                queued = false;
+                if (!session.ipLocationDismissed && session.locationPending
+                    && attempt === session.locateAttempt) {
+                    running = true;
+                    return;
+                }
+                return;
+            }
+            session.finishIpLocation(exitCode, String(stdout.text || ""), attempt);
         }
     }
 

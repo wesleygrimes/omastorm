@@ -32,6 +32,7 @@ Item {
     property int labelSize: 12
     property real radarOpacity: 1    // the radar layer alone; the basemap keeps its strength
     property bool locked: false      // the accent frame on the active marker and tag (DESIGN.md, markers)
+    property bool interactive: true  // false while location prompt/picker owns the surface
     // A frame with a scan time is radar to draw. The loading placeholder
     // (docs/protocol.md, frame.status: no scan time, one blank row) draws no
     // radar; tiles, labels, markers, and coverage still show, so a station
@@ -86,6 +87,7 @@ Item {
     function reset() { center = null; span = Math.min(210, maxSpan); }
     signal navigated(real lat, real lon, real spanKm)
     function zoom(value, notify) {
+        if (!interactive) return;
         span = Math.max(25, Math.min(maxSpan, value));
         if (notify !== false) navigated(centerLat, centerLon, span);
     }
@@ -101,6 +103,7 @@ Item {
     // The keyboard pan (DESIGN.md, keyboard map): one step is an eighth of
     // the viewport's shorter side, in the given screen direction.
     function pan(dx, dy) {
+        if (!interactive) return;
         var stepPixels = Math.max(1, Math.round(Math.min(width, height) / 8)) * unitsPerPixel;
         look(viewCenterX + dx * stepPixels, viewCenterY + dy * stepPixels);
         navigated(centerLat, centerLon, span);
@@ -633,6 +636,7 @@ Item {
     }
     MouseArea {
         anchors.fill: parent
+        enabled: map.interactive
         cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
         property real lastX
         property real lastY

@@ -123,7 +123,11 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: Qt.alpha(picker.theme.background, .5)
-        MouseArea { anchors.fill: parent; onClicked: if (picker.closeOnScrim) picker.close() }
+        MouseArea {
+            anchors.fill: parent
+            onClicked: if (picker.closeOnScrim) picker.close()
+            onWheel: wheel => { wheel.accepted = true }
+        }
     }
     Rectangle {
         id: card
@@ -134,7 +138,7 @@ Item {
         color: Qt.alpha(picker.theme.background, .95)
         border.width: 1
         border.color: picker.theme.foreground
-        MouseArea { anchors.fill: parent }
+        MouseArea { anchors.fill: parent; onWheel: wheel => { wheel.accepted = true } }
         ColumnLayout {
             id: column
             anchors.fill: parent

@@ -104,6 +104,8 @@ ShellRoot {
                 assertThat(good && good.lat === 41.05 && good.name === "Stamford", "parse wttr home");
                 assertThat(Location.parseWttrHome("{}") === null, "reject empty wttr");
                 assertThat(Location.parseWttrHome('{"nearest_area":[{"latitude":"91","longitude":"0"}]}') === null, "reject bad wttr coords");
+                assertThat(Location.parseWttrHome('{"nearest_area":[{"latitude":null,"longitude":null}]}') === null, "reject null wttr coords");
+                assertThat(Location.parseWttrHome('{"nearest_area":[{"latitude":"","longitude":""}]}') === null, "reject blank wttr coords");
 
                 fresh({}, "", null);
                 assertThat(!s.locating && s.needsLocation && !s.locationPending, "startup requires consent");
@@ -179,6 +181,24 @@ ShellRoot {
         s.locationError = "";
         s.finishIpLocation(0, '{"nearest_area":[{"areaName":[{"value":"Stamford"}],"latitude":"41.05","longitude":"-73.54"}]}', s.locateAttempt);
         assertThat(s.hasView && s.locationSource === "ip", "retry accepts successful reply");
+
+        fresh({}, "", null);
+        s.locateAttempt += 1;
+        s.activeAttempt = s.locateAttempt;
+        s.ipLocationDismissed = false;
+        s.locationPending = true;
+        s.config.location = {lat: 36, lon: -79, name: "Stokesdale"};
+        s.finishIpLocation(0, '{"nearest_area":[{"areaName":[{"value":"Late"}],"latitude":"41.05","longitude":"-73.54"}]}', s.locateAttempt);
+        assertThat(s.locationSource === "weather" && s.centerLat === 36 && !s.locationPending, "resolve mid-lookup clears pending");
+
+        fresh({}, "", null);
+        s.locateAttempt += 1;
+        s.activeAttempt = s.locateAttempt;
+        s.ipLocationDismissed = false;
+        s.locationPending = true;
+        fake.state = {source: "archived", site: {id: "", locked: false, follow: true}};
+        s.finishIpLocation(0, '{"nearest_area":[{"areaName":[{"value":"Late"}],"latitude":"41.05","longitude":"-73.54"}]}', s.locateAttempt);
+        assertThat(s.needsLocation && !s.hasView && !s.locationPending, "archive mid-lookup clears pending");
 
         fresh({}, "", null);
         assertThat(s.needsLocation && !s.locationPending, "no automatic lookup");

@@ -157,13 +157,20 @@ function resolveReset(explicit, weather) {
 
 // wttr.in `?format=j2` nearest_area (DESIGN.md, approximate IP location).
 // j2 stays under a small body size; Omarchy's weather `j1` is much larger.
+function parseWttrCoord(value) {
+    // Number(null) and Number("") are 0 — reject those before coercing.
+    if (typeof value === "number") return value;
+    if (typeof value === "string" && value.trim()) return Number(value.trim());
+    return NaN;
+}
+
 function parseWttrHome(raw) {
     try {
         var json = typeof raw === "string" ? JSON.parse(raw) : raw;
         var areas = json && json.nearest_area;
         if (!areas || !areas.length) return null;
         var area = areas[0];
-        var lat = Number(area.latitude), lon = Number(area.longitude);
+        var lat = parseWttrCoord(area.latitude), lon = parseWttrCoord(area.longitude);
         if (!validPair(lat, lon)) return null;
         var name = "";
         var labels = [].concat(area.areaName || [], area.region || []);
