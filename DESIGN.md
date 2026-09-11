@@ -76,11 +76,18 @@ map center in this order:
 1. Explicit `center_lat` and `center_lon` in `config.toml`.
 2. The last center remembered in `state.json`.
 3. Valid coordinates from Omarchy's weather location (`weather.json`).
-4. A location chosen through Omastorm's location picker.
+4. The location prompt: use approximate location or choose manually.
 
-Only show onboarding when none of the first three sources supplies a valid
-center. The popover offers "Choose a location", opening the expanded
-window's picker. Offer place search and "Enter coordinates", which reveals
+When the first three sources have no valid center, show two actions in the
+existing prompt, with no additional dialog. "Use approximate location"
+discloses "Uses your public IP via wttr.in." and runs one bounded `curl` to
+`wttr.in/?format=j2` only on click (UI-side; not an engine command). "Choose
+manually" opens the existing search and coordinates.
+Remember a successful estimate like any chosen view. While it is pending,
+manual selection remains available and takes priority over a late reply.
+Failures show a short error and allow an explicit retry. There is no IP
+configuration knob; a click is the opt-in. IP never enables GPS or tracking.
+Offer place search and "Enter coordinates", which reveals
 labeled latitude and longitude fields with validation. Place search is an
 engine `search_places` reply over GeoNames cities with population ≥ 5000
 in the network envelope (state/region and country so two Jacksonvilles are
@@ -92,9 +99,10 @@ radar. Choosing a location writes `state.json`, never `config.toml`.
 
 Reuse Omarchy's location when available without requiring its weather plugin.
 Read weather settings only; never write them. Location search is an explicit
-user action handled through the engine. Do not use GeoClue or fetch at launch
-to discover the user's location.
-
+user action handled through the engine. Approximate IP lookup is an explicit
+UI action via wttr.in (`format=j2`, smaller than Omarchy weather's `j1`); the
+launcher and engine perform no IP lookup. Do not use GeoClue. Archived views
+never locate, and checks require the same explicit action as users.
 Resolve the radar separately: an explicit `locked_radar` in config wins,
 otherwise restore a remembered radar lock, otherwise choose the station
 nearest the map center. A radar lock alone does not supply a map center or

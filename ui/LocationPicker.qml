@@ -10,6 +10,10 @@ Item {
     id: picker
     property var theme
     property var engine
+    property var session: null
+    property bool onboarding: false
+    property bool manual: true
+    signal manualStarted()
     property real centerLat: 0
     property real centerLon: 0
     property bool compact: false
@@ -52,14 +56,17 @@ Item {
         return out;
     }
     visible: open
-    function show(text) {
+    function show(text, offerLocation) {
+        onboarding = offerLocation === true;
+        manual = !onboarding;
+        if (manual) manualStarted();
         field.text = text || "";
         latField.text = "";
         lonField.text = "";
         selected = 0;
         results = [];
         open = true;
-        Qt.callLater(() => { field.cursorPosition = field.length; field.forceActiveFocus(); });
+        Qt.callLater(() => { if (manual) { field.cursorPosition = field.length; field.forceActiveFocus(); } });
         search.restart();
     }
     function close() {
@@ -133,178 +140,197 @@ Item {
             anchors.fill: parent
             anchors.margins: 14
             spacing: 10
-            Rectangle {
+            Loader {
                 Layout.fillWidth: true
-                implicitHeight: 36
-                color: Qt.alpha(picker.theme.foreground, .04)
-                border.width: 1
-                border.color: Qt.alpha(picker.theme.foreground, .4)
-                RowLayout {
-                    anchors.fill: parent
-                    anchors.leftMargin: 10
-                    anchors.rightMargin: 10
-                    spacing: 10
-                    Canvas {
-                        implicitWidth: 16; implicitHeight: 16
-                        property color ink: picker.theme.foreground
-                        onInkChanged: requestPaint()
-                        onPaint: {
-                            var ctx = getContext("2d");
-                            ctx.reset(); ctx.clearRect(0, 0, width, height);
-                            ctx.strokeStyle = ink; ctx.lineWidth = 1.5;
-                            ctx.beginPath(); ctx.arc(6.5, 6.5, 4.5, 0, 2 * Math.PI); ctx.stroke();
-                            ctx.beginPath(); ctx.moveTo(10, 10); ctx.lineTo(14, 14); ctx.stroke();
-                        }
-                    }
-                    TextInput {
-                        id: field
-                        Layout.fillWidth: true
-                        Layout.fillHeight: true
-                        color: picker.theme.foreground
-                        font.family: picker.theme.font
-                        font.pixelSize: 13
-                        verticalAlignment: TextInput.AlignVCenter
-                        clip: true
-                        leftPadding: 0; rightPadding: 0
-                        cursorVisible: false
-                        cursorDelegate: Item {}
-                        Keys.onPressed: event => {
-                            if (event.key === Qt.Key_Escape) { picker.close(); event.accepted = true; }
-                            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { picker.accept(); event.accepted = true; }
-                            else if (event.key === Qt.Key_Up) { picker.move(-1); event.accepted = true; }
-                            else if (event.key === Qt.Key_Down) { picker.move(1); event.accepted = true; }
-                            else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
-                                picker.tab(event.key === Qt.Key_Backtab || !!(event.modifiers & Qt.ShiftModifier));
-                                event.accepted = true;
-                            }
-                            else if (event.key === Qt.Key_U && event.modifiers === Qt.ControlModifier) { field.text = ""; event.accepted = true; }
-                        }
-                        Rectangle {
-                            width: 7; height: 15
-                            x: field.cursorRectangle.x
-                            y: Math.round(field.cursorRectangle.y + (field.cursorRectangle.height - height) / 2)
-                            color: picker.theme.foreground
-                            opacity: .9
-                        }
-                    }
-                    Word { text: "place"; font.pixelSize: 10; opacity: .45; visible: !picker.compact }
-                }
-            }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 10
-                Word { text: "LAT"; font.pixelSize: 10; opacity: .55; Layout.preferredWidth: 28 }
-                Rectangle {
-                    Layout.fillWidth: true
-                    implicitHeight: 28
-                    color: Qt.alpha(picker.theme.foreground, .04)
-                    border.width: 1
-                    border.color: Qt.alpha(picker.theme.foreground, .4)
-                    TextInput {
-                        id: latField
-                        anchors.fill: parent
-                        anchors.leftMargin: 8
-                        anchors.rightMargin: 8
-                        color: picker.theme.foreground
-                        font.family: picker.theme.font
-                        font.pixelSize: 12
-                        verticalAlignment: TextInput.AlignVCenter
-                        clip: true
-                        Keys.onPressed: event => {
-                            if (event.key === Qt.Key_Escape) { picker.close(); event.accepted = true; }
-                            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { picker.accept(); event.accepted = true; }
-                            else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
-                                picker.tab(event.key === Qt.Key_Backtab || !!(event.modifiers & Qt.ShiftModifier));
-                                event.accepted = true;
-                            }
-                        }
-                    }
-                }
-                Word { text: "LON"; font.pixelSize: 10; opacity: .55; Layout.preferredWidth: 28 }
-                Rectangle {
-                    Layout.fillWidth: true
-                    implicitHeight: 28
-                    color: Qt.alpha(picker.theme.foreground, .04)
-                    border.width: 1
-                    border.color: Qt.alpha(picker.theme.foreground, .4)
-                    TextInput {
-                        id: lonField
-                        anchors.fill: parent
-                        anchors.leftMargin: 8
-                        anchors.rightMargin: 8
-                        color: picker.theme.foreground
-                        font.family: picker.theme.font
-                        font.pixelSize: 12
-                        verticalAlignment: TextInput.AlignVCenter
-                        clip: true
-                        Keys.onPressed: event => {
-                            if (event.key === Qt.Key_Escape) { picker.close(); event.accepted = true; }
-                            else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { picker.accept(); event.accepted = true; }
-                            else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
-                                picker.tab(event.key === Qt.Key_Backtab || !!(event.modifiers & Qt.ShiftModifier));
-                                event.accepted = true;
-                            }
-                        }
+                active: picker.onboarding && !picker.manual
+                visible: active
+                sourceComponent: LocationPrompt {
+                    session: picker.session
+                    theme: picker.theme
+                    onManualChosen: {
+                        picker.manual = true;
+                        picker.manualStarted();
+                        field.forceActiveFocus();
                     }
                 }
             }
             ColumnLayout {
                 Layout.fillWidth: true
-                spacing: 0
-                Repeater {
-                    model: picker.rows
+                visible: picker.manual
+                spacing: 10
+                Rectangle {
+                    Layout.fillWidth: true
+                    implicitHeight: 36
+                    color: Qt.alpha(picker.theme.foreground, .04)
+                    border.width: 1
+                    border.color: Qt.alpha(picker.theme.foreground, .4)
+                    RowLayout {
+                        anchors.fill: parent
+                        anchors.leftMargin: 10
+                        anchors.rightMargin: 10
+                        spacing: 10
+                        Canvas {
+                            implicitWidth: 16; implicitHeight: 16
+                            property color ink: picker.theme.foreground
+                            onInkChanged: requestPaint()
+                            onPaint: {
+                                var ctx = getContext("2d");
+                                ctx.reset(); ctx.clearRect(0, 0, width, height);
+                                ctx.strokeStyle = ink; ctx.lineWidth = 1.5;
+                                ctx.beginPath(); ctx.arc(6.5, 6.5, 4.5, 0, 2 * Math.PI); ctx.stroke();
+                                ctx.beginPath(); ctx.moveTo(10, 10); ctx.lineTo(14, 14); ctx.stroke();
+                            }
+                        }
+                        TextInput {
+                            id: field
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            color: picker.theme.foreground
+                            font.family: picker.theme.font
+                            font.pixelSize: 13
+                            verticalAlignment: TextInput.AlignVCenter
+                            clip: true
+                            leftPadding: 0; rightPadding: 0
+                            cursorVisible: false
+                            cursorDelegate: Item {}
+                            Keys.onPressed: event => {
+                                if (event.key === Qt.Key_Escape) { picker.close(); event.accepted = true; }
+                                else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { picker.accept(); event.accepted = true; }
+                                else if (event.key === Qt.Key_Up) { picker.move(-1); event.accepted = true; }
+                                else if (event.key === Qt.Key_Down) { picker.move(1); event.accepted = true; }
+                                else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                                    picker.tab(event.key === Qt.Key_Backtab || !!(event.modifiers & Qt.ShiftModifier));
+                                    event.accepted = true;
+                                }
+                                else if (event.key === Qt.Key_U && event.modifiers === Qt.ControlModifier) { field.text = ""; event.accepted = true; }
+                            }
+                            Rectangle {
+                                width: 7; height: 15
+                                x: field.cursorRectangle.x
+                                y: Math.round(field.cursorRectangle.y + (field.cursorRectangle.height - height) / 2)
+                                color: picker.theme.foreground
+                                opacity: .9
+                            }
+                        }
+                        Word { text: "place"; font.pixelSize: 10; opacity: .45; visible: !picker.compact }
+                    }
+                }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 10
+                    Word { text: "LAT"; font.pixelSize: 10; opacity: .55; Layout.preferredWidth: 28 }
                     Rectangle {
-                        id: row
-                        required property var modelData
-                        required property int index
-                        readonly property bool current: index === picker.selected
-                        readonly property color ink: current ? picker.theme.accent : picker.theme.foreground
                         Layout.fillWidth: true
                         implicitHeight: 28
-                        color: current ? Qt.alpha(picker.theme.foreground, .08) : "transparent"
-                        RowLayout {
+                        color: Qt.alpha(picker.theme.foreground, .04)
+                        border.width: 1
+                        border.color: Qt.alpha(picker.theme.foreground, .4)
+                        TextInput {
+                            id: latField
                             anchors.fill: parent
-                            anchors.leftMargin: 12
-                            anchors.rightMargin: 12
-                            spacing: 12
-                            Word { text: row.modelData.name; font.bold: true; color: row.ink; Layout.fillWidth: true }
-                            Word { text: row.modelData.where; font.pixelSize: 10; color: row.ink; opacity: .6 }
+                            anchors.leftMargin: 8
+                            anchors.rightMargin: 8
+                            color: picker.theme.foreground
+                            font.family: picker.theme.font
+                            font.pixelSize: 12
+                            verticalAlignment: TextInput.AlignVCenter
+                            clip: true
+                            Keys.onPressed: event => {
+                                if (event.key === Qt.Key_Escape) { picker.close(); event.accepted = true; }
+                                else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { picker.accept(); event.accepted = true; }
+                                else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                                    picker.tab(event.key === Qt.Key_Backtab || !!(event.modifiers & Qt.ShiftModifier));
+                                    event.accepted = true;
+                                }
+                            }
                         }
-                        MouseArea {
+                    }
+                    Word { text: "LON"; font.pixelSize: 10; opacity: .55; Layout.preferredWidth: 28 }
+                    Rectangle {
+                        Layout.fillWidth: true
+                        implicitHeight: 28
+                        color: Qt.alpha(picker.theme.foreground, .04)
+                        border.width: 1
+                        border.color: Qt.alpha(picker.theme.foreground, .4)
+                        TextInput {
+                            id: lonField
                             anchors.fill: parent
-                            hoverEnabled: true
-                            onPositionChanged: picker.selected = row.index
-                            onClicked: { picker.selected = row.index; picker.accept(); }
+                            anchors.leftMargin: 8
+                            anchors.rightMargin: 8
+                            color: picker.theme.foreground
+                            font.family: picker.theme.font
+                            font.pixelSize: 12
+                            verticalAlignment: TextInput.AlignVCenter
+                            clip: true
+                            Keys.onPressed: event => {
+                                if (event.key === Qt.Key_Escape) { picker.close(); event.accepted = true; }
+                                else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { picker.accept(); event.accepted = true; }
+                                else if (event.key === Qt.Key_Tab || event.key === Qt.Key_Backtab) {
+                                    picker.tab(event.key === Qt.Key_Backtab || !!(event.modifiers & Qt.ShiftModifier));
+                                    event.accepted = true;
+                                }
+                            }
                         }
                     }
                 }
-                Word {
-                    visible: !!picker.coordError
-                    text: picker.coordError.toUpperCase()
-                    color: picker.theme.accent
-                    Layout.fillWidth: true; Layout.leftMargin: 12; Layout.preferredHeight: 28; font.letterSpacing: 1
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    spacing: 0
+                    Repeater {
+                        model: picker.rows
+                        Rectangle {
+                            id: row
+                            required property var modelData
+                            required property int index
+                            readonly property bool current: index === picker.selected
+                            readonly property color ink: current ? picker.theme.accent : picker.theme.foreground
+                            Layout.fillWidth: true
+                            implicitHeight: 28
+                            color: current ? Qt.alpha(picker.theme.foreground, .08) : "transparent"
+                            RowLayout {
+                                anchors.fill: parent
+                                anchors.leftMargin: 12
+                                anchors.rightMargin: 12
+                                spacing: 12
+                                Word { text: row.modelData.name; font.bold: true; color: row.ink; Layout.fillWidth: true }
+                                Word { text: row.modelData.where; font.pixelSize: 10; color: row.ink; opacity: .6 }
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                hoverEnabled: true
+                                onPositionChanged: picker.selected = row.index
+                                onClicked: { picker.selected = row.index; picker.accept(); }
+                            }
+                        }
+                    }
+                    Word {
+                        visible: !!picker.coordError
+                        text: picker.coordError.toUpperCase()
+                        color: picker.theme.accent
+                        Layout.fillWidth: true; Layout.leftMargin: 12; Layout.preferredHeight: 28; font.letterSpacing: 1
+                    }
+                    Word {
+                        visible: !picker.coordError && picker.coordEntry.lat !== undefined
+                        text: picker.coordEntry.lat === undefined ? "" : "↵ GO TO " + picker.coordEntry.lat.toFixed(4) + ", " + picker.coordEntry.lon.toFixed(4)
+                        Layout.fillWidth: true; Layout.leftMargin: 12; Layout.preferredHeight: 28; opacity: .55; font.letterSpacing: 1
+                    }
+                    Word {
+                        visible: !picker.coordError && picker.coordEntry.lat === undefined && !picker.rows.length
+                        text: picker.query.trim() ? "NO PLACE MATCHES · TRY COORDINATES" : "TOWNS OF 5,000+ PEOPLE, OR ENTER LATITUDE AND LONGITUDE"
+                        Layout.fillWidth: true; Layout.leftMargin: 12; Layout.preferredHeight: 28; opacity: .55; font.letterSpacing: 1
+                    }
                 }
-                Word {
-                    visible: !picker.coordError && picker.coordEntry.lat !== undefined
-                    text: picker.coordEntry.lat === undefined ? "" : "↵ GO TO " + picker.coordEntry.lat.toFixed(4) + ", " + picker.coordEntry.lon.toFixed(4)
-                    Layout.fillWidth: true; Layout.leftMargin: 12; Layout.preferredHeight: 28; opacity: .55; font.letterSpacing: 1
+                Rectangle { Layout.fillWidth: true; height: 1; color: Qt.alpha(picker.theme.foreground, .17) }
+                RowLayout {
+                    Layout.fillWidth: true
+                    spacing: 14
+                    Word { text: "tab fields"; font.pixelSize: 10; opacity: .55; visible: !picker.compact }
+                    Word { text: "↑ ↓ move"; font.pixelSize: 10; opacity: .55 }
+                    Word { text: "↵ set location"; font.pixelSize: 10; opacity: .55 }
+                    Word { text: "esc close"; font.pixelSize: 10; opacity: .55; visible: !picker.compact }
+                    Item { Layout.fillWidth: true }
+                    Word { text: picker.rows.length ? picker.rows.length + " shown" : ""; font.pixelSize: 10; opacity: .55 }
                 }
-                Word {
-                    visible: !picker.coordError && picker.coordEntry.lat === undefined && !picker.rows.length
-                    text: picker.query.trim() ? "NO PLACE MATCHES · TRY COORDINATES" : "TOWNS OF 5,000+ PEOPLE, OR ENTER LATITUDE AND LONGITUDE"
-                    Layout.fillWidth: true; Layout.leftMargin: 12; Layout.preferredHeight: 28; opacity: .55; font.letterSpacing: 1
-                }
-            }
-            Rectangle { Layout.fillWidth: true; height: 1; color: Qt.alpha(picker.theme.foreground, .17) }
-            RowLayout {
-                Layout.fillWidth: true
-                spacing: 14
-                Word { text: "tab fields"; font.pixelSize: 10; opacity: .55; visible: !picker.compact }
-                Word { text: "↑ ↓ move"; font.pixelSize: 10; opacity: .55 }
-                Word { text: "↵ set location"; font.pixelSize: 10; opacity: .55 }
-                Word { text: "esc close"; font.pixelSize: 10; opacity: .55; visible: !picker.compact }
-                Item { Layout.fillWidth: true }
-                Word { text: picker.rows.length ? picker.rows.length + " shown" : ""; font.pixelSize: 10; opacity: .55 }
             }
         }
     }

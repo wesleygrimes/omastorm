@@ -24,7 +24,7 @@ mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CACHE_HOME" "$demo_dir/shaders" "$demo_dir/fra
 jq -r --arg id "$site" '.sites[] | select(.id==$id) | "center_lat = \(.lat)\ncenter_lon = \(.lon)\nlocked_radar = \"\(.id)\""' engine/data/sites.json > "$OMASTORM_CONFIG"
 cleanup() { target/debug/omastorm-engine stop >/dev/null 2>&1 || true; }
 trap cleanup EXIT
-cp ui/Theme.qml ui/Engine.qml ui/RadarMark.qml ui/RadarMap.qml ui/SitePicker.qml ui/Sites.js ui/KeysSheet.qml ui/Keys.js ui/Timeline.js ui/Config.qml ui/Toml.js ui/Location.js ui/LocationPicker.qml ui/Remembered.qml ui/PluginSession.qml ui/qmldir "$demo_dir/"
+cp ui/Theme.qml ui/Engine.qml ui/RadarMark.qml ui/RadarMap.qml ui/SitePicker.qml ui/Sites.js ui/KeysSheet.qml ui/Keys.js ui/Timeline.js ui/Config.qml ui/Toml.js ui/Location.js ui/LocationPicker.qml ui/LocationPrompt.qml ui/Remembered.qml ui/PluginSession.qml ui/qmldir "$demo_dir/"
 cp ui/shaders/*.qsb "$demo_dir/shaders/"
 ruby - "$demo_dir" <<'RUBY'
 dir = ARGV.fetch(0)

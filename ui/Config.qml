@@ -59,7 +59,8 @@ QtObject {
     function parseLocation(raw) {
         try {
             var json = JSON.parse(raw);
-            var lat = Number(json.latitude), lon = Number(json.longitude);
+            var lat = json.latitude, lon = json.longitude;
+            if (typeof lat !== "number" || typeof lon !== "number") return null;
             if (!isFinite(lat) || !isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
             return { name: typeof json.name === "string" ? json.name : "", lat: lat, lon: lon };
         } catch (e) { return null; }

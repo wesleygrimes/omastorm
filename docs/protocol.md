@@ -355,7 +355,8 @@ to the engine restores the necessary selection and flags without resetting
 the active camera. A change of frame or station never re-centers the map
 except when the user picks a station in search, which the UI centres on.
 Location picks write state.json. With no location, the popover offers the
-picker instead of inventing a centre.
+prompt if no source supplies a center; approximate IP lookup is a UI `curl` to
+wttr.in after an explicit click, not an engine command.
 
 `hello` additionally includes `pid`, `build` (an opaque fingerprint),
 `sitesSource`, `sitesRetrieved`, and `sitesNotes`. These allow the launcher to

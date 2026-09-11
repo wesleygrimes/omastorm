@@ -29,10 +29,31 @@ Resolve the map center from the first valid source:
 3. Omarchy's weather coordinates in
    `~/.local/state/omarchy/settings/weather.json` (`name`, `latitude`,
    `longitude`). File existence alone is insufficient; coordinates must be valid.
-4. The location picker: search for a place or enter latitude and longitude.
+4. The location prompt: choose manually or use approximate location.
 
-A missing location opens a "Choose a location" prompt in the popover; its
-button opens the expanded window's picker. Accepting a location saves the
+**Use approximate location** runs one `curl` to wttr.in (`?format=j2`) from
+the UI to estimate your city from your public IP. No request happens until
+you click; there is no configuration switch and no engine command. The
+provider receives the connection's public IP. Omastorm never writes Omarchy's
+weather settings. `format=j2` is used because Omarchy weather's `j1` response
+is much larger; both expose `nearest_area`.
+
+The UI remembers a successful view in `state.json`. A reopened app uses that
+view without another lookup. The initial view is labeled `IP NEAR …`;
+coordinates may reflect a VPN or ISP location. Choose manually to correct an
+estimate.
+
+While locating, manual selection remains available. A failed request shows a
+short error and can be retried. Requests time out after ten seconds. Manual
+selection or navigation takes priority over a late response. Archived
+sessions never locate. `OMASTORM_LOCATION_URL` lets tests substitute a local
+URL; isolated checks still need to invoke the explicit action.
+
+IP lookup is a one-time starting position. It never enables GPS or continuous
+camera tracking.
+
+A missing location opens the same choice in the popover and expanded window.
+Choose manually opens the existing search and coordinate fields. Accepting a location saves the
 view in state. Weather-derived initial coordinates are also saved in state.
 Neither route adds coordinate overrides to config. The picker remains
 available through `Shift+H` and LOCATION after onboarding.

@@ -50,8 +50,10 @@ sha256 against `engine/release.pin`, and installs it under
 `~/.local/share/omastorm/bin`. Runtime files, cached data, remembered view state, and configuration stay
 inside Omastorm's own directories.
 
-On first use, Omastorm uses your Omarchy weather location when available;
-otherwise it prompts you to search for a place or enter coordinates. To set
+On first use, Omastorm uses your Omarchy weather location when available.
+Otherwise, choose a place manually or click **Use approximate location** to
+estimate your city using your public IP via wttr.in. No IP-location request
+is made before you click. To set
 a fixed launch location, including during agent-assisted installation, see
 [configuration and remembered state](docs/configuration.md).
 
@@ -119,8 +121,7 @@ last map center, zoom, and UI radar lock separately in
 `Shift+H`, or LOCATION, opens the location picker; it writes state, not config.
 
 Explicit center coordinates win on every launch. Without them, Omastorm
-restores your last view, then falls back to the weather location or location
-picker. Radar selection is independent: a configured lock wins, otherwise a
+restores your last view, then falls back to weather or the location prompt. Radar selection is independent: a configured lock wins, otherwise a
 remembered lock is restored, otherwise the nearest radar follows the map.
 
 ```toml

@@ -19,7 +19,8 @@ Item {
         opened = true;
         if (session) session.windowOpen = true;
         applyView();
-        if (store.needsLocation || store.pendingLocationPicker) Qt.callLater(() => locationPicker.show(""));
+        if (store.pendingLocationPicker) Qt.callLater(() => locationPicker.show(""));
+        else maybeOfferLocation();
     }
     function close() {
         if (!opened) return;
@@ -174,14 +175,15 @@ Item {
         }
     }
     function maybeOfferLocation() {
-        if (!opened || !store.needsLocation || locationPicker.open) return;
+        if (!opened || !store.initialized || !store.needsLocation || store.locating || locationPicker.open) return;
         Qt.callLater(() => {
-            if (app.opened && app.store.needsLocation && !locationPicker.open) locationPicker.show("");
+            if (app.opened && app.store.initialized && app.store.needsLocation && !app.store.locating && !locationPicker.open) locationPicker.show("", true);
         });
     }
     Connections {
         target: store
         function onViewChanged() {
+            if (locationPicker.open && locationPicker.onboarding && !app.store.needsLocation) locationPicker.close();
             if (app.opened) app.applyView();
             app.maybeOfferLocation();
         }
@@ -254,7 +256,7 @@ Item {
         function status(): string {
             return JSON.stringify({sheet: sheet.open, menu: treatmentMenu.opened, treatment: app.treatment, weakFloor: app.weakFloor === null ? "off" : app.weakFloor, error: app.configError,
                                    span: Math.round(map.span * 10) / 10, lat: Math.round(map.centerLat * 1000) / 1000, lon: Math.round(map.centerLon * 1000) / 1000,
-                                   locationSource: app.store.locationSource, needsLocation: app.store.needsLocation,
+                                   locationSource: app.store.locationSource, needsLocation: app.store.needsLocation, locating: app.store.locating,
                                    site: app.siteId, locked: app.locked, lockSource: app.store.lockSource, outsideCoverage: app.outsideCoverage});
         }
     }
@@ -281,7 +283,12 @@ Item {
         if (mockGps && mockGps !== "paused") return "GPS";
         var t = app.resetTarget;
         if (t && Location.distanceKm(map.centerLat, map.centerLon, t.lat, t.lon) < 2) return (t.name || "OMARCHY'S LOCATION").toUpperCase();
-        if (app.store.placeName && Location.distanceKm(map.centerLat, map.centerLon, app.store.centerLat, app.store.centerLon) < 2) return app.store.placeName.toUpperCase();
+        if (app.store.placeName && Location.distanceKm(map.centerLat, map.centerLon, app.store.centerLat, app.store.centerLon) < 2) {
+            var name = app.store.placeName.toUpperCase();
+            return app.store.locationSource === "ip" ? "IP NEAR " + name : name;
+        }
+        if (app.store.locationSource === "ip" && Location.distanceKm(map.centerLat, map.centerLon, app.store.centerLat, app.store.centerLon) < 2)
+            return "IP NEAR YOU";
         var lat = map.centerLat, lon = map.centerLon;
         return Math.abs(lat).toFixed(2) + "° " + (lat < 0 ? "S" : "N") + "  " + Math.abs(lon).toFixed(2) + "° " + (lon < 0 ? "W" : "E");
     }
@@ -656,6 +663,7 @@ Item {
                     radarOpacity: app.condition === "unavailable" ? .6 : 1
                     labelSize: win.compact ? 10 : 12
                     locked: app.locked
+                    onNavigated: (lat, lon, spanKm) => app.store.userNavigated(lat, lon, spanKm)
                     // A settled pan hands the centre to the engine, which switches
                     // station while following and unlocked; the camera stays.
                     onViewSettled: (lat, lon) => {
@@ -1014,6 +1022,8 @@ Item {
           }
           LocationPicker {
             id: locationPicker
+            session: app.store
+            onManualStarted: app.store.cancelIpLocation()
             anchors.fill: parent
             theme: app.theme
             engine: engine

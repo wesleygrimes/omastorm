@@ -125,6 +125,7 @@ FocusScope {
                 weakFloor: card.session.weakFloor
                 labelSize: 10
                 radarOpacity: card.condition === "unavailable" ? .6 : 1
+                onNavigated: (lat, lon, spanKm) => card.session.userNavigated(lat, lon, spanKm)
                 onTilesNeeded: (z, x0, y0, x1, y1) => connection.send({type: "tiles_needed", z: z, x0: x0, y0: y0, x1: x1, y1: y1})
                 function applyView() {
                     if (!card.session.hasView) return;
@@ -181,14 +182,12 @@ FocusScope {
                     cursorShape: Qt.PointingHandCursor
                     onClicked: { card.session.requestLocationPicker(); card.expandRequested(); }
                 }
-                ColumnLayout {
+                LocationPrompt {
                     anchors.centerIn: parent
                     width: parent.width - 32
-                    spacing: 10
-                    Label { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; text: "CHOOSE A LOCATION"; font.bold: true; font.pixelSize: 13 }
-                    Label { Layout.fillWidth: true; horizontalAlignment: Text.AlignHCenter; wrapMode: Text.Wrap; opacity: .7; font.pixelSize: 11
-                        text: "Search a town of 5,000+ people, or enter latitude and longitude in the window." }
-                    Control { Layout.alignment: Qt.AlignHCenter; text: "CHOOSE A LOCATION"; onClicked: { card.session.requestLocationPicker(); card.expandRequested(); } }
+                    session: card.session
+                    theme: card.theme
+                    onManualChosen: { card.session.requestLocationPicker(); card.expandRequested(); }
                 }
             }
         }

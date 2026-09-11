@@ -27,6 +27,12 @@ QtObject {
     property bool needsLocation: false
     property string placeName: ""
     property string locationSource: ""
+    property bool ipLocationDismissed: true
+    property bool locationPending: false
+    property string locationError: ""
+    property int locateAttempt: 0
+    property int activeAttempt: 0
+    readonly property bool locating: needsLocation && !ipLocationDismissed && locationPending
     property real centerLat: 0
     property real centerLon: 0
     property real span: Location.DEFAULT_SPAN
@@ -40,8 +46,96 @@ QtObject {
     signal locationPickerRequested()
 
     function requestLocationPicker() {
+        cancelIpLocation();
         pendingLocationPicker = true;
         locationPickerRequested();
+    }
+
+    function cancelIpLocation() {
+        ipLocationDismissed = true;
+        locationPending = false;
+        locateAttempt += 1;
+        if (locator.running) locator.running = false;
+    }
+
+    function userNavigated(lat, lon, spanKm) {
+        if (!Location.validPair(lat, lon)) return;
+        if (needsLocation) {
+            centerLat = lat;
+            centerLon = lon;
+            span = Location.clampSpan(spanKm);
+            locationSource = "state";
+            hasView = true;
+            needsLocation = false;
+            persist();
+            applyRadar();
+        }
+        cancelIpLocation();
+    }
+
+    // One-shot wttr.in estimate (DESIGN.md). UI curl — not the engine.
+    function requestIpLocation() {
+        if (!initialized || !ready || hasView || !needsLocation
+            || locationPending || !engine.state || engine.state.source !== "live") return;
+        locateAttempt += 1;
+        activeAttempt = locateAttempt;
+        ipLocationDismissed = false;
+        locationError = "";
+        locationPending = true;
+        var url = Quickshell.env("OMASTORM_LOCATION_URL") || "https://wttr.in/?format=j2";
+        locator.command = ["curl", "-fsS", "--max-time", "10", "-A",
+            "omastorm (https://omastorm.com)", url];
+        locator.running = true;
+    }
+
+    function acceptIpLocation(place) {
+        if (!ready || hasView || ipLocationDismissed || !place
+            || !engine.state || engine.state.source !== "live") return;
+        // Recheck sources that may have arrived while the lookup was pending.
+        resolve();
+        if (hasView) return;
+        centerLat = place.lat;
+        centerLon = place.lon;
+        placeName = place.name || "";
+        locationSource = "ip";
+        span = Location.clampSpan(remembered.span);
+        hasView = true;
+        needsLocation = false;
+        locationPending = false;
+        persist();
+        viewChanged();
+        applyRadar();
+    }
+
+    function finishIpLocation(exitCode, raw, attempt) {
+        // A cancelled or superseded curl can still report; ignore it.
+        if (attempt !== undefined && attempt !== locateAttempt) return;
+        if (ipLocationDismissed || hasView || !needsLocation) {
+            locationPending = false;
+            return;
+        }
+        if (exitCode !== 0) {
+            locationError = "Couldn’t find your location. Try again or choose manually.";
+            locationPending = false;
+            viewChanged();
+            return;
+        }
+        var place = Location.parseWttrHome(raw);
+        if (!place) {
+            locationError = "Couldn’t find your location. Try again or choose manually.";
+            locationPending = false;
+            viewChanged();
+            return;
+        }
+        acceptIpLocation(place);
+    }
+
+    property Process locator: Process {
+        command: ["true"]
+        stdout: StdioCollector { waitForEnd: true }
+        onExited: function (exitCode) {
+            session.finishIpLocation(exitCode, String(stdout.text || ""), session.activeAttempt);
+        }
     }
 
     function resolve() {
@@ -142,6 +236,7 @@ QtObject {
 
     function setPlace(lat, lon, name) {
         if (!Location.validPair(lat, lon)) return;
+        cancelIpLocation();
         placeName = name || "";
         locationSource = "state";
         needsLocation = false;
@@ -187,6 +282,7 @@ QtObject {
         lat = Number(lat);
         lon = Number(lon);
         if (!id || !Location.validPair(lat, lon)) return;
+        cancelIpLocation();
         placeName = name || id;
         locationSource = "state";
         needsLocation = false;
@@ -258,6 +354,7 @@ QtObject {
     }
 
     property Timer persistTimer: Timer { interval: 400; onTriggered: session.persist() }
+    onLocatingChanged: viewChanged()
     property Connections engineEvents: Connections {
         target: session.engine
         function onStateChanged() {
