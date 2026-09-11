@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-check_dir="$PWD/target/check-map-sites"
-mkdir -p "$check_dir" review
+# Harness outside the checkout: Omarchy rejects a shaders symlink in the plugin folder.
+check_dir=$(mktemp -d /tmp/omastorm-check-map-sites.XXXXXX)
+trap 'rm -rf "$check_dir"' EXIT
+mkdir -p review
 rm -f review/site-overlay.png
 cp ui/RadarMap.qml ui/Engine.qml "$check_dir/"
 # Expose the real delegate only in the harness, to check its scene transform.

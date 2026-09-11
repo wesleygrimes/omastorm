@@ -25,6 +25,8 @@ rm -f "$review"/states-*.png
 # real cache; ensure in run.sh finds them by build under XDG_RUNTIME_DIR.
 # The windows read a scratch config.toml naming the station, or none.
 scratch=$(mktemp -d /tmp/omastorm-states.XXXXXX)
+harness_dir=
+trap 'rm -rf "$scratch" ${harness_dir:+"$harness_dir"}' EXIT
 mkdir -p "$scratch/offline" "$scratch/silent" "$scratch/cache"
 config_for() { # station id, or nothing for no configured radar
   local file="$scratch/config-${1:-none}.toml"
@@ -66,6 +68,7 @@ jobs -p | xargs -r kill 2>/dev/null || true
 # The harness shell (scripts/capture-harness.sh): the real UI files with
 # OMASTORM_STATE_OVERRIDE laid over every state.
 harness=$(bash scripts/capture-harness.sh)
+harness_dir=$(dirname "$harness")
 synthetic() { # name, override
   capture "$1" 6000 OMASTORM_QML="$harness" OMASTORM_CONFIG="$(config_for "$site")" OMASTORM_STATE_OVERRIDE="$2"
 }

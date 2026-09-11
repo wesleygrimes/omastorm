@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/.."
-check_dir="$PWD/target/check-map-network"
-mkdir -p "$check_dir" review
+# Harness outside the checkout: Omarchy rejects a shaders symlink in the plugin folder.
+check_dir=$(mktemp -d /tmp/omastorm-check-map-network.XXXXXX)
+trap 'rm -rf "$check_dir"' EXIT
+mkdir -p review
 rm -f review/network-*.png
 cp ui/RadarMap.qml ui/Engine.qml "$check_dir/"
 cp tests/map-network.qml "$check_dir/shell.qml"
