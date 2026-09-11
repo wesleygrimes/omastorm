@@ -153,6 +153,10 @@ omarchy restart shell
 
 The engine runs as one shared daemon per login. Its log is
 `$XDG_RUNTIME_DIR/omastorm/engine.log` (usually `/run/user/<uid>/omastorm/`).
+If live polling receives no new chunk for 90 seconds, the engine rediscovers
+the latest volume automatically, keeping cached frames available. Recovery
+attempts are recorded in `engine.log`.
+
 If the popover says the engine could not be installed, the download or its
 sha256 check failed; the reason is in `bootstrap.log` in the same directory,
 and opening the popover again retries. To restart the engine by hand:

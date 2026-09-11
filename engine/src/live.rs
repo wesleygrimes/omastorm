@@ -24,10 +24,10 @@ use nexrad_data::aws::realtime::{
 use nexrad_data::result::{Error, aws::AWSError};
 use nexrad_data::volume::Record;
 use nexrad_model::data::{Radial, RadialStatus};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::{
     sync::mpsc::Sender,
-    time::{sleep, timeout},
+    time::{Instant, error::Elapsed, sleep, timeout, timeout_at},
 };
 
 /// NOAA's real-time bucket, named in frame provenance (`nexrad-data` owns
@@ -52,10 +52,10 @@ const MAX_BACK_OFF: Duration = Duration::from_secs(60);
 const OFFLINE_AFTER: u32 = 2;
 const RESTART_AFTER: u32 = 4;
 /// Higher cuts of the same volume still arrive every 4–12 s after the
-/// lowest cut ends, so a long stretch of `try_next` returning `None` means
-/// the iterator is parked on a chunk that will never appear (a volume the
-/// bucket has rotated off, or a sequence the station skipped). Restart
-/// discovery instead of waiting until the UI goes UNAVAILABLE.
+/// lowest cut ends. Bound the time without a chunk across empty polls,
+/// network errors, and requests still in flight: the iterator may be parked
+/// on a chunk that will never appear (a rotated volume or skipped sequence).
+/// Restart discovery instead of waiting until the UI goes UNAVAILABLE.
 const QUIET_RESTART: Duration = Duration::from_secs(90);
 /// Chunks replayed from a volume's start when the VCP could not be read and
 /// so no chunk can be mapped to a cut: the lowest cut of a super-resolution
@@ -76,12 +76,6 @@ fn live_log(site: &str, message: impl std::fmt::Display) {
         "{} Live {site}: {message}",
         Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true)
     );
-}
-
-/// `try_next` has returned `None` (chunk not ready) this long since the last
-/// actual chunk. Higher cuts keep the iterator busy on a live volume.
-fn quiet_too_long(since_chunk: Instant, now: Instant) -> bool {
-    now.saturating_duration_since(since_chunk) >= QUIET_RESTART
 }
 
 /// A rediscovery (or a respawned poller) that finds only a sweep already
@@ -432,6 +426,25 @@ impl Drop for AbortOnDrop {
     }
 }
 
+/// Consume empty polls without extending the deadline for chunk progress.
+/// The callback waits between empty polls and returns errors as results.
+async fn wait_for_progress<S, T, F: std::future::Future<Output = (S, Option<T>)>>(
+    deadline: Instant,
+    mut state: S,
+    mut poll: impl FnMut(S) -> F,
+) -> Result<(S, T), Elapsed> {
+    timeout_at(deadline, async {
+        loop {
+            let (next_state, result) = poll(state).await;
+            state = next_state;
+            if let Some(result) = result {
+                return (state, result);
+            }
+        }
+    })
+    .await
+}
+
 /// Poll `site` until the task is aborted or the event channel closes.
 /// `cached` holds the start times of the frames already catalogued for the
 /// station, so the backfill does not fetch them again and a rediscovery
@@ -527,12 +540,39 @@ pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>, skip_kn
         skip_known = true;
 
         let mut failures = 0;
-        let mut last_chunk = Instant::now();
+        let mut deadline = Instant::now() + QUIET_RESTART;
         loop {
-            match timeout(CALL_TIMEOUT, iterator.try_next()).await {
+            let next = wait_for_progress(deadline, iterator, async |mut iterator| {
+                let result = match timeout(CALL_TIMEOUT, iterator.try_next()).await {
+                    Ok(Ok(None)) => {
+                        let wait = iterator
+                            .time_until_next()
+                            .and_then(|d| d.to_std().ok())
+                            .unwrap_or(IDLE)
+                            .clamp(MIN_WAIT, MAX_WAIT);
+                        sleep(wait).await;
+                        None
+                    }
+                    result => Some(result),
+                };
+                (iterator, result)
+            })
+            .await;
+            let Ok((next_iterator, next)) = next else {
+                live_log(
+                    &site,
+                    format_args!(
+                        "no chunk progress for {}s; rediscovering latest volume",
+                        QUIET_RESTART.as_secs()
+                    ),
+                );
+                break;
+            };
+            iterator = next_iterator;
+            match next {
                 Ok(Ok(Some(chunk))) => {
                     failures = 0;
-                    last_chunk = Instant::now();
+                    deadline = Instant::now() + QUIET_RESTART;
                     // The iterator enters the next volume at its newest chunk;
                     // a poll that arrived after more than the Start chunk
                     // landed fetches the ones it skipped first.
@@ -555,24 +595,7 @@ pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>, skip_kn
                         known.push(start_ms);
                     }
                 }
-                Ok(Ok(None)) => {
-                    if quiet_too_long(last_chunk, Instant::now()) {
-                        live_log(
-                            &site,
-                            format_args!(
-                                "no chunk for {:.0?}; rediscovering",
-                                last_chunk.elapsed()
-                            ),
-                        );
-                        break;
-                    }
-                    let wait = iterator
-                        .time_until_next()
-                        .and_then(|d| d.to_std().ok())
-                        .unwrap_or(IDLE)
-                        .clamp(MIN_WAIT, MAX_WAIT);
-                    sleep(wait).await;
-                }
+                Ok(Ok(None)) => unreachable!("empty polls are consumed by wait_for_progress"),
                 Ok(Err(e)) => {
                     failures += 1;
                     let reason = format!("fetching the next chunk: {e} ({e:?})");
@@ -621,14 +644,77 @@ mod tests {
     }
 
     #[test]
-    fn a_quiet_iterator_restarts_before_the_ui_goes_unavailable() {
-        let start = Instant::now();
-        assert!(!quiet_too_long(start, start + Duration::from_secs(89)));
-        assert!(quiet_too_long(start, start + QUIET_RESTART));
-        assert!(
-            QUIET_RESTART < Duration::from_secs(600),
-            "must fire before STALE, so a wedged volume is rediscovered while still LIVE"
-        );
+    fn missing_chunk_cannot_wait_forever() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let result =
+                    wait_for_progress(Instant::now() + Duration::from_millis(30), (), async |()| {
+                        sleep(Duration::from_millis(1)).await;
+                        ((), None::<()>)
+                    })
+                    .await;
+                assert!(result.is_err(), "missing chunks must trigger rediscovery");
+            });
+    }
+
+    #[test]
+    fn progress_deadline_cancels_a_request_still_in_flight() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let result =
+                    wait_for_progress(Instant::now() + Duration::from_millis(30), (), async |()| {
+                        sleep(Duration::from_secs(60)).await;
+                        ((), Some("late chunk"))
+                    })
+                    .await;
+                assert!(result.is_err());
+            });
+    }
+
+    #[test]
+    fn delayed_chunk_is_delivered_before_deadline() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let result =
+                    wait_for_progress(Instant::now() + Duration::from_secs(5), 0, async |calls| {
+                        let calls = calls + 1;
+                        sleep(Duration::from_millis(1)).await;
+                        (calls, (calls == 3).then_some("next chunk"))
+                    })
+                    .await;
+                assert_eq!(result.unwrap(), (3, "next chunk"));
+            });
+    }
+
+    #[test]
+    fn intermittent_errors_do_not_extend_progress_deadline() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let deadline = Instant::now() + Duration::from_millis(30);
+                let (_, error) =
+                    wait_for_progress(deadline, (), async |()| ((), Some(Err::<(), _>("reset"))))
+                        .await
+                        .unwrap();
+                assert_eq!(error, Err("reset"));
+                let result = wait_for_progress(deadline, (), async |()| {
+                    sleep(Duration::from_millis(1)).await;
+                    ((), None::<()>)
+                })
+                .await;
+                assert!(result.is_err());
+            });
     }
 
     #[test]
