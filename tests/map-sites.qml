@@ -36,7 +36,7 @@ ShellRoot {
         onTriggered: {
             try {
                 if (stage === 0) {
-                    check(map.sites.length === 163, "Missing engine station table");
+                    check(map.sites.length === 180, "Missing engine station table");
                     checkCoverageOrigin();
                     check(map.siteLabels.some(s => s.name === "KOUN"), "Nearby station ID hidden by collision layout");
                     check(!map.siteLabels.some(s => s.name === "KTLX"), "Duplicate active marker label");

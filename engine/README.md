@@ -45,6 +45,11 @@ and `nexrad-model` dependencies. It reads through the lowest cut, sorts rays
 stably by azimuth, and publishes a polar sweep texture and azimuth lookup.
 The UI samples these directly; radar arrays never enter JSON or QML JavaScript.
 
+`src/dwd.rs` decodes DWD DX single-site sweeps (0.8°, 360x128, RLE uint16
+over HTTPS) into the same `Sweep` by mapping dBZ onto NEXRAD-style codes, and
+polls each station's `-latest-` file with a listing backfill. No new
+dependencies; DX frames are always complete and never range-folded.
+
 `src/live.rs` polls the real-time chunk bucket through `ChunkIterator`,
 replays the current volume's lowest cut, and assembles incoming radials.
 Each chunk that grows the cut publishes a partial frame; the cut's final
@@ -84,7 +89,8 @@ availability. An archived scan retains its measured coordinates.
 `build.rs` converts Natural Earth lines to a compact polyline blob and embeds
 populated places for map labels. GeoNames cities with population ≥ 5000,
 clipped to the same envelope, are the location-picker gazetteer. The 1:50m
-set is global; the 1:10m set is clipped to the NEXRAD network envelope. `src/tiles.rs` rasterizes these with `tiny-skia`,
+set is global; the 1:10m set is clipped to the station envelope (NEXRAD
+network plus Germany). `src/tiles.rs` rasterizes these with `tiny-skia`,
 using 1:50m below z5 and 1:10m from z5. Segments outside a tile are skipped.
 
 `src/osm.rs` serves OpenMapTiles vector data from z7 through z14, with Natural

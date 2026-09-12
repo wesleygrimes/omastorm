@@ -110,6 +110,13 @@ for _ in {1..40}; do
   sleep .1
 done
 [[ $matches == *Stokesdale* && $matches == *North\ Carolina* ]] || fail "Stokesdale was not in the gazetteer: $matches"
+quickshell ipc --pid "$pid" call location open hannover
+for _ in {1..40}; do
+  matches=$(quickshell ipc --pid "$pid" call location matches)
+  [[ $matches == *Hannover* && $matches == *Lower\ Saxony* ]] && break
+  sleep .1
+done
+[[ $matches == *Hannover* && $matches == *Lower\ Saxony* ]] || fail "Hannover was not in the gazetteer: $matches"
 quickshell ipc --pid "$pid" call location close
 stop
 

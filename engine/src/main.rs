@@ -1,4 +1,5 @@
 mod catalog;
+mod dwd;
 mod live;
 mod osm;
 mod protocol;
@@ -10,7 +11,7 @@ use chrono::{DateTime, Utc};
 use protocol::{
     Basemap, Command, Connection, ConnectionStatus, Frame, FrameStatus, Geometry, Handshake, Hello,
     Message, NaturalEarth, Places, Rejection, SiteSelection, SiteTable, Source, State, Station,
-    TileReady, TimelineEntry, VERSION, is_texture_path,
+    StationSource, TileReady, TimelineEntry, VERSION, is_texture_path,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -90,9 +91,17 @@ fn fingerprint() -> io::Result<String> {
 fn build_id() -> &'static str {
     BUILD.get().expect("fingerprint is computed before use")
 }
-/// The embedded station snapshot (`engine/data/sites.json`).
+/// The embedded station snapshots (`engine/data/sites.json` for NEXRAD,
+/// `engine/data/dwd_sites.json` for DWD). Entries without a `source` key
+/// are NEXRAD (`protocol::StationSource` default).
 fn site_table() -> SiteTable {
-    serde_json::from_str(include_str!("../data/sites.json")).unwrap()
+    let mut table: SiteTable = serde_json::from_str(include_str!("../data/sites.json")).unwrap();
+    let dwd: SiteTable = serde_json::from_str(include_str!("../data/dwd_sites.json")).unwrap();
+    table.sites.extend(dwd.sites);
+    table.source = format!("{}; {}", table.source, dwd.source);
+    table.retrieved = table.retrieved.max(dwd.retrieved);
+    table.notes = format!("{} {}", table.notes, dwd.notes);
+    table
 }
 fn hello() -> Hello {
     let table = site_table();
@@ -325,6 +334,10 @@ fn live_frame(template: &Frame, station: &Station, sweep: &sweep::Sweep, complet
         product: template.product.clone(),
         product_name: template.product_name.clone(),
         units: template.units.clone(),
+        source: match station.source {
+            StationSource::Dwd => "DWD DX".into(),
+            StationSource::Nexrad => template.source.clone(),
+        },
         elevation_deg: (sweep.elevation_deg() * 100.0).round() / 100.0,
         scan_time: iso(sweep.start_ms),
         sweep_end: iso(sweep.end_ms),
@@ -371,6 +384,7 @@ fn empty_frame(template: &Frame, station: &Station) -> Frame {
         gate_spacing_m: template.gate_spacing_m.max(1),
         scale: 0.0,
         offset: 0.0,
+        source: template.source.clone(),
         site: Geometry {
             lat: station.lat,
             lon: station.lon,
@@ -392,6 +406,7 @@ fn startup_frame(template: &Frame) -> Frame {
         lat: 39.8,
         lon: -98.6,
         alt_m: 0.0,
+        source: StationSource::Nexrad,
     };
     empty_frame(template, &nowhere)
 }
@@ -592,7 +607,9 @@ impl Shared {
     /// Abort the current poller, if any, and start another on the selected
     /// station. Timeline and the frame on screen stay; the next *new* sweep
     /// clears `unavailable` / `offline`. `skip_known` is true on a respawn
-    /// so a catalogued replay is not published again.
+    /// so a catalogued replay is not published again. DWD stations poll
+    /// their DX files (`dwd.rs`); the events both pollers send share one
+    /// channel and one timeline.
     fn restart_live(&mut self, why: &str, skip_known: bool) {
         let site = self.state.site.id.clone();
         if site.is_empty() || self.state.source != Source::Live {
@@ -603,12 +620,12 @@ impl Shared {
             task.abort();
         }
         let cached: Vec<i64> = self.timeline.stored.iter().map(|e| e.start_ms).collect();
-        self.live = Some(tokio::spawn(live::poll(
-            site,
-            self.events.clone(),
-            cached,
-            skip_known,
-        )));
+        let events = self.events.clone();
+        self.live = Some(if let Some(wmo) = dwd::wmo_of(&site) {
+            tokio::spawn(dwd::poll(site, wmo, events, cached))
+        } else {
+            tokio::spawn(live::poll(site, events, cached, skip_known))
+        });
         self.last_live_restart = Instant::now();
     }
     /// Go live on a station: the newest cached frame (or an empty one)
@@ -753,12 +770,22 @@ impl Shared {
     }
     /// An earlier volume's frame joined the catalog: it takes its place in
     /// the timeline without touching the frame on screen, unless the pin
-    /// fell off the ring. The age keeps following the newest frame.
+    /// fell off the ring. The age keeps following the newest frame. When
+    /// the screen still shows the loading placeholder, the backfill is the
+    /// first real picture (the DWD poller only ever backfills), so it shows
+    /// at once and clears `loading`.
     fn backfilled(&mut self, entry: Entry) -> io::Result<()> {
         if self.frame_ms.is_none_or(|ms| entry.start_ms > ms) {
             self.frame_ms = Some(entry.start_ms);
         }
-        let shown = if self.timeline.insert(entry) {
+        let placeholder = self.state.frame.id.ends_with("-loading");
+        let evicted = self.timeline.insert(entry);
+        let shown = if placeholder {
+            if self.state.connection.status == ConnectionStatus::Loading {
+                self.state.connection.status = ConnectionStatus::Ok;
+            }
+            self.show_position(self.timeline.stored.len().saturating_sub(1))
+        } else if evicted {
             self.show_position(0)
         } else {
             Ok(())
@@ -2111,7 +2138,7 @@ mod tests {
 #[cfg(test)]
 mod handoff_tests {
     use super::{great_circle_km, handoff, site_table};
-    use crate::protocol::Station;
+    use crate::protocol::{Station, StationSource};
 
     fn station(id: &str, lat: f64, lon: f64) -> Station {
         Station {
@@ -2121,6 +2148,7 @@ mod handoff_tests {
             lat,
             lon,
             alt_m: 0.0,
+            source: StationSource::Nexrad,
         }
     }
     /// A point `fraction` of the way from `a` to `b` along the parallel.

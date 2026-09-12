@@ -511,7 +511,7 @@ Item {
             //   brand row     — mark, OMASTORM, status light, LIVE/ARCHIVED
             //   site row      — station title, radar lock (yellow when outside coverage)
             //   product stack — product line + meta line (right of site row)
-            //   product line  — REFLECTIVITY / tilt + NOAA NEXRAD
+            //   product line  — REFLECTIVITY / tilt + radar source (frame.source)
             //   meta line     — age, right-aligned under the product line
             //   map stage     — radar map frame
             //   follow chip   — crosshair (place follow); hidden until GPS
@@ -614,7 +614,7 @@ Item {
                             text: !app.scan ? "" : app.scan.productName.toUpperCase() + (app.scan.scanTime ? " / " + app.scan.elevationDeg.toFixed(1) + "°" : "")
                         }
                         LabelText {
-                            text: "NOAA NEXRAD"
+                            text: !app.scan || !app.scan.source ? "NOAA NEXRAD" : app.scan.source
                             font.letterSpacing: 1; opacity: .55
                         }
                     }

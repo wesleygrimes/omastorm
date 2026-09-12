@@ -117,6 +117,20 @@ pub struct Station {
     pub lat: f64,
     pub lon: f64,
     pub alt_m: f64,
+    /// Which network serves the station's sweeps; absent in older tables,
+    /// which are all NEXRAD.
+    #[serde(default)]
+    pub source: StationSource,
+}
+
+/// The radar network behind a station: NOAA NEXRAD Level II chunks or DWD
+/// DX single-site sweeps. The engine dispatches its live poller on this.
+#[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum StationSource {
+    #[default]
+    Nexrad,
+    Dwd,
 }
 
 #[derive(Serialize, PartialEq, Debug)]
@@ -295,6 +309,10 @@ pub struct Frame {
     pub scale: f32,
     #[serde(default)]
     pub offset: f32,
+    /// Display attribution for the sweep's network (`NOAA NEXRAD`, `DWD
+    /// DX`); the engine owns product vocabulary, the UI lays it out.
+    #[serde(default)]
+    pub source: String,
     pub site: Geometry,
     pub palette: Vec<String>,
     pub bounds: Vec<i32>,

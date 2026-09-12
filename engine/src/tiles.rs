@@ -265,7 +265,7 @@ impl Geography {
     }
 }
 
-/// GeoNames cities with population ≥ 5000, clipped to the NEXRAD envelope.
+/// GeoNames cities with population ≥ 5000, clipped to the station envelope.
 /// Location search uses this; map labels stay on Natural Earth `places`.
 fn gazetteer() -> &'static [Place] {
     static GAZETTEER_PLACES: OnceLock<Vec<Place>> = OnceLock::new();
@@ -755,14 +755,19 @@ mod tests {
                 }
             }
         }
-        // Every 1:10m vertex sits in the envelope or next to one that does.
+        // Every 1:10m vertex sits in the station envelope or next to one
+        // that does (mirrors `engine/build.rs` `in_envelope`).
+        fn in_envelope(lon: f64, lat: f64) -> bool {
+            ((5.0..=75.0).contains(&lat) && (lon <= -20.0 || lon >= 120.0))
+                || ((47.0..=56.0).contains(&lat) && (5.0..=16.0).contains(&lon))
+        }
         for polyline in geography.sets[1].layers.iter().flat_map(|l| &l.polylines) {
             let inside: Vec<bool> = polyline
                 .points
                 .iter()
                 .map(|&(x, y)| {
                     let (lon, lat) = (f64::from(x) * QUANTUM, f64::from(y) * QUANTUM);
-                    (5.0..=75.0).contains(&lat) && (lon <= -20.0 || lon >= 120.0)
+                    in_envelope(lon, lat)
                 })
                 .collect();
             for i in 0..inside.len() {
@@ -806,6 +811,10 @@ mod tests {
         let stokesdale = search_places("stokesdale", None, 4);
         assert_eq!(stokesdale[0].name, "Stokesdale");
         assert_eq!(stokesdale[0].region, "North Carolina");
+        let hannover = search_places("hannover", Some((52.37, 9.73)), 4);
+        assert_eq!(hannover[0].name, "Hannover");
+        assert_eq!(hannover[0].region, "Lower Saxony");
+        assert_eq!(hannover[0].country, "DE");
         assert!(gazetteer().len() > 15_000);
         assert!(gazetteer().len() > Geography::embedded().places.len());
     }
