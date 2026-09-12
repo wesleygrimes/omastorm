@@ -76,6 +76,17 @@
       "contributions": [
         "code"
       ]
+    },
+    {
+      "login": "mrcobas",
+      "name": "javi",
+      "avatar_url": "https://avatars.githubusercontent.com/u/41881817?v=4",
+      "profile": "http://mrcobas.com",
+      "contributions": [
+        "test",
+        "review"
+      ]
     }
-  ]
+  ],
+  "commitType": "docs"
 }
