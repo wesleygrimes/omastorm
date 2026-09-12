@@ -17,7 +17,7 @@ ShellRoot {
         interval: 1000; running: true
         onTriggered: {
             check(!!engine.state, "No socket state received");
-            check(engine.sites.length === 163, "No site table received");
+            check(engine.sites.length === 180, "No site table received");
             check(engine.texture.indexOf("file://") === 0, "No engine texture");
             check(engine.azimuthLut.indexOf("file://") === 0 && engine.azimuthLut !== engine.texture, "No engine azimuth lookup");
             check(engine.state.frame.rays > 0 && engine.state.frame.gates > 0 && engine.state.frame.gateSpacingM > 0, "No sweep geometry in state");

@@ -250,6 +250,7 @@ mod tests {
             gate_spacing_m: 250,
             scale: 2.0,
             offset: 66.0,
+            source: "NOAA NEXRAD".into(),
             site: Geometry {
                 lat: 35.0,
                 lon: -97.0,

@@ -3,6 +3,7 @@
   "product": "REF",
   "productName": "Reflectivity",
   "units": "dBZ",
+  "source": "NOAA NEXRAD",
   "elevationDeg": 0.48,
   "scanTime": "2013-05-20T20:16:43Z",
   "sweepEnd": "2013-05-20T20:17:00Z",

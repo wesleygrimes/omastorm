@@ -20,7 +20,7 @@ travel over this protocol; they go to the GPU as texture files.
 ```json
 {"type":"hello","v":1,"engine":"0.1.1",
  "sites":[{"id":"KTLX","name":"Oklahoma City","state":"OK",
-           "lat":35.33306,"lon":-97.27748,"altM":388.0}]}
+           "lat":35.33306,"lon":-97.27748,"altM":388.0,"source":"nexrad"}]}
 ```
 
 `state` is the complete current state, re-sent whenever anything in it changes.
@@ -93,8 +93,11 @@ It is small (a few KB) so clients replace rather than merge.
   one rule: the engine refuses to publish a path that breaks it, and the UI
   rejects a `state` whose path breaks it.
 - `frame.product` is the code commands use; `frame.productName` is its display
-  name. The engine owns product, unit, and site vocabulary; the UI only cases
+  name; `frame.source` names the network on screen (`NOAA NEXRAD`, `DWD
+  DX`). The engine owns product, unit, source, and site vocabulary; the UI only cases
   and lays out what it receives, and looks the site name up in `hello.sites`.
+  `hello.sites[].source` is `nexrad` or `dwd` and tells clients which
+  poller serves the station.
 - `frame.palette` has one color per class, in class order, and `frame.bounds`
   has one more entry than `palette`: class `i` covers `bounds[i]` up to
   `bounds[i+1]` in `units`. The UI uploads `palette` to the GPU as a
@@ -188,7 +191,8 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
   ±180 is answered with an `error`. `lock` and `follow` are shared flags;
   releasing the lock hands off on the next settle, not at once.
 - `search_places` ranks the embedded gazetteer (GeoNames populated places
-  with population ≥ 5000, clipped to the NEXRAD network envelope) for the
+  with population ≥ 5000, clipped to the station envelope: NEXRAD network
+  plus Germany) for the
   location picker and is answered with `places` to the sender only, like
   `tile_ready`. Map labels stay on Natural Earth. `query` is required;
   optional `lat` and `lon` order nearer matches first. Word-start matches
@@ -316,7 +320,7 @@ Current fixture `ktlx-20130520`: 720 × 1832, first gate 2125 m, 250 m spacing,
 
 ## Live frames
 
-A live frame is the lowest cut (elevation number 1) of the current volume of
+A live NEXRAD frame is the lowest cut (elevation number 1) of the current volume of
 the selected station, reflectivity, assembled from the real-time chunk bucket
 as chunks arrive: `id` is `<SITE>-<scanTime compact>-e0`, `scanTime` and
 `sweepEnd` are the collection times of the cut's first and last radial so
@@ -330,6 +334,13 @@ station; the UI never reads it). Selecting a station shows its newest
 catalogued frame while the poller replays the current volume's lowest cut
 from the bucket, so a picture arrives within seconds and the next volume
 paints live.
+
+A live DWD frame is the station's DX sweep (0.8°, 360 rays of 128 1 km
+gates), one complete file per 5 minutes from `opendata.dwd.de`: the poller
+backfills the newest catalogued-missing files on join, then follows the
+`-latest-` file. DX dBZ maps onto the same NEXRAD-style codes (`scale` 2.0,
+`offset` 66.0), so `product`, `palette`, and `bounds` are shared; `source`
+is `DWD DX` and there are no `partial` frames or range-folded gates.
 
 ## Configuration
 
@@ -361,7 +372,7 @@ wttr.in after an explicit click, not an engine command.
 `hello` additionally includes `pid`, `build` (an opaque fingerprint),
 `sitesSource`, `sitesRetrieved`, and `sitesNotes`. These allow the launcher to
 identify an existing build and preserve the station snapshot's provenance.
-The 163-site snapshot includes archived/test sites, not an availability list.
+The 180-site snapshot (163 NEXRAD, 17 DWD) includes archived/test sites, not an availability list.
 `frame.site` retains the scan's measured coordinates.
 
 On disconnect the UI hides radar and retries; on an unknown version it

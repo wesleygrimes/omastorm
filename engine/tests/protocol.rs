@@ -117,19 +117,29 @@ fn fixture_transport_and_shared_commands() {
     assert_eq!(hello["v"], 1);
     assert_eq!(hello["build"].as_str().unwrap().len(), 16);
     let sites = hello["sites"].as_array().unwrap();
-    assert_eq!(sites.len(), 163);
+    assert_eq!(sites.len(), 163 + 17);
     let mut ids = std::collections::HashSet::new();
     for site in sites {
         assert!(ids.insert(site["id"].as_str().unwrap()));
         assert!((-90.0..=90.0).contains(&site["lat"].as_f64().unwrap()));
         assert!((-180.0..=180.0).contains(&site["lon"].as_f64().unwrap()));
         assert!(site["altM"].as_f64().unwrap() > -500.0);
+        let source = site["source"].as_str().unwrap();
+        assert!(source == "nexrad" || source == "dwd");
     }
     for id in ["KTLX", "PABC", "PHKI", "PGUA", "TJUA", "RKJK", "LPLA"] {
         assert!(ids.contains(id));
     }
+    for id in ["BOO", "DRS", "UMD"] {
+        assert!(ids.contains(id));
+    }
+    let boo = sites.iter().find(|site| site["id"] == "BOO").unwrap();
+    assert_eq!(boo["source"], "dwd");
+    let ktlx = sites.iter().find(|site| site["id"] == "KTLX").unwrap();
+    assert_eq!(ktlx["source"], "nexrad");
     let initial = read(&mut first);
     assert_eq!(initial["frame"]["scanTime"], "2013-05-20T20:16:43Z");
+    assert_eq!(initial["frame"]["source"], "NOAA NEXRAD");
     assert_eq!(initial["source"], "archived");
     // The timeline lists what `seek` accepts: here the one archived frame.
     assert_eq!(
@@ -268,6 +278,16 @@ fn fixture_transport_and_shared_commands() {
     );
     let places = read(&mut second);
     assert_eq!(places["results"][0]["name"], "Norman");
+    // The station envelope reaches Germany: DWD cities resolve with
+    // admin-1 region and country.
+    send(
+        &mut second,
+        json!({"type":"search_places","query":"hannover","lat":52.37,"lon":9.73}),
+    );
+    let places = read(&mut second);
+    assert_eq!(places["results"][0]["name"], "Hannover");
+    assert_eq!(places["results"][0]["region"], "Lower Saxony");
+    assert_eq!(places["results"][0]["country"], "DE");
     send(
         &mut first,
         json!({"type":"search_places","query":"x","lat":95.0,"lon":0.0}),

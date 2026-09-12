@@ -242,7 +242,9 @@ FocusScope {
             font.pixelSize: 8
             opacity: .5
             elide: Text.ElideRight
-            text: map.osmOnScreen ? "NOAA · © OpenStreetMap" : "NOAA · Natural Earth"
+            // Radar credit follows the frame's network (engine-owned
+            // `frame.source`); the full attribution lives in README.
+            text: (scan && scan.source === "DWD DX" ? "DWD" : "NOAA") + (map.osmOnScreen ? " · © OpenStreetMap" : " · Natural Earth")
         }
     }
 }

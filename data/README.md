@@ -21,8 +21,8 @@ Natural Earth coastline, lakes, country boundary lines on land, and
 state/province lines at 1:10m and 1:50m, plus 1:10m populated places, from
 [natural-earth-vector](https://github.com/nvkelso/natural-earth-vector) master.
 Made with Natural Earth; [public domain](https://www.naturalearthdata.com/about/terms-of-use/).
-`engine/build.rs` embeds them as polylines (the 1:10m set clipped to the NEXRAD
-network envelope) and the engine strokes them into `ne` tiles at any zoom
+`engine/build.rs` embeds them as polylines (the 1:10m set clipped to the
+station envelope: NEXRAD network plus Germany) and the engine strokes them into `ne` tiles at any zoom
 (`docs/protocol.md`, tiles). Roads and place labels at closer zooms come from
 OpenMapTiles vector tiles served by OpenFreeMap, © OpenStreetMap contributors
 (ODbL), fetched by the engine at run time and attributed in the UI.

@@ -1,7 +1,7 @@
 //! Converts the Natural Earth GeoJSON that `scripts/extract-fixtures.sh`
 //! extracts into the geography the binary embeds (DESIGN.md, basemap tiles,
 //! shipped geography): one polyline blob holding the 1:50m world set and the
-//! 1:10m set clipped to the NEXRAD network envelope, and the populated places
+//! 1:10m set clipped to the station envelope, and the populated places
 //! for low-zoom labels. GeoNames cities with population ≥ 5000, clipped to
 //! the same envelope, become the location-picker gazetteer. Reruns only when
 //! an input changes.
@@ -24,9 +24,11 @@ const THEMES: [(&str, usize); 4] = [
     ("lakes", 1),
 ];
 /// Everything the site table reaches (DESIGN.md): 5–75° N, west of 20° W or
-/// east of 120° E, holding Lajes, Guam, Kunsan, and Kadena with their range.
+/// east of 120° E, holding Lajes, Guam, Kunsan, and Kadena with their range;
+/// plus Germany (5–16° E, 47–56° N) for the DWD network.
 fn in_envelope(lon: f64, lat: f64) -> bool {
-    (5.0..=75.0).contains(&lat) && (lon <= -20.0 || lon >= 120.0)
+    ((5.0..=75.0).contains(&lat) && (lon <= -20.0 || lon >= 120.0))
+        || ((47.0..=56.0).contains(&lat) && (5.0..=16.0).contains(&lon))
 }
 const SCALE: f64 = 1e5;
 
@@ -144,7 +146,7 @@ fn main() {
     write_gazetteer(&raw, Path::new(&out));
 }
 
-/// GeoNames `cities5000` clipped to the NEXRAD envelope, for the location
+/// GeoNames `cities5000` clipped to the station envelope, for the location
 /// picker only. Map labels stay on Natural Earth (`places.json`).
 fn write_gazetteer(raw: &Path, out: &Path) {
     let mut admin1 = std::collections::HashMap::new();

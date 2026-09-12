@@ -1,0 +1,160 @@
+{
+  "source": "https://www.dwd.de/DE/derdwd/messnetz/atmosphaerenbeobachtung/_functions/HaeufigGesucht/koordinaten-radarverbund.pdf",
+  "retrieved": "2026-09-12",
+  "notes": "DWD radar network: 17 C-band sites. Coordinates from the DWD radar-network sheet (wradlib mirrors them); altM is antenna height above sea level. Live DX reflectivity (0.8°, 360x128) is published per site under https://opendata.dwd.de/weather/radar/sites/dx/. State is the ISO 3166-2:DE Bundesland code. No live availability implied.",
+  "sites": [
+    {
+      "id": "ASB",
+      "name": "BORKUM",
+      "state": "NI",
+      "lat": 53.564011,
+      "lon": 6.748292,
+      "altM": 36.0,
+      "source": "dwd"
+    },
+    {
+      "id": "BOO",
+      "name": "BOOSTEDT",
+      "state": "SH",
+      "lat": 54.00438,
+      "lon": 10.04687,
+      "altM": 124.56,
+      "source": "dwd"
+    },
+    {
+      "id": "DRS",
+      "name": "DRESDEN",
+      "state": "SN",
+      "lat": 51.12465,
+      "lon": 13.76865,
+      "altM": 263.36,
+      "source": "dwd"
+    },
+    {
+      "id": "EIS",
+      "name": "EISBERG",
+      "state": "BY",
+      "lat": 49.54066,
+      "lon": 12.40278,
+      "altM": 798.79,
+      "source": "dwd"
+    },
+    {
+      "id": "ESS",
+      "name": "ESSEN",
+      "state": "NW",
+      "lat": 51.40563,
+      "lon": 6.96712,
+      "altM": 185.1,
+      "source": "dwd"
+    },
+    {
+      "id": "FBG",
+      "name": "FELDBERG",
+      "state": "BW",
+      "lat": 47.87361,
+      "lon": 8.00361,
+      "altM": 1516.1,
+      "source": "dwd"
+    },
+    {
+      "id": "FLD",
+      "name": "FLECHTDORF",
+      "state": "HE",
+      "lat": 51.3112,
+      "lon": 8.802,
+      "altM": 627.88,
+      "source": "dwd"
+    },
+    {
+      "id": "HNR",
+      "name": "HANNOVER",
+      "state": "NI",
+      "lat": 52.46008,
+      "lon": 9.69452,
+      "altM": 97.66,
+      "source": "dwd"
+    },
+    {
+      "id": "ISN",
+      "name": "ISEN",
+      "state": "BY",
+      "lat": 48.1747,
+      "lon": 12.10177,
+      "altM": 677.77,
+      "source": "dwd"
+    },
+    {
+      "id": "MEM",
+      "name": "MEMMINGEN",
+      "state": "BY",
+      "lat": 48.04214,
+      "lon": 10.21924,
+      "altM": 724.4,
+      "source": "dwd"
+    },
+    {
+      "id": "NEU",
+      "name": "NEUHAUS",
+      "state": "TH",
+      "lat": 50.50012,
+      "lon": 11.13504,
+      "altM": 878.04,
+      "source": "dwd"
+    },
+    {
+      "id": "NHB",
+      "name": "NEUHEILENBACH",
+      "state": "RP",
+      "lat": 50.10965,
+      "lon": 6.54853,
+      "altM": 585.84,
+      "source": "dwd"
+    },
+    {
+      "id": "OFT",
+      "name": "OFFENTHAL",
+      "state": "HE",
+      "lat": 49.9847,
+      "lon": 8.71293,
+      "altM": 245.8,
+      "source": "dwd"
+    },
+    {
+      "id": "PRO",
+      "name": "PROETZEL",
+      "state": "BB",
+      "lat": 52.64867,
+      "lon": 13.85821,
+      "altM": 193.92,
+      "source": "dwd"
+    },
+    {
+      "id": "ROS",
+      "name": "ROSTOCK",
+      "state": "MV",
+      "lat": 54.17566,
+      "lon": 12.05808,
+      "altM": 37.0,
+      "source": "dwd"
+    },
+    {
+      "id": "TUR",
+      "name": "TUERKHEIM",
+      "state": "BY",
+      "lat": 48.58528,
+      "lon": 9.78278,
+      "altM": 767.62,
+      "source": "dwd"
+    },
+    {
+      "id": "UMD",
+      "name": "UMMENDORF",
+      "state": "ST",
+      "lat": 52.16009,
+      "lon": 11.17609,
+      "altM": 183.0,
+      "source": "dwd"
+    }
+  ]
+}
