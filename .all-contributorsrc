@@ -86,6 +86,34 @@
         "test",
         "review"
       ]
+    },
+    {
+      "login": "ryrobes",
+      "name": "Ryan Robitaille",
+      "avatar_url": "https://avatars.githubusercontent.com/u/757387?v=4",
+      "profile": "https://ryrob.es/",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "gw7523",
+      "name": "gw7523",
+      "avatar_url": "https://avatars.githubusercontent.com/u/199144018?v=4",
+      "profile": "https://github.com/gw7523",
+      "contributions": [
+        "code",
+        "bug"
+      ]
+    },
+    {
+      "login": "Yani3rt",
+      "name": "Yaniert Pascual",
+      "avatar_url": "https://avatars.githubusercontent.com/u/170105839?v=4",
+      "profile": "https://github.com/Yani3rt",
+      "contributions": [
+        "userTesting"
+      ]
     }
   ],
   "commitType": "docs"
