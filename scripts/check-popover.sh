@@ -55,9 +55,10 @@ call capture "$PWD/review/popover-archived.png"
 for _ in {1..50}; do [[ -s review/popover-archived.png ]] && break; sleep .1; done
 sock="$XDG_RUNTIME_DIR/omastorm/engine.sock"
 tell() { printf '%s\n' "$@" | socat -t0.2 - "UNIX-CONNECT:$sock" >/dev/null; }
-# Three deterministic complete frames, using the archived fixture's metadata
+# Four deterministic complete frames, using the archived fixture's metadata
 # and PNGs, exercise the real catalog/transport without waiting volumes:
-# two five minutes apart and a third 26 hours on, a hole like KAKQ's (#65).
+# two five minutes apart, a third 26 hours on (a hole like KAKQ's, #65),
+# and a fourth five minutes after that.
 timeout 2 socat -t0.2 - "UNIX-CONNECT:$sock" < /dev/null | jq -c 'select(.type == "state")' | head -n1 > "$scratch/engine-state.json"
 ruby - "$scratch" <<'RUBY_SEED'
 require 'json'
@@ -70,7 +71,7 @@ dir = "#{scratch}/cache/omastorm/frames"
 FileUtils.mkdir_p("#{dir}/KTLX")
 sql = []
 start = 1369080600 # 2013-05-20T20:10:00Z
-[0, 5 * 60, 5 * 60 + 26 * 3600].each_with_index do |offset, i|
+[0, 5 * 60, 5 * 60 + 26 * 3600, 10 * 60 + 26 * 3600].each_with_index do |offset, i|
   f = Marshal.load(Marshal.dump(frame))
   f['id'] = "popover-test-#{i}"
   f['scanTime'] = Time.at(start + offset).utc.strftime('%Y-%m-%dT%H:%M:%SZ')
@@ -100,14 +101,24 @@ call step 1
 until_status '.frame == "popover-test-1" and .windowFrame == "popover-test-1"'
 # The 26 h hole: one break marker on both strips, no notice for the step
 # that did not cross it, a notice on each surface for the step that did,
-# worded for the direction, and none for a step back before the hole.
+# worded for the direction; it outlives the next frame change for its
+# 1.5 s hold and then clears well before the 4 s cap it has while paused.
 until_status '.gaps == 1 and .notice == "" and .windowNotice == ""'
 call step 1
 until_status '.frame == "popover-test-2" and .windowNotice == "Skipped 26h · no scans available" and .notice == "Skipped 26h"'
+call step 1
+until_status '.frame == "popover-test-3"'
+[[ $(status | jq -r .windowNotice) == "Skipped 26h · no scans available" ]] || fail 'The notice went before its hold'
+sleep 2
+[[ $(status | jq -r '.windowNotice + .notice') == "" ]] || fail 'The notice stayed past the frame that followed the hole'
+# An explicit seek back: test-3 may be the newest entry, which follows the
+# feed, and a live sweep can have taken the frame on when the network is up.
+tell '{"type":"seek","id":"popover-test-2"}'
+until_status '.frame == "popover-test-2"'
 call step -1
 until_status '.frame == "popover-test-1" and .windowNotice == "Back 26h · no scans available" and .notice == "Back 26h"'
 sleep 4.5
-[[ $(status | jq -r .windowNotice) == "" ]] || fail 'The break notice did not clear'
+[[ $(status | jq -r .windowNotice) == "" ]] || fail 'The break notice did not clear while paused'
 tell '{"type":"seek","id":"popover-test-0"}'
 until_status '.frame == "popover-test-0"'
 [[ $(status | jq -r .windowNotice) == "" ]] || fail 'A seek that crossed no hole showed a notice'

@@ -82,8 +82,10 @@ sought by a scrub, and not a stop for stepping. Hovering or focusing it
 (Tab) shows the break note: `No scans available between these times`, the
 two stamps, and the length. When the frame on screen moves across a hole by
 a step, a scrub, or playback, the break notice names the jump beside the
-stamp for four seconds: `Skipped 26h · no scans available`, `Back 26h · no
-scans available`, shortened to `Skipped 26h` where the row is narrow. The
+stamp: `Skipped 26h · no scans available`, `Back 26h · no scans
+available`, shortened to `Skipped 26h` where the row is narrow. It clears
+when the frame changes again, but stays at least a second and a half so
+the loop's pace cannot flash it, and at most four seconds while paused. The
 loop wrapping to the oldest frame, the oldest and newest keys, and a new
 sweep arriving after a silence are not crossings and show no notice.
 Wording stays neutral: the scans are unavailable, and the app does not say

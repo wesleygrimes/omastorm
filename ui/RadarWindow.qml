@@ -112,20 +112,30 @@ Item {
     readonly property int notedGap: hoveredGap >= 0 ? hoveredGap : focusedGap
     // The break notice: set when the frame on screen moved across a hole;
     // the longest wording that fits beside the stamp.
+    // It clears when the frame changes again, but stays at least 1.5 s so
+    // the loop's pace cannot flash it, and at most 4 s while paused.
     property var gapCrossed: null
+    property bool gapNoticeStale: false
     property string shownId: ""
     property var shownTimeline: []
     readonly property string gapNotice: breakNotice.text
     Timer { id: gapNoticeTimer; interval: 4000; onTriggered: app.gapCrossed = null }
+    Timer { id: gapNoticeHold; interval: 1500; onTriggered: if (app.gapNoticeStale) app.gapCrossed = null }
     function noteCrossing() {
         var id = state && state.frame ? state.frame.id : "", timeline = state ? state.timeline : [];
         if (id === shownId) { shownTimeline = timeline; return; }
         var crossed = Strip.crossing(timeline, shownId, id, !!state && state.playing, shownTimeline);
         shownId = id;
         shownTimeline = timeline;
-        if (!crossed) return;
-        gapCrossed = crossed;
-        gapNoticeTimer.restart();
+        if (crossed) {
+            gapCrossed = crossed;
+            gapNoticeStale = false;
+            gapNoticeTimer.restart();
+            gapNoticeHold.restart();
+        } else if (gapCrossed) {
+            if (gapNoticeHold.running) gapNoticeStale = true;
+            else gapCrossed = null;
+        }
     }
     function togglePlay() { if (frames.length > 1) engine.send({type: playing ? "pause" : "play"}); }
     function step(delta) { if (frames.length > 1) engine.send({type: "step", delta: delta}); }

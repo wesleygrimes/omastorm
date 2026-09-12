@@ -18,15 +18,25 @@ FocusScope {
     readonly property int currentSlot: scan ? slots.findIndex(s => s.id && s.id === scan.id) : -1
     property int hoveredGap: -1
     property string gapNotice: ""
+    property bool gapNoticeStale: false
     property string shownId: ""
     property var shownTimeline: []
     Timer { id: gapNoticeTimer; interval: 4000; onTriggered: card.gapNotice = "" }
+    Timer { id: gapNoticeHold; interval: 1500; onTriggered: if (card.gapNoticeStale) card.gapNotice = "" }
     onStateChanged: {
         var id = state && state.frame ? state.frame.id : "", timeline = state ? state.timeline : [];
         if (id !== shownId) {
             var crossed = Strip.crossing(timeline, shownId, id, !!state && state.playing, shownTimeline);
             shownId = id;
-            if (crossed) { gapNotice = Strip.notice(crossed, "bare"); gapNoticeTimer.restart(); }
+            if (crossed) {
+                gapNotice = Strip.notice(crossed, "bare");
+                gapNoticeStale = false;
+                gapNoticeTimer.restart();
+                gapNoticeHold.restart();
+            } else if (gapNotice) {
+                if (gapNoticeHold.running) gapNoticeStale = true;
+                else gapNotice = "";
+            }
         }
         shownTimeline = timeline;
     }
