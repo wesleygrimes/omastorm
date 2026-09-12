@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "Keys.js" as KeyMap
+import "Timeline.js" as Strip
 
 FocusScope {
     id: card
@@ -12,14 +13,37 @@ FocusScope {
     readonly property var scan: state ? state.frame : null
     readonly property var frames: state ? state.timeline : []
     // Popover is too narrow for the window's fixed 60 empties. One tick per
-    // frame, no gap stubs, pixel-snapped — same language, denser strip.
-    readonly property var slots: {
-        var result = [];
-        for (var j = 0; j < frames.length; j++)
-            result.push({id: frames[j].id, partial: frames[j].status === "partial"});
-        return result;
+    // frame plus break markers, pixel-snapped — same language, denser strip.
+    readonly property var slots: Strip.slots(frames, 0)
+    readonly property int currentSlot: scan ? slots.findIndex(s => s.id && s.id === scan.id) : -1
+    property int hoveredGap: -1
+    property string gapNotice: ""
+    property bool gapNoticeStale: false
+    property string shownId: ""
+    property var shownTimeline: []
+    Timer { id: gapNoticeTimer; interval: 4000; onTriggered: card.gapNotice = "" }
+    Timer { id: gapNoticeHold; interval: 1500; onTriggered: if (card.gapNoticeStale) card.gapNotice = "" }
+    onStateChanged: {
+        var id = state && state.frame ? state.frame.id : "", timeline = state ? state.timeline : [];
+        if (id !== shownId) {
+            var crossed = Strip.crossing(timeline, shownId, id, !!state && state.playing, shownTimeline);
+            shownId = id;
+            if (crossed) {
+                gapNotice = Strip.notice(crossed, "bare");
+                gapNoticeStale = false;
+                gapNoticeTimer.restart();
+                gapNoticeHold.restart();
+            } else if (gapNotice) {
+                if (gapNoticeHold.running) gapNoticeStale = true;
+                else gapNotice = "";
+            }
+        }
+        shownTimeline = timeline;
     }
-    readonly property int currentSlot: scan ? slots.findIndex(s => s.id === scan.id) : -1
+    function stamp(iso) {
+        var loc = Qt.locale(), d = new Date(iso);
+        return Qt.formatDateTime(d, loc.dateFormat(Locale.ShortFormat) + " " + loc.timeFormat(Locale.ShortFormat));
+    }
     readonly property string condition: state ? state.source === "archived" ? "archived" : state.connection.status : "offline"
     readonly property color statusColor: condition === "stale" ? theme.yellow
         : condition === "offline" || condition === "unavailable" ? theme.red : theme.accent
@@ -153,6 +177,12 @@ FocusScope {
                 }
                 Item { Layout.fillWidth: true }
                 Rectangle {
+                    implicitWidth: notice.implicitWidth + 10; implicitHeight: 20
+                    visible: card.gapNotice !== ""
+                    color: Qt.alpha(card.theme.background, .92)
+                    Label { id: notice; anchors.centerIn: parent; font.pixelSize: 10; color: card.theme.yellow; text: card.gapNotice }
+                }
+                Rectangle {
                     implicitWidth: time.implicitWidth + 10; implicitHeight: 20
                     color: Qt.alpha(card.theme.background, .92)
                     Label { id: time; anchors.centerIn: parent; font.pixelSize: 10; opacity: .8
@@ -211,21 +241,53 @@ FocusScope {
                     id: strip
                     Layout.fillWidth: true
                     implicitHeight: 14
+                    readonly property real span: Math.max(1, width - 3)
+                    function slotX(i) { return card.slots.length > 1 ? Math.round(1.5 + i * span / (card.slots.length - 1)) : Math.round(width / 2); }
                     Repeater {
                         model: card.slots
-                        Rectangle {
+                        Item {
+                            id: slot
                             required property var modelData
                             required property int index
-                            readonly property bool current: index === card.currentSlot
-                            x: card.slots.length > 1 ? Math.round(index * (strip.width - width) / (card.slots.length - 1)) : Math.round((strip.width - width) / 2)
-                            y: Math.round((strip.height - height) / 2)
-                            width: current || modelData.partial ? 3 : 2
-                            height: current || modelData.partial ? 14 : 10
-                            color: current ? card.theme.accent : modelData.partial ? "transparent"
-                                : Qt.alpha(card.theme.foreground, .40)
-                            border.width: modelData.partial && !current ? 1 : 0
-                            border.color: card.theme.accent
+                            readonly property bool current: !!modelData.id && index === card.currentSlot
+                            readonly property bool tall: current || modelData.partial
+                            x: strip.slotX(index) - Math.round(width / 2)
+                            width: tall ? 3 : 2
+                            height: strip.height
+                            Rectangle {
+                                visible: !slot.modelData.gap
+                                anchors.horizontalCenter: parent.horizontalCenter
+                                y: Math.round((strip.height - height) / 2)
+                                width: slot.width
+                                height: slot.tall ? 14 : 10
+                                color: slot.current ? card.theme.accent : slot.modelData.partial ? "transparent"
+                                    : Qt.alpha(card.theme.foreground, .40)
+                                border.width: slot.modelData.partial && !slot.current ? 1 : 0
+                                border.color: card.theme.accent
+                            }
+                            Column {
+                                visible: slot.modelData.gap
+                                anchors.centerIn: parent
+                                spacing: 2
+                                Repeater {
+                                    model: 3
+                                    Rectangle { width: 2; height: 3; color: card.theme.yellow; opacity: card.hoveredGap === slot.index ? 1 : .8 }
+                                }
+                            }
                         }
+                    }
+                    MouseArea {
+                        anchors.fill: parent
+                        anchors.topMargin: -4
+                        anchors.bottomMargin: -4
+                        hoverEnabled: true
+                        acceptedButtons: Qt.NoButton
+                        onPositionChanged: mouse => {
+                            var n = card.slots.length;
+                            var i = n < 2 ? -1 : Math.round(Math.max(0, Math.min(1, (mouse.x - 1.5) / strip.span)) * (n - 1));
+                            card.hoveredGap = i >= 0 && card.slots[i].gap && Math.abs(mouse.x - strip.slotX(i)) <= 6 ? i : -1;
+                        }
+                        onExited: card.hoveredGap = -1
                     }
                 }
                 RowLayout {
@@ -243,6 +305,27 @@ FocusScope {
             opacity: .5
             elide: Text.ElideRight
             text: map.osmOnScreen ? "NOAA · © OpenStreetMap" : "NOAA · Natural Earth"
+        }
+    }
+    Rectangle {
+        id: breakNote
+        readonly property var slot: card.hoveredGap >= 0 && card.hoveredGap < card.slots.length ? card.slots[card.hoveredGap] : null
+        readonly property point anchor: slot ? strip.mapToItem(card, strip.slotX(card.hoveredGap), 0) : Qt.point(0, 0)
+        visible: !!slot && slot.gap
+        x: Math.round(Math.max(0, Math.min(card.width - width, anchor.x - width / 2)))
+        y: Math.round(anchor.y - height - 6)
+        width: noteRows.implicitWidth + 16
+        height: noteRows.implicitHeight + 12
+        color: Qt.alpha(card.theme.background, .96)
+        border.width: 1
+        border.color: Qt.alpha(card.theme.foreground, .45)
+        ColumnLayout {
+            id: noteRows
+            anchors.centerIn: parent
+            spacing: 2
+            Label { text: "No scans available between these times"; font.pixelSize: 10; opacity: .8 }
+            Label { text: breakNote.slot ? card.stamp(breakNote.slot.from) + " → " + card.stamp(breakNote.slot.to) : ""; font.pixelSize: 10 }
+            Label { text: breakNote.slot ? Strip.elapsed(breakNote.slot.ms) : ""; color: card.theme.yellow; font.pixelSize: 10 }
         }
     }
 }

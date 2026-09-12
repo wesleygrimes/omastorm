@@ -42,7 +42,10 @@ the ids and comments in `ui/RadarWindow.qml`.
 | **legend** | dBZ scale directly under the map |
 | **transport** | Playback buttons |
 | **tick strip** | Frame ticks on the timeline |
+| **break marker** | Dashed yellow mark between two frames a hole in the scans separates |
+| **break note** | Card over a hovered or focused break marker: the bounding times and the length of the hole |
 | **strip stamp** | Date / time / zone above the tick strip |
+| **break notice** | `Skipped 26h · no scans available` beside the stamp after the playhead crosses a hole |
 | **frame index** | `N / total` above the strip, right-aligned; counts available frames only |
 
 **Bottom chrome order.** Map stage, then legend, then transport + tick
@@ -62,7 +65,32 @@ only (empty pads need room or they read as a dotted cliff). An extra live
 sweep beyond 60 completed scans adds a selectable tick and is included in
 the frame count. Available frames fill from the left; unused positions are
 faint, short, and cannot be sought. Each available tick represents one
-frame, without extra gap ticks or a baseline.
+frame, with no baseline and no proportional spacing.
+
+**Breaks.** Neighbouring ticks are equal steps, so a hole in the catalog
+(an outage, sparse history) would otherwise read as even time. A break
+marker sits between two frames whose interval is longer than thirty
+minutes (the silence that shows UNAVAILABLE while live) and longer than
+three usual intervals, the usual interval being the median of those under
+thirty minutes. Trailing pads are room to fill, never missing time. On the
+catalogs of nineteen stations (September 2026) ordinary cadence ran 3.3 to
+8.8 minutes, a VCP change moved one station from 4.5 to 7.1 minutes inside
+one history, and single missed volumes left 17 to 18 minute intervals; none
+of those is a break. The holes were 35 minutes to 26 hours, and all are.
+The marker is a position in the strip, not a frame: it is not counted, not
+sought by a scrub, and not a stop for stepping. Hovering or focusing it
+(Tab) shows the break note: `No scans available between these times`, the
+two stamps, and the length. When the frame on screen moves across a hole by
+a step, a scrub, or playback, the break notice names the jump beside the
+stamp: `Skipped 26h · no scans available`, `Back 26h · no scans
+available`, shortened to `Skipped 26h` where the row is narrow. It clears
+when the frame changes again, but stays at least a second and a half so
+the loop's pace cannot flash it, and at most four seconds while paused. The
+loop wrapping to the oldest frame, the oldest and newest keys, and a new
+sweep arriving after a silence are not crossings and show no notice.
+Wording stays neutral: the scans are unavailable, and the app does not say
+why. The popover strip carries the same markers and note and the short
+notice.
 
 ## Location, onboarding, and map
 
