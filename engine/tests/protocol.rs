@@ -16,6 +16,15 @@ const ARCHIVE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../data/raw/KTLX20130520_201643_V06.gz"
 );
+const WIND_OBS: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/wind-obs-fixture.txt");
+const HRRR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/hrrr-fixture.json");
+fn engine_cmd() -> Command {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_omastorm-engine"));
+    cmd.env("OMASTORM_ARCHIVE", ARCHIVE)
+        .env("OMASTORM_WIND_OBS", WIND_OBS)
+        .env("OMASTORM_HRRR", HRRR);
+    cmd
+}
 /// How long a daemon may take to decode the archive and listen, and how long
 /// a reply may take. Both are far above the usual fraction of a second, so a
 /// busy machine gets a slow test rather than a failed one; they only bound
@@ -67,8 +76,7 @@ struct Engine {
 impl Engine {
     fn start() -> Self {
         let root = scratch_root("engine");
-        let child = Command::new(env!("CARGO_BIN_EXE_omastorm-engine"))
-            .env("OMASTORM_ARCHIVE", ARCHIVE)
+        let child = engine_cmd()
             .env("XDG_RUNTIME_DIR", &root)
             .stdout(Stdio::null())
             .spawn()
@@ -291,7 +299,7 @@ fn fixture_transport_and_shared_commands() {
     assert_eq!(s["site"]["id"], "KTLX");
     assert_eq!(s["source"], "archived");
     assert!(
-        Command::new(env!("CARGO_BIN_EXE_omastorm-engine"))
+        engine_cmd()
             .env("OMASTORM_ARCHIVE", ARCHIVE)
             .arg("ensure")
             .env("XDG_RUNTIME_DIR", &engine.root)
@@ -299,7 +307,7 @@ fn fixture_transport_and_shared_commands() {
             .unwrap()
             .success()
     );
-    let duplicate = Command::new(env!("CARGO_BIN_EXE_omastorm-engine"))
+    let duplicate = engine_cmd()
         .env("OMASTORM_ARCHIVE", ARCHIVE)
         .env("XDG_RUNTIME_DIR", &engine.root)
         .output()
@@ -323,7 +331,7 @@ fn crash_recovery_and_immutable_revisions() {
     engine.child.wait().unwrap();
     let old_path = engine.root.join("omastorm").join(&old);
     let restarted = Instant::now();
-    engine.child = Command::new(env!("CARGO_BIN_EXE_omastorm-engine"))
+    engine.child = engine_cmd()
         .env("OMASTORM_ARCHIVE", ARCHIVE)
         .env("XDG_RUNTIME_DIR", &engine.root)
         .spawn()
@@ -393,7 +401,7 @@ fn launcher_replaces_a_daemon_of_another_build() {
         }
     });
     let engine = |mode: &str| {
-        Command::new(env!("CARGO_BIN_EXE_omastorm-engine"))
+        engine_cmd()
             .env("OMASTORM_ARCHIVE", ARCHIVE)
             .arg(mode)
             .env("XDG_RUNTIME_DIR", &root)
@@ -439,7 +447,7 @@ fn launcher_replaces_a_daemon_of_another_build() {
 #[test]
 fn stop_with_no_daemon_is_quiet_and_leaves_nothing_behind() {
     let root = scratch_root("stop");
-    let output = Command::new(env!("CARGO_BIN_EXE_omastorm-engine"))
+    let output = engine_cmd()
         .env("OMASTORM_ARCHIVE", ARCHIVE)
         .arg("stop")
         .env("XDG_RUNTIME_DIR", &root)
@@ -556,7 +564,7 @@ fn tiles_needed_is_answered_tile_by_tile_to_the_sender() {
 fn a_lean_start_has_no_frame_until_a_site_is_selected() {
     let _serial = serial();
     let root = scratch_root("lean");
-    let mut child = Command::new(env!("CARGO_BIN_EXE_omastorm-engine"))
+    let mut child = engine_cmd()
         .env("XDG_RUNTIME_DIR", &root)
         .env_remove("OMASTORM_ARCHIVE")
         .stdout(Stdio::null())
@@ -618,7 +626,7 @@ fn launcher_retries_a_slow_hello_within_its_startup_budget() {
             }
         }
     });
-    let started = Command::new(env!("CARGO_BIN_EXE_omastorm-engine"))
+    let started = engine_cmd()
         .arg("ensure")
         .env("XDG_RUNTIME_DIR", &root)
         .output()
@@ -631,4 +639,71 @@ fn launcher_retries_a_slow_hello_within_its_startup_budget() {
     );
     drop(lock);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn set_product_velocity_and_wind_layers() {
+    let _serial = serial();
+    let engine = Engine::start();
+    let mut client = engine.connect();
+    assert_eq!(read(&mut client)["type"], "hello");
+    let initial = read(&mut client);
+    assert_eq!(initial["frame"]["product"], "REF");
+    send(
+        &mut client,
+        json!({"type":"set_product","product":"VEL","elevationIndex":0}),
+    );
+    let vel = read(&mut client);
+    assert_eq!(vel["type"], "state");
+    assert_eq!(vel["frame"]["product"], "VEL");
+    assert_eq!(vel["frame"]["units"], "m/s");
+    assert_eq!(vel["frame"]["productName"], "Velocity");
+    assert!(vel["frame"]["rays"].as_u64().unwrap() > 0);
+    send(
+        &mut client,
+        json!({"type":"set_product","product":"SW","elevationIndex":0}),
+    );
+    let e = read(&mut client);
+    assert_eq!(e["type"], "error");
+    assert_eq!(e["command"], "set_product");
+    send(
+        &mut client,
+        json!({"type":"set_product","product":"REF","elevationIndex":0}),
+    );
+    let back = read(&mut client);
+    assert_eq!(back["frame"]["product"], "REF");
+    send(&mut client, json!({"type":"lock","enabled":true}));
+    assert_eq!(read(&mut client)["site"]["locked"], true);
+    send(&mut client, json!({"type":"set_wind_forecast","hour":6}));
+    let loading = read(&mut client);
+    assert_eq!(loading["windField"]["forecastHour"], 6);
+    send(
+        &mut client,
+        json!({"type":"wind_needed","lat":40.25,"lon":-73.16}),
+    );
+    let deadline = Instant::now() + REPLY;
+    let mut saw_obs = false;
+    let mut saw_field = false;
+    while Instant::now() < deadline && (!saw_obs || !saw_field) {
+        let msg = read(&mut client);
+        if msg["type"] != "state" {
+            continue;
+        }
+        if msg["windObs"].as_array().is_some_and(|a| !a.is_empty()) {
+            saw_obs = true;
+            assert_eq!(msg["windObs"][0]["network"], "NDBC");
+        }
+        if msg["windField"]["status"] == "ok" {
+            saw_field = true;
+            assert_eq!(msg["windField"]["source"], "HRRR");
+            assert!(
+                msg["windField"]["texture"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("tex/")
+            );
+        }
+    }
+    assert!(saw_obs, "expected NDBC observations near the view");
+    assert!(saw_field, "expected HRRR fixture field");
 }

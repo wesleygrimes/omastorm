@@ -43,7 +43,11 @@ It is small (a few KB) so clients replace rather than merge.
  "timeline":[{"id":"...","scanTime":"...","status":"complete"}],
  "basemap":{"ne":{"version":"5.2.0-pre"},"osm":{"status":"ok","source":"OpenFreeMap",
             "version":"20260830_080001_pt","attribution":"OpenFreeMap © OpenMapTiles Data from OpenStreetMap"}},
- "playing":false}
+ "playing":false,
+ "windObs":[],
+ "windField":{"status":"unavailable","source":"HRRR","validTime":"","forecastHour":0,
+              "units":"m/s","texture":"","west":0,"south":0,"east":0,"north":0,
+              "width":0,"height":0,"palette":[],"bounds":[],"attribution":"NOAA NCEP HRRR"}}
 ```
 
 - `source`: `archived` | `live`. The daemon starts `live` with no station:
@@ -79,6 +83,15 @@ It is small (a few KB) so clients replace rather than merge.
   entry at a time, oldest after newest, pacing the loop to about ten seconds
   (250 ms to 1 s per frame, by how many there are). The sweep in progress is not part of
   the loop.
+- `windObs` is the surface anemometer list for the last `wind_needed` centre:
+  `id`, `name`, `network` (`NDBC` or `METAR`), `lat`, `lon`, optional
+  `speedMs` / `gustMs` / `dirDeg`, and `observedAt`. Empty until the first
+  successful fetch. Speeds are m/s.
+- `windField` is the HRRR 10 m speed overlay: `status` `ok` / `loading` /
+  `unavailable`, `source` `HRRR`, `validTime`, `forecastHour`, `units`,
+  `texture` (a `tex/` PNG, class in R like the sweep), WGS84 `west` `south`
+  `east` `north`, `width` `height`, `palette`, `bounds`, and `attribution`.
+  An old UI may ignore both keys.
 - `frame.status`: `complete` | `partial`. Partial frames are live sweeps still
   being filled; the texture path changes on every republish (revision suffix).
   While a station's first live sweep loads and nothing is cached, the frame is
@@ -166,6 +179,9 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
 {"type":"search_places","query":"norman","lat":35.4,"lon":-97.5}
 {"type":"play"}  {"type":"pause"}  {"type":"step","delta":-1}  {"type":"seek","id":"..."}
 {"type":"set_product","product":"REF","elevationIndex":0}
+{"type":"set_product","product":"VEL","elevationIndex":0}
+{"type":"wind_needed","lat":40.25,"lon":-73.16}
+{"type":"set_wind_forecast","hour":6}
 {"type":"tiles_needed","z":11,"x0":469,"y0":807,"x1":472,"y1":810}
 ```
 
@@ -203,8 +219,17 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
 ```
   `region` is the admin-1 name (a US state, a Canadian province);
   `country` is the ISO 3166-1 alpha-2 code. Either may be omitted when empty.
-- `set_product` requests a product and elevation. An unsupported selection
-  returns an `error` to its sender and retains the current frame.
+- `set_product` requests a product and elevation. This build serves `REF`
+  (reflectivity) and `VEL` (radial velocity) at elevation index 0. Super-res
+  volumes split the lowest angle: `VEL` is the Doppler cut. An unsupported
+  selection returns an `error` to its sender and retains the current frame.
+- `wind_needed` fetches surface wind observations (NDBC buoys and C-MAN,
+  plus METARs) within 400 km of the given centre, or the last `view_center` /
+  selected site when lat/lon are omitted, and the HRRR 10 m speed overlay.
+  The answer is a `state` broadcast with `windObs` and `windField`, not a
+  per-client reply. A bad lat/lon is an `error`.
+- `set_wind_forecast` sets the HRRR forecast hour (`0` analysis, `1`–`18`
+  forecast) and refetches `windField`. Hours outside that range are an `error`.
 - `step` moves `delta` entries along `timeline` from the frame shown, stopping
   at the ends; `seek` shows the entry with `id`. Both stop playback. A stepped
   frame's textures are republished under new `tex/` paths with the frame's

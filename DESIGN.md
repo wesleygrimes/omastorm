@@ -150,7 +150,19 @@ file ownership and precedence. Do not write Omarchy, Hyprland, or system
 configuration.
 
 A product is a texture, legend, units, timestamp, and source from the engine.
-Level II is what is drawn.
+Level II is what is drawn for radar: reflectivity (`REF`) and radial velocity
+(`VEL`). Velocity is the component toward or away from the dish, not wind at
+a mast.
+
+Surface wind is a separate layer, never mixed into the polar sweep or the
+radar tick strip:
+
+- **Observations** (`windObs`): NDBC buoys/C-MAN and METARs, stamped with
+  observation time and network. Dots, not a filled field.
+- **HRRR 10 m** (`windField`): a labeled model overlay. Valid time and
+  forecast hour are on the field, not on the sweep stamp. Attribution is
+  NOAA NCEP HRRR. This is the one allowed forecast: it must stay named as a
+  model.
 
 The live poller follows the latest volume. `try_next` returning no chunk is
 normal between chunks, but 90 seconds with no chunk at all means the

@@ -1,12 +1,16 @@
 mod catalog;
+mod hrrr;
 mod live;
 mod osm;
+mod product;
 mod protocol;
 mod sweep;
 mod tiles;
+mod wind_obs;
 
 use catalog::Entry;
 use chrono::{DateTime, Utc};
+use product::Product;
 use protocol::{
     Basemap, Command, Connection, ConnectionStatus, Frame, FrameStatus, Geometry, Handshake, Hello,
     Message, NaturalEarth, Places, Rejection, SiteSelection, SiteTable, Source, State, Station,
@@ -319,12 +323,17 @@ fn known_sweep_clears_loading(status: ConnectionStatus) -> bool {
 /// product, palette, and bounds (the engine's reflectivity vocabulary), the
 /// sweep's geometry and times, and the station table's coordinates. Texture
 /// paths are filled in by `publish_frame`.
-fn live_frame(template: &Frame, station: &Station, sweep: &sweep::Sweep, complete: bool) -> Frame {
+fn live_frame(product: Product, station: &Station, sweep: &sweep::Sweep, complete: bool) -> Frame {
     Frame {
-        id: format!("{}-{}-e0", station.id, compact(sweep.start_ms)),
-        product: template.product.clone(),
-        product_name: template.product_name.clone(),
-        units: template.units.clone(),
+        id: format!(
+            "{}-{}-e0{}",
+            station.id,
+            compact(sweep.start_ms),
+            product.id_suffix()
+        ),
+        product: product.code().into(),
+        product_name: product.name().into(),
+        units: product.units().into(),
         elevation_deg: (sweep.elevation_deg() * 100.0).round() / 100.0,
         scan_time: iso(sweep.start_ms),
         sweep_end: iso(sweep.end_ms),
@@ -346,8 +355,8 @@ fn live_frame(template: &Frame, station: &Station, sweep: &sweep::Sweep, complet
             lon: station.lon,
             alt_m: station.alt_m,
         },
-        palette: template.palette.clone(),
-        bounds: template.bounds.clone(),
+        palette: product.palette(),
+        bounds: product.bounds(),
     }
 }
 /// The frame shown while a station's first live sweep loads and nothing is
@@ -475,6 +484,30 @@ fn initial_state(
             osm,
         },
         playing: false,
+        wind_obs: Vec::new(),
+        wind_field: empty_wind_field(),
+    }
+}
+fn empty_wind_field() -> protocol::WindField {
+    protocol::WindField {
+        status: protocol::WindFieldStatus::Unavailable,
+        source: "HRRR".into(),
+        valid_time: String::new(),
+        forecast_hour: 0,
+        units: product::WIND_UNITS.into(),
+        texture: String::new(),
+        west: 0.0,
+        south: 0.0,
+        east: 0.0,
+        north: 0.0,
+        width: 0,
+        height: 0,
+        palette: product::WIND_PALETTE
+            .iter()
+            .map(|c| (*c).to_string())
+            .collect(),
+        bounds: product::WIND_BOUNDS.to_vec(),
+        attribution: "NOAA NCEP HRRR".into(),
     }
 }
 fn line(message: &Message) -> String {
@@ -502,6 +535,18 @@ struct Shared {
     /// The fixture frame: the engine's reflectivity vocabulary (product,
     /// palette, bounds) that live frames share.
     template: Frame,
+    /// Radar moment on screen (`set_product`).
+    product: Product,
+    /// Last settled map centre, for wind observations and HRRR.
+    view: Option<(f64, f64)>,
+    /// Archived volume bytes, so `set_product` can decode velocity.
+    archive: Option<Vec<u8>>,
+    /// HRRR forecast hour (0 = analysis).
+    wind_hour: u32,
+    /// Wakes the wind fetch task.
+    wind_wake: Arc<Notify>,
+    /// Velocity textures for the sweep in progress, when the cut carries VEL.
+    pending_vel: Option<Pending>,
     /// The station table from `hello`.
     sites: Vec<Station>,
     /// The runtime directory textures are published to.
@@ -558,8 +603,7 @@ impl Shared {
     fn show_position(&mut self, index: usize) -> io::Result<()> {
         if self.timeline.is_partial(index) {
             let pending = self
-                .pending
-                .as_ref()
+                .pending_for(self.product)
                 .ok_or_else(|| io::Error::other("the sweep in progress has no texture"))?;
             let mut frame = pending.frame.clone();
             publish_frame(&self.dir, &mut frame, &pending.texture, &pending.lut)?;
@@ -630,10 +674,13 @@ impl Shared {
                 Some(format!("Unknown site {id}; stations are listed in hello.")),
             );
         };
-        let listed = self.catalog.list(&station.id).unwrap_or_else(|e| {
-            eprintln!("Frame catalog: {e}");
-            Vec::new()
-        });
+        let listed = self
+            .catalog
+            .list(&station.id, self.product.code())
+            .unwrap_or_else(|e| {
+                eprintln!("Frame catalog: {e}");
+                Vec::new()
+            });
         let cached = match listed.last() {
             Some(newest) => self.catalog.load(&newest.id).unwrap_or_else(|e| {
                 eprintln!("Frame catalog: {e}");
@@ -686,6 +733,7 @@ impl Shared {
                 Some("view_center needs lat in [-90, 90] and lon in [-180, 180].".into()),
             );
         }
+        self.view = Some((lat, lon));
         if !self.state.site.follow || self.state.site.locked {
             return (false, None);
         }
@@ -701,6 +749,30 @@ impl Shared {
     /// timeline (a complete frame in time order, a growing one as the newest
     /// entry) and takes the screen while the user follows the newest frame.
     /// Broadcasts either way, since the timeline changed.
+    fn arrived_pair(
+        &mut self,
+        reflectivity: Arrival,
+        velocity: Option<Arrival>,
+        complete: bool,
+    ) -> io::Result<()> {
+        self.pending = Some(Pending {
+            frame: reflectivity.frame.clone(),
+            texture: reflectivity.texture.clone(),
+            lut: reflectivity.lut.clone(),
+            end_ms: reflectivity.end_ms,
+        });
+        self.pending_vel = velocity.as_ref().map(|arrival| Pending {
+            frame: arrival.frame.clone(),
+            texture: arrival.texture.clone(),
+            lut: arrival.lut.clone(),
+            end_ms: arrival.end_ms,
+        });
+        let shown = match self.product {
+            Product::Reflectivity => reflectivity,
+            Product::Velocity => velocity.unwrap_or(reflectivity),
+        };
+        self.arrived(shown, complete)
+    }
     fn arrived(&mut self, arrival: Arrival, complete: bool) -> io::Result<()> {
         let Arrival {
             frame,
@@ -833,6 +905,131 @@ impl Shared {
             self.broadcast();
         }
     }
+    fn set_product(&mut self, code: &str, elevation_index: u32) -> (bool, Option<String>) {
+        if elevation_index != 0 {
+            return (
+                false,
+                Some("Only elevation index 0 is available in this build.".into()),
+            );
+        }
+        let Some(product) = Product::parse(code) else {
+            return (
+                false,
+                Some(format!(
+                    "Unknown product {code}; this build serves REF and VEL."
+                )),
+            );
+        };
+        if product == self.product && self.state.frame.product == product.code() {
+            return (false, None);
+        }
+        self.product = product;
+        if self.state.source == Source::Archived {
+            return self.show_archived_product(product);
+        }
+        let site = self.state.site.id.clone();
+        if site.is_empty() {
+            product.apply(&mut self.state.frame);
+            return (true, None);
+        }
+        let listed = self.catalog.list(&site, product.code()).unwrap_or_default();
+        self.timeline = Timeline::new(listed);
+        if let Some(newest) = self.timeline.stored.last().cloned()
+            && let Ok(Some(stored)) = self.catalog.load(&newest.id)
+        {
+            let _ = self.show(stored.frame, &stored.texture, &stored.azimuth_lut);
+            self.frame_ms = Some(newest.start_ms);
+        }
+        if self.timeline.following()
+            && let Some(pending) = self.pending_for(product)
+        {
+            let mut frame = pending.frame.clone();
+            if publish_frame(&self.dir, &mut frame, &pending.texture, &pending.lut).is_ok() {
+                self.state.frame = frame;
+            }
+        }
+        (true, None)
+    }
+    fn pending_for(&self, product: Product) -> Option<&Pending> {
+        match product {
+            Product::Reflectivity => self.pending.as_ref(),
+            Product::Velocity => self.pending_vel.as_ref(),
+        }
+    }
+    fn show_archived_product(&mut self, product: Product) -> (bool, Option<String>) {
+        let Some(bytes) = &self.archive else {
+            return (
+                false,
+                Some("Archived volume is not available to decode.".into()),
+            );
+        };
+        match sweep::lowest(bytes, product) {
+            Ok(sweep) => {
+                let mut frame = self.state.frame.clone();
+                product.apply(&mut frame);
+                frame.id = format!(
+                    "{}{}",
+                    frame.id.trim_end_matches("-VEL"),
+                    product.id_suffix()
+                );
+                frame.elevation_deg = (sweep.elevation_deg() * 100.0).round() / 100.0;
+                frame.rays = sweep.rows();
+                frame.gates = u32::from(sweep.gates);
+                frame.first_gate_m = sweep.first_gate_m;
+                frame.gate_spacing_m = sweep.gate_spacing_m;
+                frame.scale = sweep.scale;
+                frame.offset = sweep.offset;
+                match encode(&sweep, &frame) {
+                    Ok((texture, lut)) => match self.show(frame, &texture, &lut) {
+                        Ok(()) => (true, None),
+                        Err(e) => (
+                            false,
+                            Some(format!("Could not publish {}: {e}", product.code())),
+                        ),
+                    },
+                    Err(e) => (
+                        false,
+                        Some(format!("Could not encode {}: {e}", product.code())),
+                    ),
+                }
+            }
+            Err(e) => (false, Some(e)),
+        }
+    }
+    fn set_wind_forecast(&mut self, hour: u32) -> (bool, Option<String>) {
+        if hour > 18 {
+            return (
+                false,
+                Some("set_wind_forecast hour must be 0 through 18.".into()),
+            );
+        }
+        if hour == self.wind_hour {
+            return (false, None);
+        }
+        self.wind_hour = hour;
+        self.state.wind_field.status = protocol::WindFieldStatus::Loading;
+        self.state.wind_field.forecast_hour = hour;
+        self.wind_wake.notify_one();
+        (true, None)
+    }
+    fn wind_needed(&mut self, lat: Option<f64>, lon: Option<f64>) -> (bool, Option<String>) {
+        match (lat, lon) {
+            (None, None) => {}
+            (Some(lat), Some(lon))
+                if (-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon) =>
+            {
+                self.view = Some((lat, lon));
+            }
+            _ => {
+                return (
+                    false,
+                    Some("wind_needed needs lat in [-90, 90] and lon in [-180, 180].".into()),
+                );
+            }
+        }
+        self.wind_wake.notify_one();
+        (false, None)
+    }
     /// A well-formed command from a client; the reader has already logged
     /// `Unsupported` ones by name. Broadcasts if anything changed and returns
     /// the message for the sender when the command could not be carried out;
@@ -853,12 +1050,10 @@ impl Shared {
             Command::Pause => (set(&mut self.state.playing, false), None),
             Command::SetProduct {
                 product,
-                elevation_index: 0,
-            } if product == self.state.frame.product => (false, None),
-            Command::SetProduct { .. } => (
-                false,
-                Some("Only reflectivity at elevation index 0 is available in this build.".into()),
-            ),
+                elevation_index,
+            } => self.set_product(&product, elevation_index),
+            Command::SetWindForecast { hour } => self.set_wind_forecast(hour),
+            Command::WindNeeded { lat, lon } => self.wind_needed(lat, lon),
             // Tile requests and place search are answered to the sender, not state.
             Command::TilesNeeded { .. } | Command::SearchPlaces { .. } | Command::Unsupported => {
                 return None;
@@ -919,6 +1114,28 @@ fn publish_frame(dir: &Path, frame: &mut Frame, texture: &[u8], lut: &[u8]) -> i
     Ok(())
 }
 /// Encode a sweep's texture and lookup as PNGs.
+fn encode_cut(
+    product: Product,
+    station: &Station,
+    sweep: &sweep::Sweep,
+    complete: bool,
+    catalog: &catalog::Catalog,
+    site: &str,
+    provenance: &str,
+) -> io::Result<Arrival> {
+    let frame = live_frame(product, station, sweep, complete);
+    let (texture, lut) = encode(sweep, &frame)?;
+    if complete {
+        catalog.store(site, &frame, sweep.start_ms, &texture, &lut, provenance)?;
+    }
+    Ok(Arrival {
+        frame,
+        texture,
+        lut,
+        start_ms: sweep.start_ms,
+        end_ms: sweep.end_ms,
+    })
+}
 fn encode(sweep: &sweep::Sweep, frame: &Frame) -> io::Result<(Vec<u8>, Vec<u8>)> {
     let pixels = sweep.texture(&frame.bounds, frame.palette.len());
     let texture = sweep::png(u32::from(sweep.gates), sweep.rows(), &pixels)?;
@@ -959,35 +1176,45 @@ async fn live_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<live::Even
             live::Event::Sweep {
                 site,
                 sweep,
+                velocity,
                 complete,
                 provenance,
             } => {
-                let (frame, catalog) = {
+                let (station, catalog) = {
                     let shared = shared.lock().unwrap();
                     if shared.state.site.id != site || shared.state.source != Source::Live {
                         continue;
                     }
-                    let Some(station) = shared.sites.iter().find(|s| s.id == site) else {
+                    let Some(station) = shared.sites.iter().find(|s| s.id == site).cloned() else {
                         continue;
                     };
-                    (
-                        live_frame(&shared.template, station, &sweep, complete),
-                        shared.catalog.clone(),
-                    )
+                    (station, shared.catalog.clone())
                 };
-                let encoded = spawn_blocking(move || -> io::Result<Arrival> {
+                let encoded = spawn_blocking(move || -> io::Result<(Arrival, Option<Arrival>)> {
                     let started = Instant::now();
-                    let (texture, lut) = encode(&sweep, &frame)?;
-                    if complete {
-                        catalog.store(
-                            &site,
-                            &frame,
-                            sweep.start_ms,
-                            &texture,
-                            &lut,
-                            &provenance,
-                        )?;
-                    }
+                    let reflectivity = encode_cut(
+                        Product::Reflectivity,
+                        &station,
+                        &sweep,
+                        complete,
+                        &catalog,
+                        &site,
+                        &provenance,
+                    )?;
+                    let vel = velocity
+                        .as_ref()
+                        .map(|s| {
+                            encode_cut(
+                                Product::Velocity,
+                                &station,
+                                s,
+                                complete,
+                                &catalog,
+                                &site,
+                                &provenance,
+                            )
+                        })
+                        .transpose()?;
                     eprintln!(
                         "{} Live {site}: {} rays {} in {:.0?}",
                         iso(now_ms()),
@@ -995,28 +1222,20 @@ async fn live_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<live::Even
                         if complete { "complete" } else { "partial" },
                         started.elapsed()
                     );
-                    Ok(Arrival {
-                        frame,
-                        texture,
-                        lut,
-                        start_ms: sweep.start_ms,
-                        end_ms: sweep.end_ms,
-                    })
+                    Ok((reflectivity, vel))
                 })
                 .await
                 .map_err(io::Error::other)
                 .and_then(|r| r);
                 match encoded {
-                    Ok(arrival) => {
+                    Ok((reflectivity, vel)) => {
                         let mut shared = shared.lock().unwrap();
-                        // A switch while encoding: this frame belongs to the
-                        // previous station's timeline, which is gone.
-                        if !arrival.frame.id.starts_with(&shared.state.site.id)
+                        if !reflectivity.frame.id.starts_with(&shared.state.site.id)
                             || shared.state.source != Source::Live
                         {
                             continue;
                         }
-                        if let Err(e) = shared.arrived(arrival, complete) {
+                        if let Err(e) = shared.arrived_pair(reflectivity, vel, complete) {
                             eprintln!("Live frame: {e}");
                         }
                     }
@@ -1026,41 +1245,70 @@ async fn live_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<live::Even
             live::Event::Backfill {
                 site,
                 sweep,
+                velocity,
                 provenance,
             } => {
-                let (frame, catalog) = {
+                let (station, catalog, want) = {
                     let shared = shared.lock().unwrap();
                     if shared.state.site.id != site || shared.state.source != Source::Live {
                         continue;
                     }
-                    let Some(station) = shared.sites.iter().find(|s| s.id == site) else {
+                    let Some(station) = shared.sites.iter().find(|s| s.id == site).cloned() else {
                         continue;
                     };
-                    (
-                        live_frame(&shared.template, station, &sweep, true),
-                        shared.catalog.clone(),
-                    )
+                    (station, shared.catalog.clone(), shared.product)
                 };
-                let stored = spawn_blocking(move || -> io::Result<Entry> {
-                    let (texture, lut) = encode(&sweep, &frame)?;
-                    catalog.store(&site, &frame, sweep.start_ms, &texture, &lut, &provenance)?;
+                let stored = spawn_blocking(move || -> io::Result<Option<Entry>> {
+                    let reflectivity = encode_cut(
+                        Product::Reflectivity,
+                        &station,
+                        &sweep,
+                        true,
+                        &catalog,
+                        &site,
+                        &provenance,
+                    )?;
+                    if let Some(s) = &velocity {
+                        let _ = encode_cut(
+                            Product::Velocity,
+                            &station,
+                            s,
+                            true,
+                            &catalog,
+                            &site,
+                            &provenance,
+                        );
+                    }
                     eprintln!(
                         "{} Live {site}: backfilled {} from {}",
                         iso(now_ms()),
-                        frame.scan_time,
+                        reflectivity.frame.scan_time,
                         provenance
                     );
-                    Ok(Entry {
-                        id: frame.id,
-                        scan_time: frame.scan_time,
-                        start_ms: sweep.start_ms,
-                    })
+                    let shown = match want {
+                        Product::Reflectivity => reflectivity,
+                        Product::Velocity => encode_cut(
+                            Product::Velocity,
+                            &station,
+                            velocity.as_ref().unwrap_or(&sweep),
+                            true,
+                            &catalog,
+                            &site,
+                            &provenance,
+                        )
+                        .unwrap_or(reflectivity),
+                    };
+                    Ok(Some(Entry {
+                        id: shown.frame.id,
+                        scan_time: shown.frame.scan_time,
+                        start_ms: shown.start_ms,
+                    }))
                 })
                 .await
                 .map_err(io::Error::other)
                 .and_then(|r| r);
                 match stored {
-                    Ok(entry) => {
+                    Ok(Some(entry)) => {
                         let mut shared = shared.lock().unwrap();
                         if !entry.id.starts_with(&shared.state.site.id)
                             || shared.state.source != Source::Live
@@ -1071,6 +1319,7 @@ async fn live_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<live::Even
                             eprintln!("Backfill frame: {e}");
                         }
                     }
+                    Ok(None) => {}
                     Err(e) => eprintln!("Backfill frame: {e}"),
                 }
             }
@@ -1118,6 +1367,71 @@ async fn player(shared: Arc<Mutex<Shared>>, wake: Arc<Notify>) {
                 break;
             }
             shared.tick();
+        }
+    }
+}
+/// Fetch NDBC/METAR observations and the HRRR 10 m field for the last view
+/// (or the selected site). A missing centre waits; a fixture env skips the
+/// network. Failures leave the previous values and mark the field unavailable.
+async fn wind_loop(shared: Arc<Mutex<Shared>>, wake: Arc<Notify>) {
+    loop {
+        let _ = timeout(Duration::from_secs(300), wake.notified()).await;
+        let (lat, lon, hour) = {
+            let shared = shared.lock().unwrap();
+            let (lat, lon) = match shared.view {
+                Some(pair) => pair,
+                None => {
+                    let id = &shared.state.site.id;
+                    match shared.sites.iter().find(|s| s.id == *id) {
+                        Some(s) => (s.lat, s.lon),
+                        None => continue,
+                    }
+                }
+            };
+            (lat, lon, shared.wind_hour)
+        };
+        let obs = wind_obs::load(lat, lon).await.unwrap_or_else(|e| {
+            eprintln!("wind obs: {e}");
+            Vec::new()
+        });
+        let field = match hrrr::load(hour).await {
+            Ok(decoded) => match decoded.encode() {
+                Ok((png, mut field)) => {
+                    let dir = shared.lock().unwrap().dir.clone();
+                    match publish(&dir, "hrrr", &format!("f{hour:02}"), &png) {
+                        Ok(path) => {
+                            field.texture = path;
+                            field
+                        }
+                        Err(e) => {
+                            eprintln!("HRRR texture: {e}");
+                            empty_wind_field()
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("HRRR encode: {e}");
+                    empty_wind_field()
+                }
+            },
+            Err(e) => {
+                eprintln!("HRRR: {e}");
+                let mut field = empty_wind_field();
+                field.forecast_hour = hour;
+                field
+            }
+        };
+        let mut shared = shared.lock().unwrap();
+        let obs_changed = shared.state.wind_obs != obs;
+        let field_changed = shared.state.wind_field != field;
+        if obs_changed {
+            shared.state.wind_obs = obs;
+        }
+        if field_changed {
+            shared.state.wind_field = field;
+        }
+        if obs_changed || field_changed {
+            shared.broadcast();
         }
     }
 }
@@ -1520,16 +1834,19 @@ fn serve(dir: PathBuf) -> io::Result<()> {
     let template = fixture_frame();
     // Development runs may start on an archived volume; the shipped daemon
     // starts with no frame and goes live on the first `select_site`.
-    let archive = env::var_os(ARCHIVE_ENV).filter(|path| !path.is_empty());
-    let (frame, frame_ms, entries, source, status) = match archive {
-        Some(path) => {
-            let bytes = fs::read(&path).map_err(|e| {
-                io::Error::other(format!(
-                    "Reading {ARCHIVE_ENV} {}: {e}",
-                    Path::new(&path).display()
-                ))
-            })?;
-            let (frame, ms) = decode_and_publish(&dir, &template, &bytes)?;
+    let archive_path = env::var_os(ARCHIVE_ENV).filter(|path| !path.is_empty());
+    let archive_bytes = match &archive_path {
+        Some(path) => Some(fs::read(path).map_err(|e| {
+            io::Error::other(format!(
+                "Reading {ARCHIVE_ENV} {}: {e}",
+                Path::new(path).display()
+            ))
+        })?),
+        None => None,
+    };
+    let (frame, frame_ms, entries, source, status) = match &archive_bytes {
+        Some(bytes) => {
+            let (frame, ms) = decode_and_publish(&dir, &template, bytes)?;
             let entry = Entry {
                 id: frame.id.clone(),
                 scan_time: frame.scan_time.clone(),
@@ -1567,6 +1884,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
     let catalog = Arc::new(catalog::Catalog::open(osm::cache_root()?.join("frames"))?);
     let (events, event_rx) = mpsc::channel(16);
     let wake = Arc::new(Notify::new());
+    let wind_wake = Arc::new(Notify::new());
     let shared = Arc::new(Mutex::new(Shared {
         state: initial_state(frame, osm.info(), source, status),
         tiles: tile_store,
@@ -1582,6 +1900,12 @@ fn serve(dir: PathBuf) -> io::Result<()> {
         frame_ms,
         timeline: Timeline::new(entries),
         pending: None,
+        pending_vel: None,
+        product: Product::Reflectivity,
+        view: None,
+        archive: archive_bytes,
+        wind_hour: 0,
+        wind_wake: wind_wake.clone(),
         wake: wake.clone(),
         last_broadcast: String::new(),
     }));
@@ -1595,6 +1919,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
     let listener = UnixListener::bind(&socket)?;
     runtime.spawn(live_events(shared.clone(), event_rx));
     runtime.spawn(player(shared.clone(), wake));
+    runtime.spawn(wind_loop(shared.clone(), wind_wake));
     let cleanup_shared = shared.clone();
     runtime.spawn(async move {
         let mut retirement = Retirement::default();

@@ -131,6 +131,58 @@ pub struct State {
     /// The tile sources (`docs/protocol.md`, `tile_ready`).
     pub basemap: Basemap,
     pub playing: bool,
+    /// Surface wind observations near the last `view_center` (NDBC + METAR).
+    pub wind_obs: Vec<WindObs>,
+    /// HRRR 10 m wind-speed overlay. `status` unavailable until a field is fetched.
+    pub wind_field: WindField,
+}
+
+/// One anemometer report (`docs/protocol.md`, wind observations).
+#[derive(Serialize, PartialEq, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct WindObs {
+    pub id: String,
+    pub name: String,
+    /// `NDBC` or `METAR`.
+    pub network: String,
+    pub lat: f64,
+    pub lon: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gust_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dir_deg: Option<i32>,
+    pub observed_at: String,
+}
+
+/// Cartesian 10 m wind-speed texture from HRRR (`docs/protocol.md`).
+#[derive(Serialize, PartialEq, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct WindField {
+    pub status: WindFieldStatus,
+    pub source: String,
+    pub valid_time: String,
+    pub forecast_hour: u32,
+    pub units: String,
+    pub texture: String,
+    pub west: f64,
+    pub south: f64,
+    pub east: f64,
+    pub north: f64,
+    pub width: u32,
+    pub height: u32,
+    pub palette: Vec<String>,
+    pub bounds: Vec<i32>,
+    pub attribution: String,
+}
+
+#[derive(Serialize, PartialEq, Clone, Copy, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum WindFieldStatus {
+    Ok,
+    Loading,
+    Unavailable,
 }
 
 /// `state.basemap`: what draws the tiles and, for `osm`, whether it can.
@@ -363,6 +415,20 @@ pub enum Command {
     /// `places` to the sender; optional `lat`/`lon` order nearer matches first.
     SearchPlaces {
         query: String,
+        #[serde(default)]
+        lat: Option<f64>,
+        #[serde(default)]
+        lon: Option<f64>,
+    },
+    /// HRRR forecast hour for the 10 m wind overlay: 0 is the analysis
+    /// hour, 1–18 the forecast. Answered with a `state` when the field
+    /// changes, or an `error` for an hour this build will not fetch.
+    SetWindForecast {
+        hour: u32,
+    },
+    /// Fetch surface observations and the HRRR overlay for this centre, or
+    /// the last `view_center` / selected site when lat/lon are omitted.
+    WindNeeded {
         #[serde(default)]
         lat: Option<f64>,
         #[serde(default)]

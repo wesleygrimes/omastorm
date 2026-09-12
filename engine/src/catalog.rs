@@ -120,14 +120,14 @@ impl Catalog {
             ],
         )
         .map_err(sql)?;
-        // The ring: everything past the newest RING for this station goes.
+        // The ring: everything past the newest RING for this station and product.
         let expired: Vec<(String, String, String)> = conn
             .prepare(
-                "SELECT id, texture, azimuth_lut FROM frames WHERE site = ?1
-                 ORDER BY start_ms DESC, id DESC LIMIT -1 OFFSET ?2",
+                "SELECT id, texture, azimuth_lut FROM frames WHERE site = ?1 AND product = ?2
+                 ORDER BY start_ms DESC, id DESC LIMIT -1 OFFSET ?3",
             )
             .map_err(sql)?
-            .query_map(params![site, RING as i64], |row| {
+            .query_map(params![site, frame.product, RING as i64], |row| {
                 Ok((row.get(0)?, row.get(1)?, row.get(2)?))
             })
             .map_err(sql)?
@@ -147,19 +147,19 @@ impl Catalog {
         Ok(())
     }
 
-    /// The station's frames, oldest first: the ring's contents, at most
-    /// `RING`, as `state.timeline` lists them.
-    pub fn list(&self, site: &str) -> io::Result<Vec<Entry>> {
+    /// The station's frames of `product`, oldest first: the ring's contents,
+    /// at most `RING`, as `state.timeline` lists them.
+    pub fn list(&self, site: &str, product: &str) -> io::Result<Vec<Entry>> {
         let mut entries: Vec<Entry> = self
             .conn
             .lock()
             .unwrap()
             .prepare(
-                "SELECT id, scan_time, start_ms FROM frames WHERE site = ?1
-                 ORDER BY start_ms DESC, id DESC LIMIT ?2",
+                "SELECT id, scan_time, start_ms FROM frames WHERE site = ?1 AND product = ?2
+                 ORDER BY start_ms DESC, id DESC LIMIT ?3",
             )
             .map_err(sql)?
-            .query_map(params![site, RING as i64], |row| {
+            .query_map(params![site, product, RING as i64], |row| {
                 Ok(Entry {
                     id: row.get(0)?,
                     scan_time: row.get(1)?,
@@ -208,8 +208,8 @@ impl Catalog {
             .lock()
             .unwrap()
             .query_row(
-                "SELECT COUNT(*) FROM frames WHERE site = ?1",
-                params![site],
+                "SELECT COUNT(*) FROM frames WHERE site = ?1 AND product = ?2",
+                params![site, "REF"],
                 |row| row.get::<_, i64>(0),
             )
             .map(|n| n as usize)
@@ -265,7 +265,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("omastorm-catalog-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let catalog = Catalog::open(dir.clone()).unwrap();
-        assert!(catalog.list("KTLX").unwrap().is_empty());
+        assert!(catalog.list("KTLX", "REF").unwrap().is_empty());
         for minute in 0..(RING as u32 + 3) {
             let f = frame("KTLX", minute);
             catalog
@@ -285,7 +285,7 @@ mod tests {
             .unwrap();
         assert_eq!(catalog.count("KTLX").unwrap(), RING);
         assert_eq!(catalog.count("KAMX").unwrap(), 1);
-        let listed = catalog.list("KTLX").unwrap();
+        let listed = catalog.list("KTLX", "REF").unwrap();
         let newest = catalog.load(&listed[RING - 1].id).unwrap().unwrap();
         assert_eq!(newest.frame.id, frame("KTLX", RING as u32 + 2).id);
         // Runtime paths are not stored; the caller republishes.
@@ -314,7 +314,7 @@ mod tests {
         assert!(files.iter().any(|f| f.contains("T120300Z")));
         // The listing is the ring oldest first; a frame loads by id until it
         // falls off the ring.
-        let listed = catalog.list("KTLX").unwrap();
+        let listed = catalog.list("KTLX", "REF").unwrap();
         assert_eq!(listed.len(), RING);
         assert_eq!(listed[0].id, frame("KTLX", 3).id);
         assert_eq!(listed[0].scan_time, "2026-09-06T12:03:00Z");
@@ -325,8 +325,8 @@ mod tests {
         assert_eq!(loaded.frame.id, frame("KTLX", 4).id);
         assert_eq!(loaded.texture, [4; 16]);
         assert!(catalog.load(&frame("KTLX", 1).id).unwrap().is_none());
-        assert_eq!(catalog.list("KAMX").unwrap().len(), 1);
-        assert!(catalog.list("KOUN").unwrap().is_empty());
+        assert_eq!(catalog.list("KAMX", "REF").unwrap().len(), 1);
+        assert!(catalog.list("KOUN", "REF").unwrap().is_empty());
         // Reopening sees the same rows.
         drop(catalog);
         let again = Catalog::open(dir.clone()).unwrap();
