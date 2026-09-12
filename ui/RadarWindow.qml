@@ -6,6 +6,7 @@ import Quickshell.Io
 import "Sites.js" as Sites
 import "Keys.js" as KeyMap
 import "Location.js" as Location
+import "Timeline.js" as Strip
 
 Item {
     id: app
@@ -101,17 +102,31 @@ Item {
     }
     // History fills 60 positions from the left when the strip is wide enough.
     // Compact widths drop the empty pads — at ~5 px/slot they read as a
-    // dotted cliff after the playhead instead of "room to fill."
-    readonly property var slots: {
-        var result = [];
-        for (var j = 0; j < frames.length; j++)
-            result.push({id: frames[j].id, partial: frames[j].status === "partial", empty: false});
-        if (!win.compact) {
-            for (var i = frames.length; i < 60; i++) result.push({empty: true, partial: false});
-        }
-        return result;
+    // dotted cliff after the playhead instead of "room to fill." A break
+    // marker sits between frames a hole separates (Timeline.js).
+    readonly property var slots: Strip.slots(frames, win.compact ? 0 : 60)
+    readonly property int currentSlot: scan ? slots.findIndex(s => s.id && s.id === scan.id) : -1
+    // The break note: the hovered or focused marker's slot, -1 for none.
+    property int hoveredGap: -1
+    property int focusedGap: -1
+    readonly property int notedGap: hoveredGap >= 0 ? hoveredGap : focusedGap
+    // The break notice: set when the frame on screen moved across a hole;
+    // the longest wording that fits beside the stamp.
+    property var gapCrossed: null
+    property string shownId: ""
+    property var shownTimeline: []
+    readonly property string gapNotice: breakNotice.text
+    Timer { id: gapNoticeTimer; interval: 4000; onTriggered: app.gapCrossed = null }
+    function noteCrossing() {
+        var id = state && state.frame ? state.frame.id : "", timeline = state ? state.timeline : [];
+        if (id === shownId) { shownTimeline = timeline; return; }
+        var crossed = Strip.crossing(timeline, shownId, id, !!state && state.playing, shownTimeline);
+        shownId = id;
+        shownTimeline = timeline;
+        if (!crossed) return;
+        gapCrossed = crossed;
+        gapNoticeTimer.restart();
     }
-    readonly property int currentSlot: scan ? slots.findIndex(s => !s.empty && s.id === scan.id) : -1
     function togglePlay() { if (frames.length > 1) engine.send({type: playing ? "pause" : "play"}); }
     function step(delta) { if (frames.length > 1) engine.send({type: "step", delta: delta}); }
     function jump(toNewest) { if (frames.length > 1) engine.send({type: "seek", id: frames[toNewest ? frames.length - 1 : 0].id}); }
@@ -167,6 +182,7 @@ Item {
     }
     property bool viewApplied: false
     onStateChanged: {
+        noteCrossing();
         if (!state) viewApplied = false;
         else {
             store.initialize();
@@ -252,9 +268,11 @@ Item {
         function bindings(): string { return JSON.stringify(app.bindings); }
         function errors(): string { return JSON.stringify(app.configErrors); }
         function menu(open: bool): void { if (open) treatmentMenu.show(); else treatmentMenu.close(); }
+        function gap(index: int): void { strip.focusGap(index); }
         function field(name: string): string { var value = JSON.parse(status())[name]; return value === undefined ? "" : String(value); }
         function status(): string {
             return JSON.stringify({sheet: sheet.open, menu: treatmentMenu.opened, treatment: app.treatment, weakFloor: app.weakFloor === null ? "off" : app.weakFloor, error: app.configError,
+                                   gaps: app.slots.filter(s => s.gap).length, notedGap: app.notedGap, notice: app.gapNotice,
                                    span: Math.round(map.span * 10) / 10, lat: Math.round(map.centerLat * 1000) / 1000, lon: Math.round(map.centerLon * 1000) / 1000,
                                    locationSource: app.store.locationSource, needsLocation: app.store.needsLocation, locating: app.store.locating,
                                    site: app.siteId, locked: app.locked, lockSource: app.store.lockSource, outsideCoverage: app.outsideCoverage});
@@ -521,7 +539,10 @@ Item {
             //   transport     — playback buttons
             //   tick strip    — frame ticks
             //   strip stamp   — date/time/zone above the tick strip
+            //   break notice  — "Skipped 26h · no scans available" beside the stamp
             //   frame index   — N / available frames above the strip
+            //   break marker  — dashed yellow mark between frames a hole separates
+            //   break note    — card over a hovered or focused break marker
             RowLayout {
                 id: brandRow
                 Layout.fillWidth: true
@@ -890,13 +911,31 @@ Item {
                         spacing: 8
                         LabelText {
                             id: stripStamp
-                            Layout.fillWidth: true
                             visible: !!app.scan && !!app.scan.scanTime
                             text: app.scan ? app.stamp(app.scan.scanTime) : ""
                             font.pixelSize: 10
                             opacity: .65
                             horizontalAlignment: Text.AlignLeft
                             elide: Text.ElideRight
+                        }
+                        // break notice — the hole the playhead just crossed
+                        LabelText {
+                            id: breakNotice
+                            Layout.fillWidth: true
+                            text: {
+                                if (!app.gapCrossed) return "";
+                                var forms = ["full", "short", "bare"];
+                                for (var i = 0; i < forms.length - 1; i++) {
+                                    var candidate = Strip.notice(app.gapCrossed, forms[i]);
+                                    if (candidate.length * noticeMetrics.advanceWidth <= width) return candidate;
+                                }
+                                return Strip.notice(app.gapCrossed, "bare");
+                            }
+                            color: app.theme.yellow
+                            font.pixelSize: 10
+                            horizontalAlignment: Text.AlignLeft
+                            elide: Text.ElideRight
+                            TextMetrics { id: noticeMetrics; font.family: app.theme.font; font.pixelSize: 10; text: "0" }
                         }
                         LabelText {
                             visible: !win.compact && app.frameIndex >= 0
@@ -910,45 +949,81 @@ Item {
                         id: strip
                         Layout.fillWidth: true
                         implicitHeight: 14
+                        readonly property real span: Math.max(1, width - 3)
+                        function slotAt(mx) {
+                            var n = app.slots.length;
+                            return n < 2 ? -1 : Math.round(Math.max(0, Math.min(1, (mx - 1.5) / span)) * (n - 1));
+                        }
+                        function slotX(i) { return app.slots.length > 1 ? Math.round(1.5 + i * span / (app.slots.length - 1)) : Math.round(width / 2); }
+                        function focusGap(n) {
+                            var seen = -1;
+                            for (var i = 0; i < app.slots.length; i++)
+                                if (app.slots[i].gap && ++seen === n) { markers.itemAt(i).forceActiveFocus(); return; }
+                        }
                         Repeater {
+                            id: markers
                             model: app.slots
-                            Rectangle {
+                            Item {
+                                id: slot
                                 required property var modelData
                                 required property int index
-                                readonly property bool current: !modelData.empty && index === app.currentSlot
+                                readonly property bool current: !!modelData.id && index === app.currentSlot
                                 readonly property bool tall: current || modelData.partial
-                                x: app.slots.length > 1 ? Math.round(index * (strip.width - width) / (app.slots.length - 1)) : Math.round((strip.width - width) / 2)
-                                y: Math.round((strip.height - height) / 2)
+                                x: strip.slotX(index) - Math.round(width / 2)
                                 width: tall ? 3 : 2
-                                height: modelData.empty ? 3 : tall ? 14 : 8
-                                // Compact (no empty pads): even weight so a mid-loop
-                                // playhead does not cliff into dimmer stubs.
-                                color: current ? app.theme.accent : modelData.partial ? "transparent"
-                                    : Qt.alpha(app.theme.foreground, modelData.empty ? .10
-                                        : win.compact ? .40
-                                        : index > app.currentSlot ? .28 : .42)
-                                border.width: modelData.partial && !current ? 1 : 0
-                                border.color: app.theme.accent
+                                height: strip.height
+                                activeFocusOnTab: modelData.gap
+                                onActiveFocusChanged: if (modelData.gap) app.focusedGap = activeFocus ? index : app.focusedGap === index ? -1 : app.focusedGap
+                                Rectangle {
+                                    visible: !slot.modelData.gap
+                                    anchors.horizontalCenter: parent.horizontalCenter
+                                    y: Math.round((strip.height - height) / 2)
+                                    width: slot.width
+                                    height: slot.modelData.empty ? 3 : slot.tall ? 14 : 8
+                                    // Compact (no empty pads): even weight so a mid-loop
+                                    // playhead does not cliff into dimmer stubs.
+                                    color: slot.current ? app.theme.accent : slot.modelData.partial ? "transparent"
+                                        : Qt.alpha(app.theme.foreground, slot.modelData.empty ? .10
+                                            : win.compact ? .40
+                                            : slot.index > app.currentSlot ? .28 : .42)
+                                    border.width: slot.modelData.partial && !slot.current ? 1 : 0
+                                    border.color: app.theme.accent
+                                }
+                                // break marker — three dashes; never a seek target
+                                Column {
+                                    visible: slot.modelData.gap
+                                    anchors.centerIn: parent
+                                    spacing: 2
+                                    Repeater {
+                                        model: 3
+                                        Rectangle { width: 2; height: 3; color: app.theme.yellow; opacity: app.notedGap === slot.index ? 1 : .8 }
+                                    }
+                                }
                             }
                         }
                         // Dragging scrubs: the nearest frame under the pointer is sought
-                        // once per frame change; the engine pauses on a seek.
+                        // once per frame change; the engine pauses on a seek. Breaks and
+                        // pads are skipped. Hovering a break shows its note.
                         MouseArea {
                             anchors.fill: parent
                             anchors.topMargin: -6
                             anchors.bottomMargin: -18
-                            enabled: app.frames.length > 1
+                            hoverEnabled: true
+                            enabled: app.frames.length > 0
                             property string target: ""
                             function scrub(mx) {
-                                var n = app.slots.length;
-                                if (n < 2) return;
-                                var i = Math.round(Math.max(0, Math.min(1, mx / strip.width)) * (n - 1));
-                                if (app.slots[i].empty) return;
+                                var i = strip.slotAt(mx);
+                                if (i < 0) return;
                                 var id = app.slots[i].id;
                                 if (id && id !== target) { target = id; engine.send({type: "seek", id: id}); }
                             }
-                            onPressed: mouse => { target = ""; scrub(mouse.x); }
-                            onPositionChanged: mouse => { if (pressed) scrub(mouse.x); }
+                            function hover(mx) {
+                                var i = strip.slotAt(mx);
+                                app.hoveredGap = i >= 0 && app.slots[i].gap && Math.abs(mx - strip.slotX(i)) <= 6 ? i : -1;
+                            }
+                            onPressed: mouse => { target = ""; if (app.frames.length > 1) scrub(mouse.x); }
+                            onPositionChanged: mouse => { hover(mouse.x); if (pressed && app.frames.length > 1) scrub(mouse.x); }
+                            onExited: app.hoveredGap = -1
                         }
                     }
                 }
@@ -1107,6 +1182,31 @@ Item {
                         }
                     }
                 }
+            }
+          }
+          // break note — above the hovered or focused break marker
+          Rectangle {
+            id: breakNote
+            readonly property var slot: app.notedGap >= 0 && app.notedGap < app.slots.length ? app.slots[app.notedGap] : null
+            readonly property point anchor: slot ? strip.mapToItem(surface, strip.slotX(app.notedGap), 0) : Qt.point(0, 0)
+            visible: !!slot && slot.gap
+            x: Math.round(Math.max(6, Math.min(surface.width - width - 6, anchor.x - width / 2)))
+            y: Math.round(anchor.y - height - 8)
+            width: noteRows.implicitWidth + 20
+            height: noteRows.implicitHeight + 14
+            color: Qt.alpha(app.theme.background, .96)
+            border.width: 1
+            border.color: Qt.alpha(app.theme.foreground, .45)
+            ColumnLayout {
+                id: noteRows
+                anchors.centerIn: parent
+                spacing: 3
+                LabelText { text: "No scans available between these times"; font.pixelSize: 10; opacity: .8 }
+                LabelText {
+                    text: breakNote.slot ? app.stamp(breakNote.slot.from) + "  →  " + app.stamp(breakNote.slot.to) : ""
+                    font.pixelSize: 10
+                }
+                LabelText { text: breakNote.slot ? Strip.elapsed(breakNote.slot.ms) : ""; color: app.theme.yellow; font.pixelSize: 10 }
             }
           }
           // The `?` sheet over everything, below the map's top edge.

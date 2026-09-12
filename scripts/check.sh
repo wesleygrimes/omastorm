@@ -94,7 +94,7 @@ if step build bash scripts/cargo.sh test --offline --locked --no-run; then
   tests & lanes+=($!)
   # check-picker and check-keys select stations for real, so they run last.
   lane window check-engine-ui check-map-sites check-map-network check-location check-picker check-keys & lanes+=($!)
-  lane alone check-ip-location check-bind check-link-plugin check-launcher check-theme check-map-tiles test-engine-pin check-engine-release check-popover & lanes+=($!)
+  lane alone check-timeline check-ip-location check-bind check-link-plugin check-launcher check-theme check-map-tiles test-engine-pin check-engine-release check-popover & lanes+=($!)
   for pid in "${lanes[@]}"; do wait "$pid" || failed=1; done
   lanes=()
 else

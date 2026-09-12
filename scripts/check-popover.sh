@@ -55,28 +55,31 @@ call capture "$PWD/review/popover-archived.png"
 for _ in {1..50}; do [[ -s review/popover-archived.png ]] && break; sleep .1; done
 sock="$XDG_RUNTIME_DIR/omastorm/engine.sock"
 tell() { printf '%s\n' "$@" | socat -t0.2 - "UNIX-CONNECT:$sock" >/dev/null; }
-# Two deterministic complete frames, using the archived fixture's metadata
-# and PNGs, exercise the real catalog/transport without waiting two volumes.
+# Three deterministic complete frames, using the archived fixture's metadata
+# and PNGs, exercise the real catalog/transport without waiting volumes:
+# two five minutes apart and a third 26 hours on, a hole like KAKQ's (#65).
 timeout 2 socat -t0.2 - "UNIX-CONNECT:$sock" < /dev/null | jq -c 'select(.type == "state")' | head -n1 > "$scratch/engine-state.json"
 ruby - "$scratch" <<'RUBY_SEED'
 require 'json'
 require 'fileutils'
 require 'open3'
+require 'time'
 scratch = ARGV.fetch(0)
 frame = JSON.parse(File.read("#{scratch}/engine-state.json")).fetch('frame')
 dir = "#{scratch}/cache/omastorm/frames"
 FileUtils.mkdir_p("#{dir}/KTLX")
 sql = []
-2.times do |i|
+start = 1369080600 # 2013-05-20T20:10:00Z
+[0, 5 * 60, 5 * 60 + 26 * 3600].each_with_index do |offset, i|
   f = Marshal.load(Marshal.dump(frame))
   f['id'] = "popover-test-#{i}"
-  f['scanTime'] = "2013-05-20T20:#{10+i*5}:00Z"
+  f['scanTime'] = Time.at(start + offset).utc.strftime('%Y-%m-%dT%H:%M:%SZ')
   f['sweepEnd'] = f['scanTime']
   tex = "KTLX/test-#{i}-sweep.png"; lut = "KTLX/test-#{i}-lut.png"
   FileUtils.cp("#{scratch}/r/omastorm/#{frame['texture']}", "#{dir}/#{tex}")
   FileUtils.cp("#{scratch}/r/omastorm/#{frame['azimuthLut']}", "#{dir}/#{lut}")
   f['texture'] = ''; f['azimuthLut'] = ''
-  values = [f['id'], 'KTLX', 'REF', f['elevationDeg'], 1369080600000+i*300000,
+  values = [f['id'], 'KTLX', 'REF', f['elevationDeg'], (start + offset) * 1000,
             f['scanTime'], f['sweepEnd'], 'synthetic popover lifecycle test', 0, JSON.generate(f), tex, lut]
   sql << "INSERT INTO frames VALUES (#{values.map { |v| v.is_a?(Numeric) ? v.to_s : "'" + v.gsub("'", "''") + "'" }.join(',')});"
 end
@@ -95,6 +98,21 @@ tell '{"type":"select_site","id":"KTLX"}' '{"type":"lock","enabled":true}' '{"ty
 until_status '.frame == "popover-test-0"'
 call step 1
 until_status '.frame == "popover-test-1" and .windowFrame == "popover-test-1"'
+# The 26 h hole: one break marker on both strips, no notice for the step
+# that did not cross it, a notice on each surface for the step that did,
+# worded for the direction, and none for a step back before the hole.
+until_status '.gaps == 1 and .notice == "" and .windowNotice == ""'
+call step 1
+until_status '.frame == "popover-test-2" and .windowNotice == "Skipped 26h · no scans available" and .notice == "Skipped 26h"'
+call step -1
+until_status '.frame == "popover-test-1" and .windowNotice == "Back 26h · no scans available" and .notice == "Back 26h"'
+sleep 4.5
+[[ $(status | jq -r .windowNotice) == "" ]] || fail 'The break notice did not clear'
+tell '{"type":"seek","id":"popover-test-0"}'
+until_status '.frame == "popover-test-0"'
+[[ $(status | jq -r .windowNotice) == "" ]] || fail 'A seek that crossed no hole showed a notice'
+tell '{"type":"seek","id":"popover-test-1"}'
+until_status '.frame == "popover-test-1"'
 call play
 until_status '.playing and .windowPlaying'
 # Expand while playing forwards the shared position instead of seek/pause.
