@@ -27,8 +27,11 @@ if [[ -n ${CARGO_TARGET_DIR:-} ]]; then
   exit 1
 fi
 scratch=$PWD/target/check
-logs=$scratch/logs
-rm -rf "$scratch"
+if (( ${#scratch} > 35 )); then
+  scratch=/tmp/oma-chk-$$
+fi
+logs=$PWD/target/check/logs
+rm -rf "$scratch" "$PWD/target/check"
 mkdir -p "$logs" "$scratch/tmp"
 # The check scripts' mktemp calls and the engine installer's work dir land here.
 export TMPDIR=$scratch/tmp

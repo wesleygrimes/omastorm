@@ -35,11 +35,18 @@ fn serial() -> MutexGuard<'static, ()> {
 /// interrupted run leaves its tree behind, and a later process with the same
 /// PID would otherwise find a socket file no daemon listens on.
 fn scratch_root(name: &str) -> PathBuf {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+    let mut root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
         "../target/t-{name}-{}-{:?}",
         std::process::id(),
         thread::current().id()
     ));
+    if root.as_os_str().len() + 25 >= 108 {
+        root = std::env::temp_dir().join(format!(
+            "oma-t-{}-{:?}",
+            std::process::id(),
+            thread::current().id()
+        ));
+    }
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).unwrap();
     // Remove engine/.. before adding the socket suffix: Unix socket paths
@@ -117,7 +124,7 @@ fn fixture_transport_and_shared_commands() {
     assert_eq!(hello["v"], 1);
     assert_eq!(hello["build"].as_str().unwrap().len(), 16);
     let sites = hello["sites"].as_array().unwrap();
-    assert_eq!(sites.len(), 163);
+    assert_eq!(sites.len(), 192);
     let mut ids = std::collections::HashSet::new();
     for site in sites {
         assert!(ids.insert(site["id"].as_str().unwrap()));
@@ -125,7 +132,9 @@ fn fixture_transport_and_shared_commands() {
         assert!((-180.0..=180.0).contains(&site["lon"].as_f64().unwrap()));
         assert!(site["altM"].as_f64().unwrap() > -500.0);
     }
-    for id in ["KTLX", "PABC", "PHKI", "PGUA", "TJUA", "RKJK", "LPLA"] {
+    for id in [
+        "KTLX", "PABC", "PHKI", "PGUA", "TJUA", "RKJK", "LPLA", "SBSR", "SBMI",
+    ] {
         assert!(ids.contains(id));
     }
     let initial = read(&mut first);

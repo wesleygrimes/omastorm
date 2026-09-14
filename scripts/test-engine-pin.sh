@@ -26,7 +26,10 @@ source scripts/engine-pin.sh
 # Several copies of the debug engine and a tree of HEAD: under target/, and
 # gone on exit, pass or fail.
 scratch=$PWD/target/test-engine-pin
-rm -rf "$scratch"
+if (( ${#scratch} > 35 )); then
+  scratch=/tmp/oma-pin-$$
+fi
+rm -rf "$scratch" "$PWD/target/test-engine-pin"
 mkdir -p "$scratch"
 trap 'rm -rf "$scratch"' EXIT
 export XDG_DATA_HOME="$scratch/data" XDG_CACHE_HOME="$scratch/cache" XDG_RUNTIME_DIR="$scratch/runtime"

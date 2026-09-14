@@ -4,7 +4,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 mkdir -p review
 scratch=$PWD/target/check-popover
-rm -rf "$scratch"
+if (( ${#scratch} > 35 )); then
+  scratch=/tmp/oma-pop-$$
+fi
+rm -rf "$scratch" "$PWD/target/check-popover"
 mkdir -p "$scratch"
 export XDG_RUNTIME_DIR="$scratch/r" XDG_CACHE_HOME="$scratch/cache"
 export QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=basic QT_QUICK_BACKEND=rhi QSG_RHI_BACKEND=opengl
