@@ -3,6 +3,7 @@ mod live;
 mod live_index;
 mod osm;
 mod protocol;
+mod redemet;
 mod sweep;
 mod tiles;
 

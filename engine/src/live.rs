@@ -495,6 +495,10 @@ impl Cursor {
 /// does not republish them. `skip_known` is true when this poller is a
 /// respawn on a station already on screen (cleanup or reselect).
 pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>, skip_known: bool) {
+    if site.starts_with("SB") {
+        crate::redemet::poll(site, events, cached, skip_known).await;
+        return;
+    }
     let mut back_off = BACK_OFF;
     let mut backfilling: Option<AbortOnDrop> = None;
     let mut known = cached;

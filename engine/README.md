@@ -72,6 +72,10 @@ new radials; an empty station is
 unavailable, and an unreachable bucket is offline. Cached frames remain
 usable under every condition.
 
+`src/redemet.rs` polls the REDEMET MAXCAPPI feed for Brazilian (`SB*`) stations,
+fetches georeferenced radar grids, and resamples them into polar sweeps matching
+the same texture and azimuth lookup format in under 35 ms.
+
 `src/catalog.rs` stores the newest 60 complete frames per station in
 `$XDG_CACHE_HOME/omastorm/frames/`: a SQLite WAL catalog and PNG files.
 Entries retain scan geometry, times, and source provenance. The UI never reads

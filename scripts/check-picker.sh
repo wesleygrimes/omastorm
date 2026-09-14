@@ -25,7 +25,7 @@ for _ in {1..50}; do [[ $(call matches) != '[]' ]] && break; sleep .1; done
 # The fixture's home view centres north-west of KTLX: KTLX first, the Norman pair next.
 m=$(call matches)
 [[ $m == '["KTLX","K'* && $m == *KOUN* && $m == *KCRI* ]] || fail "Empty query did not list the nearest stations first: $m"
-expect 'Empty query counts the whole table' '{"open":true,"query":"","selected":0,"total":163,"focused":true}' "$(call status)"
+expect 'Empty query counts the whole table' '{"open":true,"query":"","selected":0,"total":192,"focused":true}' "$(call status)"
 call open tlx
 expect 'ID without its leading letter ranks first' '"KTLX"' "$(call matches | cut -d, -f1 | tr -d '[]')"
 call open tulsa
@@ -47,6 +47,9 @@ expect 'Up stops at the first row' '0' "$(call status | grep -o '"selected":[0-9
 call open norman
 first=$(call matches | cut -d, -f1 | tr -d '[]"')
 expect 'Norman finds KOUN' KOUN "$first"
+call open "sao roque"
+first=$(call matches | cut -d, -f1 | tr -d '[]"')
+expect 'Sao Roque finds SBSR' SBSR "$first"
 call accept
 expect 'Enter closes the picker' 'false' "$(call status | grep -o '"open":[a-z]*' | cut -d: -f2)"
 # The field must let go of the keyboard, or the next `/` types into it instead of reopening.

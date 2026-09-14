@@ -1301,6 +1301,238 @@
       "altM": 125.5776
     },
     {
+      "id": "SBAL",
+      "name": "ALMENARA",
+      "state": "MG",
+      "lat": -16.201531,
+      "lon": -40.674153,
+      "altM": 300.0
+    },
+    {
+      "id": "SBBE",
+      "name": "BELEM",
+      "state": "PA",
+      "lat": -1.406667,
+      "lon": -48.461389,
+      "altM": 16.0
+    },
+    {
+      "id": "SBBV",
+      "name": "BOA VISTA",
+      "state": "RR",
+      "lat": 2.844167,
+      "lon": -60.700278,
+      "altM": 85.0
+    },
+    {
+      "id": "SBCH",
+      "name": "CHAPADA DOS GUIMARAES",
+      "state": "MT",
+      "lat": -15.47093,
+      "lon": -55.80552,
+      "altM": 811.0
+    },
+    {
+      "id": "SBCN",
+      "name": "CANGUCU",
+      "state": "RS",
+      "lat": -31.404,
+      "lon": -52.701644,
+      "altM": 440.0
+    },
+    {
+      "id": "SBCZ",
+      "name": "CRUZEIRO DO SUL",
+      "state": "AC",
+      "lat": -7.595833,
+      "lon": -72.767778,
+      "altM": 194.0
+    },
+    {
+      "id": "SBGA",
+      "name": "GAMA",
+      "state": "DF",
+      "lat": -15.97643,
+      "lon": -48.016142,
+      "altM": 1100.0
+    },
+    {
+      "id": "SBJR",
+      "name": "JARAGUARI",
+      "state": "MS",
+      "lat": -20.27855,
+      "lon": -54.47396,
+      "altM": 580.0
+    },
+    {
+      "id": "SBMI",
+      "name": "MORRO DA IGREJA",
+      "state": "SC",
+      "lat": -28.128373,
+      "lon": -49.471816,
+      "altM": 1822.0
+    },
+    {
+      "id": "SBMN",
+      "name": "MANAUS",
+      "state": "AM",
+      "lat": -3.149216,
+      "lon": -59.991881,
+      "altM": 84.0
+    },
+    {
+      "id": "SBMO",
+      "name": "MACEIO",
+      "state": "AL",
+      "lat": -9.55129,
+      "lon": -35.77068,
+      "altM": 118.0
+    },
+    {
+      "id": "SBMQ",
+      "name": "MACAPA",
+      "state": "AP",
+      "lat": -0.047222,
+      "lon": -51.097778,
+      "altM": 17.0
+    },
+    {
+      "id": "SBNT",
+      "name": "NATAL",
+      "state": "RN",
+      "lat": -5.90448,
+      "lon": -35.25401,
+      "altM": 52.0
+    },
+    {
+      "id": "SBPC",
+      "name": "PICO DO COUTO",
+      "state": "RJ",
+      "lat": -22.464278,
+      "lon": -43.297476,
+      "altM": 1750.0
+    },
+    {
+      "id": "SBPL",
+      "name": "PETROLINA",
+      "state": "PE",
+      "lat": -9.367,
+      "lon": -40.573,
+      "altM": 376.0
+    },
+    {
+      "id": "SBPV",
+      "name": "PORTO VELHO",
+      "state": "RO",
+      "lat": -8.715,
+      "lon": -63.893889,
+      "altM": 88.0
+    },
+    {
+      "id": "SBRB",
+      "name": "RIO BRANCO",
+      "state": "AC",
+      "lat": -9.86163,
+      "lon": -67.8961,
+      "altM": 153.0
+    },
+    {
+      "id": "SBSF",
+      "name": "SAO FRANCISCO",
+      "state": "MG",
+      "lat": -16.00889,
+      "lon": -44.69588,
+      "altM": 728.0
+    },
+    {
+      "id": "SBSG",
+      "name": "SANTIAGO",
+      "state": "RS",
+      "lat": -29.225213,
+      "lon": -54.930257,
+      "altM": 419.0
+    },
+    {
+      "id": "SBSL",
+      "name": "SAO LUIS",
+      "state": "MA",
+      "lat": -2.597222,
+      "lon": -44.2375,
+      "altM": 54.0
+    },
+    {
+      "id": "SBSN",
+      "name": "SANTAREM",
+      "state": "PA",
+      "lat": -2.429722,
+      "lon": -54.798889,
+      "altM": 60.0
+    },
+    {
+      "id": "SBSR",
+      "name": "SAO ROQUE",
+      "state": "SP",
+      "lat": -23.601915,
+      "lon": -47.094063,
+      "altM": 1098.0
+    },
+    {
+      "id": "SBST",
+      "name": "SANTA TERESA",
+      "state": "MG",
+      "lat": -19.98887,
+      "lon": -40.5794,
+      "altM": 655.0
+    },
+    {
+      "id": "SBSV",
+      "name": "SALVADOR",
+      "state": "BA",
+      "lat": -12.9025,
+      "lon": -38.32666,
+      "altM": 20.0
+    },
+    {
+      "id": "SBTF",
+      "name": "TEFE",
+      "state": "AM",
+      "lat": -3.377222,
+      "lon": -64.720556,
+      "altM": 75.0
+    },
+    {
+      "id": "SBTM",
+      "name": "TRES MARIAS",
+      "state": "MG",
+      "lat": -18.207259,
+      "lon": -45.460535,
+      "altM": 850.0
+    },
+    {
+      "id": "SBTT",
+      "name": "TABATINGA",
+      "state": "AM",
+      "lat": -4.248333,
+      "lon": -69.935,
+      "altM": 85.0
+    },
+    {
+      "id": "SBUA",
+      "name": "SAO GABRIEL DA CACHOEIRA",
+      "state": "AM",
+      "lat": -0.143611,
+      "lon": -67.056944,
+      "altM": 90.0
+    },
+    {
+      "id": "SBVH",
+      "name": "VILHENA",
+      "state": "RO",
+      "lat": -12.6973,
+      "lon": -60.1037,
+      "altM": 615.0
+    },
+    {
       "id": "TJUA",
       "name": "SAN JUAN",
       "state": "PR",
