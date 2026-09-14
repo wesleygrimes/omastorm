@@ -614,7 +614,7 @@ Item {
                             text: !app.scan ? "" : app.scan.productName.toUpperCase() + (app.scan.scanTime ? " / " + app.scan.elevationDeg.toFixed(1) + "°" : "")
                         }
                         LabelText {
-                            text: "NOAA NEXRAD"
+                            text: app.siteId.startsWith("SB") ? "REDEMET" : "NOAA NEXRAD"
                             font.letterSpacing: 1; opacity: .55
                         }
                     }

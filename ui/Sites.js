@@ -16,9 +16,20 @@ var STATES = {
     TN: "Tennessee", TX: "Texas", UT: "Utah", VT: "Vermont", VA: "Virginia", WA: "Washington",
     WV: "West Virginia", WI: "Wisconsin", WY: "Wyoming", PR: "Puerto Rico", GU: "Guam"
 };
-function stateName(abbr) { return STATES[abbr] || abbr || ""; }
+var BR_STATES = {
+    AC: "Acre", AL: "Alagoas", AP: "Amapá", AM: "Amazonas", BA: "Bahia", CE: "Ceará",
+    DF: "Distrito Federal", ES: "Espírito Santo", GO: "Goiás", MA: "Maranhão", MT: "Mato Grosso",
+    MS: "Mato Grosso do Sul", MG: "Minas Gerais", PA: "Pará", PB: "Paraíba", PR: "Paraná",
+    PE: "Pernambuco", PI: "Piauí", RJ: "Rio de Janeiro", RN: "Rio Grande do Norte",
+    RS: "Rio Grande do Sul", RO: "Rondônia", RR: "Roraima", SC: "Santa Catarina",
+    SE: "Sergipe", SP: "São Paulo", TO: "Tocantins"
+};
+function stateName(abbr, site) {
+    if (site && site.id && site.id.startsWith("SB")) return BR_STATES[abbr] || abbr || "";
+    return STATES[abbr] || BR_STATES[abbr] || abbr || "";
+}
 // The row's place column: the table's city, then the state spelled out.
-function place(site) { var s = stateName(site.state); return site.name.toUpperCase() + (s ? ", " + s.toUpperCase() : ""); }
+function place(site) { var s = stateName(site.state, site); return site.name.toUpperCase() + (s ? ", " + s.toUpperCase() : ""); }
 
 function distanceKm(lat1, lon1, lat2, lon2) {
     var r = Math.PI / 180, dp = (lat2 - lat1) * r, dl = (lon2 - lon1) * r;
@@ -69,11 +80,12 @@ function subsequence(text, needle) {
 function match(site, query) {
     var q = query.trim().toLowerCase().replace(/\s+/g, " ");
     var id = site.id.toLowerCase(), name = site.name.toLowerCase(), placeText = place(site).toLowerCase();
-    var state = stateName(site.state).toLowerCase(), abbr = (site.state || "").toLowerCase();
+    var state = stateName(site.state, site).toLowerCase(), abbr = (site.state || "").toLowerCase();
     var stateAt = name.length + 2, i;
     if (!q) return { tier: 5, idHits: [], placeHits: [] };
     if (id.indexOf(q) === 0) return { tier: 0, idHits: range(0, q.length), placeHits: [] };
     if (id.slice(1).indexOf(q) === 0) return { tier: 0, idHits: range(1, q.length), placeHits: [] };
+    if (id.startsWith("sb") && id.slice(2).indexOf(q) === 0) return { tier: 0, idHits: range(2, q.length), placeHits: [] };
     if ((i = wordStart(name, q)) >= 0) return { tier: 1, idHits: [], placeHits: range(i, q.length) };
     if (abbr && abbr === q) return { tier: 2, idHits: [], placeHits: range(stateAt, state.length) };
     if (state && (i = wordStart(state, q)) >= 0) return { tier: 2, idHits: [], placeHits: range(stateAt + i, q.length) };
