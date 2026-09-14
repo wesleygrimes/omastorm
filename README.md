@@ -187,7 +187,8 @@ This is a beta. Bugs, rough edges, and ideas go to
 
 ## Data and licenses
 
-Radar: NOAA NEXRAD Level II via the NOAA Open Data program on AWS. Basemap: ©
+Radar: NOAA NEXRAD Level II via the NOAA Open Data program on AWS, and REDEMET
+(DECEA / Brazilian Air Force) in Brazil. Basemap: ©
 OpenStreetMap contributors, [ODbL](https://opendatacommons.org/licenses/odbl/1-0/),
 tiles by [OpenFreeMap](https://openfreemap.org); Natural Earth, public domain.
 Location search: [GeoNames](https://www.geonames.org/),
