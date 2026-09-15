@@ -117,7 +117,7 @@ fn fixture_transport_and_shared_commands() {
     assert_eq!(hello["v"], 1);
     assert_eq!(hello["build"].as_str().unwrap().len(), 16);
     let sites = hello["sites"].as_array().unwrap();
-    assert_eq!(sites.len(), 163);
+    assert_eq!(sites.len(), 164);
     let mut ids = std::collections::HashSet::new();
     for site in sites {
         assert!(ids.insert(site["id"].as_str().unwrap()));
@@ -128,6 +128,21 @@ fn fixture_transport_and_shared_commands() {
     for id in ["KTLX", "PABC", "PHKI", "PGUA", "TJUA", "RKJK", "LPLA"] {
         assert!(ids.contains(id));
     }
+    // Every station names the feed that serves it, and the rendered product's
+    // station is one of its own (`docs/protocol.md`, station table).
+    let source_of = |id: &str| {
+        sites
+            .iter()
+            .find(|s| s["id"] == id)
+            .map(|s| s["source"].as_str().unwrap().to_owned())
+    };
+    assert_eq!(source_of("KTLX").as_deref(), Some("nexrad"));
+    assert_eq!(source_of("HKO").as_deref(), Some("hko"));
+    assert!(
+        sites
+            .iter()
+            .all(|s| matches!(s["source"].as_str(), Some("nexrad" | "hko")))
+    );
     let initial = read(&mut first);
     assert_eq!(initial["frame"]["scanTime"], "2013-05-20T20:16:43Z");
     assert_eq!(initial["source"], "archived");

@@ -113,9 +113,13 @@ Item {
     function step(delta) { if (frames.length > 1) engine.send({type: "step", delta: delta}); }
     function jump(toNewest) { if (frames.length > 1) engine.send({type: "seek", id: frames[toNewest ? frames.length - 1 : 0].id}); }
     readonly property int bands: scan ? scan.palette.length : 0
+    // The band edges the legend numbers come from: a sweep's integer dBZ
+    // bounds, or a rendered product's own edges, which may be fractional
+    // (mm/h) and therefore ride in the overlay.
+    readonly property var bandEdges: scan ? (scan.overlay ? scan.overlay.levels : scan.bounds) : []
     function legendLabel(index) {
-        var bounds = scan.bounds;
-        return index === 0 ? "<" + bounds[1] : index === bands - 1 ? bounds[index] + "+" : String(bounds[index]);
+        var edges = bandEdges;
+        return index === 0 ? "<" + edges[1] : index === bands - 1 ? edges[index] + "+" : String(edges[index]);
     }
     // Where the weak-return floor cuts the legend strip, as a fraction of its
     // width: the bands are equal columns, so the floor interpolates inside
@@ -123,9 +127,10 @@ Item {
     // in force because the frame carries no scale (an older engine).
     readonly property bool floorActive: !!scan && weakFloor !== null && scan.scale > 0
     readonly property real floorFraction: {
-        if (!floorActive || weakFloor <= scan.bounds[0]) return 0;
+        var edges = bandEdges;
+        if (!floorActive || edges.length < 2 || weakFloor <= edges[0]) return 0;
         for (var i = 0; i < bands; i++)
-            if (weakFloor < scan.bounds[i + 1]) return (i + (weakFloor - scan.bounds[i]) / (scan.bounds[i + 1] - scan.bounds[i])) / bands;
+            if (weakFloor < edges[i + 1]) return (i + (weakFloor - edges[i]) / (edges[i + 1] - edges[i])) / bands;
         return 1;
     }
     // Which legend numbers fit: the last always shows; each earlier one shows
@@ -608,10 +613,12 @@ Item {
                         spacing: 8
                         visible: !!app.scan
                         LabelText {
-                            text: !app.scan ? "" : app.scan.productName.toUpperCase() + (app.scan.scanTime ? " / " + app.scan.elevationDeg.toFixed(1) + "°" : "")
+                            // A rendered product has no tilt: its name carries
+                            // the height the publisher states.
+                            text: !app.scan ? "" : app.scan.productName.toUpperCase() + (app.scan.scanTime && !app.scan.overlay ? " / " + app.scan.elevationDeg.toFixed(1) + "°" : "")
                         }
                         LabelText {
-                            text: "NOAA NEXRAD"
+                            text: app.scan && app.scan.source ? app.scan.source : "NOAA NEXRAD"
                             font.letterSpacing: 1; opacity: .55
                         }
                     }

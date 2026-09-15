@@ -23,10 +23,11 @@ const THEMES: [(&str, usize); 4] = [
     ("coastline", 1),
     ("lakes", 1),
 ];
-/// Everything the site table reaches (DESIGN.md): 5–75° N, west of 20° W or
-/// east of 120° E, holding Lajes, Guam, Kunsan, and Kadena with their range.
+/// Everything the station table reaches (DESIGN.md): 5–75° N, west of 20° W or
+/// east of 120° E, holding Lajes, Guam, Kunsan, and Kadena with their range,
+/// and Hong Kong, which the rendered product's station table adds.
 fn in_envelope(lon: f64, lat: f64) -> bool {
-    (5.0..=75.0).contains(&lat) && (lon <= -20.0 || lon >= 120.0)
+    (5.0..=75.0).contains(&lat) && (lon <= -20.0 || lon >= 120.0 || (113.0..=116.5).contains(&lon))
 }
 const SCALE: f64 = 1e5;
 

@@ -1,4 +1,5 @@
 mod catalog;
+mod hko;
 mod live;
 mod live_index;
 mod osm;
@@ -9,9 +10,9 @@ mod tiles;
 use catalog::Entry;
 use chrono::{DateTime, Utc};
 use protocol::{
-    Basemap, Command, Connection, ConnectionStatus, Frame, FrameStatus, Geometry, Handshake, Hello,
-    Message, NaturalEarth, Places, Rejection, SiteSelection, SiteTable, Source, State, Station,
-    TileReady, TimelineEntry, VERSION, is_texture_path,
+    Basemap, Command, Connection, ConnectionStatus, Frame, FrameKind, FrameStatus, Geometry,
+    Handshake, Hello, Message, NaturalEarth, Places, Rejection, SiteSelection, SiteTable, Source,
+    State, Station, StationSource, TileReady, TimelineEntry, VERSION, is_texture_path,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -91,9 +92,17 @@ fn fingerprint() -> io::Result<String> {
 fn build_id() -> &'static str {
     BUILD.get().expect("fingerprint is computed before use")
 }
-/// The embedded station snapshot (`engine/data/sites.json`).
+/// The embedded station snapshot (`engine/data/sites.json`), extended with the
+/// rendered product's own table (`engine/data/hko_sites.json`). Each table
+/// keeps its own provenance; the merged fields name both.
 fn site_table() -> SiteTable {
-    serde_json::from_str(include_str!("../data/sites.json")).unwrap()
+    let mut table: SiteTable = serde_json::from_str(include_str!("../data/sites.json")).unwrap();
+    let rendered: SiteTable = serde_json::from_str(include_str!("../data/hko_sites.json")).unwrap();
+    table.source = format!("{}; rendered products: {}", table.source, rendered.source);
+    table.notes = format!("{} {}", table.notes, rendered.notes);
+    table.retrieved = table.retrieved.max(rendered.retrieved);
+    table.sites.extend(rendered.sites);
+    table
 }
 fn hello() -> Hello {
     let table = site_table();
@@ -327,16 +336,39 @@ fn should_restart_live(
 fn known_sweep_clears_loading(status: ConnectionStatus) -> bool {
     status == ConnectionStatus::Loading
 }
-/// A live station's frame from an assembled sweep: the fixture frame's
-/// product, palette, and bounds (the engine's reflectivity vocabulary), the
-/// sweep's geometry and times, and the station table's coordinates. Texture
-/// paths are filled in by `publish_frame`.
+/// The vocabulary a station's feed speaks: the product, its display name, the
+/// units of the scale the UI shows, and the palette with its band edges. The
+/// Level II path uses the fixture's reflectivity vocabulary; a rendered
+/// product carries its publisher's own scale and the ground box to draw it in
+/// (`hko.rs`).
+fn base_frame(template: &Frame, station: &Station) -> Frame {
+    let mut frame = template.clone();
+    frame.source = match station.source {
+        StationSource::Hko => hko::NETWORK.to_owned(),
+        StationSource::Nexrad => "NOAA NEXRAD".to_owned(),
+    };
+    if station.source == StationSource::Hko {
+        frame.product = hko::PRODUCT.to_owned();
+        frame.product_name = hko::PRODUCT_NAME.to_owned();
+        frame.units = hko::UNITS.to_owned();
+        frame.palette = hko::PALETTE.iter().map(|c| (*c).to_owned()).collect();
+        // The band edges are fractional in mm/h, so they travel in the overlay.
+        frame.bounds = Vec::new();
+        frame.kind = FrameKind::Overlay;
+        frame.overlay = Some(hko::overlay());
+    }
+    frame
+}
+/// A station's frame from an assembled sweep: the feed's own product, palette,
+/// and bounds, the sweep's geometry and times, and the station table's
+/// coordinates. Texture paths are filled in by `publish_frame`.
 fn live_frame(template: &Frame, station: &Station, sweep: &sweep::Sweep, complete: bool) -> Frame {
+    let base = base_frame(template, station);
     Frame {
         id: format!("{}-{}-e0", station.id, compact(sweep.start_ms)),
-        product: template.product.clone(),
-        product_name: template.product_name.clone(),
-        units: template.units.clone(),
+        product: base.product.clone(),
+        product_name: base.product_name.clone(),
+        units: base.units.clone(),
         elevation_deg: (sweep.elevation_deg() * 100.0).round() / 100.0,
         scan_time: iso(sweep.start_ms),
         sweep_end: iso(sweep.end_ms),
@@ -358,19 +390,56 @@ fn live_frame(template: &Frame, station: &Station, sweep: &sweep::Sweep, complet
             lon: station.lon,
             alt_m: station.alt_m,
         },
-        palette: template.palette.clone(),
-        bounds: template.bounds.clone(),
+        palette: base.palette.clone(),
+        bounds: base.bounds.clone(),
+        kind: base.kind,
+        overlay: base.overlay.clone(),
+        source: base.source.clone(),
+    }
+}
+/// A rendered product's frame: the picture carries no gate geometry, and its
+/// scale and offset stay zero, so the UI applies no weak-return floor to it.
+fn overlay_frame(template: &Frame, station: &Station, start_ms: i64) -> Frame {
+    let base = base_frame(template, station);
+    Frame {
+        id: format!("{}-{}", station.id, compact(start_ms)),
+        product: base.product.clone(),
+        product_name: base.product_name.clone(),
+        units: base.units.clone(),
+        elevation_deg: 0.0,
+        scan_time: iso(start_ms),
+        sweep_end: iso(start_ms),
+        status: FrameStatus::Complete,
+        texture: String::new(),
+        azimuth_lut: String::new(),
+        rays: 0,
+        gates: 0,
+        first_gate_m: 0,
+        gate_spacing_m: 0,
+        scale: 0.0,
+        offset: 0.0,
+        site: Geometry {
+            lat: station.lat,
+            lon: station.lon,
+            alt_m: station.alt_m,
+        },
+        palette: base.palette.clone(),
+        bounds: base.bounds.clone(),
+        kind: base.kind,
+        overlay: base.overlay.clone(),
+        source: base.source.clone(),
     }
 }
 /// The frame shown while a station's first live sweep loads and nothing is
 /// cached: one blank row, so the shader draws nothing, at the station's
 /// coordinates, with no scan time to show.
 fn empty_frame(template: &Frame, station: &Station) -> Frame {
+    let base = base_frame(template, station);
     Frame {
         id: format!("{}-loading", station.id),
-        product: template.product.clone(),
-        product_name: template.product_name.clone(),
-        units: template.units.clone(),
+        product: base.product.clone(),
+        product_name: base.product_name.clone(),
+        units: base.units.clone(),
         elevation_deg: 0.0,
         scan_time: String::new(),
         sweep_end: String::new(),
@@ -388,8 +457,11 @@ fn empty_frame(template: &Frame, station: &Station) -> Frame {
             lon: station.lon,
             alt_m: station.alt_m,
         },
-        palette: template.palette.clone(),
-        bounds: template.bounds.clone(),
+        palette: base.palette.clone(),
+        bounds: base.bounds.clone(),
+        kind: base.kind,
+        overlay: base.overlay.clone(),
+        source: base.source.clone(),
     }
 }
 /// The frame a lean daemon starts on before any `select_site`: the loading
@@ -404,6 +476,7 @@ fn startup_frame(template: &Frame) -> Frame {
         lat: 39.8,
         lon: -98.6,
         alt_m: 0.0,
+        source: StationSource::Nexrad,
     };
     empty_frame(template, &nowhere)
 }
@@ -615,12 +688,19 @@ impl Shared {
             task.abort();
         }
         let cached: Vec<i64> = self.timeline.stored.iter().map(|e| e.start_ms).collect();
-        self.live = Some(tokio::spawn(live::poll(
-            site,
-            self.events.clone(),
-            cached,
-            skip_known,
-        )));
+        // The station's own table says which feed serves it; nothing here
+        // reads the station's id.
+        let source = self
+            .sites
+            .iter()
+            .find(|s| s.id == site)
+            .map(|s| s.source)
+            .unwrap_or_default();
+        let events = self.events.clone();
+        self.live = Some(match source {
+            StationSource::Hko => tokio::spawn(hko::poll(site, events, cached, skip_known)),
+            StationSource::Nexrad => tokio::spawn(live::poll(site, events, cached, skip_known)),
+        });
         self.last_live_restart = Instant::now();
     }
     /// Go live on a station: the newest cached frame (or an empty one)
@@ -916,14 +996,23 @@ fn runtime() -> io::Result<PathBuf> {
 }
 /// Write `bytes` under `tex/` as an immutable revision and return its
 /// protocol path.
-fn publish(dir: &Path, stem: &str, frame: &str, bytes: &[u8]) -> io::Result<String> {
+fn publish(
+    dir: &Path,
+    stem: &str,
+    extension: &str,
+    frame: &str,
+    bytes: &[u8],
+) -> io::Result<String> {
     fs::create_dir_all(dir.join("tex"))?;
     // Nanosecond revision plus PID avoids Qt cache collisions across daemon restarts.
     let revision = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    let name = format!("tex/{stem}-{frame}-{}-r{revision}.png", std::process::id());
+    let name = format!(
+        "tex/{stem}-{frame}-{}-r{revision}.{extension}",
+        std::process::id()
+    );
     if !is_texture_path(&name) {
         return Err(io::Error::other(format!(
             "Refusing to publish texture path {name:?}; see docs/protocol.md"
@@ -939,11 +1028,29 @@ fn publish(dir: &Path, stem: &str, frame: &str, bytes: &[u8]) -> io::Result<Stri
     fs::rename(temporary, dir.join(&name))?;
     Ok(name)
 }
-/// Publish a frame's sweep texture and azimuth lookup under `tex/` and set
-/// its paths.
+/// The extension a frame's texture file carries. A published picture keeps the
+/// publisher's own JPEG, byte for byte; everything the engine encodes itself
+/// is a PNG. The name is opaque to the UI (`docs/protocol.md`), so this only
+/// keeps the runtime directory readable.
+fn texture_extension(frame: &Frame) -> &'static str {
+    match frame.kind {
+        FrameKind::Overlay if frame.status == FrameStatus::Complete => "jpg",
+        FrameKind::Sweep | FrameKind::Overlay => "png",
+    }
+}
+/// Publish a frame's texture, and its azimuth lookup when it has one, under
+/// `tex/`, and set its paths. A rendered product has no lookup: the UI draws
+/// its picture over a ground box instead of sampling a polar sweep.
 fn publish_frame(dir: &Path, frame: &mut Frame, texture: &[u8], lut: &[u8]) -> io::Result<()> {
-    frame.texture = publish(dir, "sweep", &frame.id, texture)?;
-    frame.azimuth_lut = publish(dir, "azlut", &frame.id, lut)?;
+    let (stem, extension) = match frame.kind {
+        FrameKind::Overlay => ("overlay", texture_extension(frame)),
+        FrameKind::Sweep => ("sweep", "png"),
+    };
+    frame.texture = publish(dir, stem, extension, &frame.id, texture)?;
+    frame.azimuth_lut = match frame.kind {
+        FrameKind::Overlay => String::new(),
+        FrameKind::Sweep => publish(dir, "azlut", "png", &frame.id, lut)?,
+    };
     Ok(())
 }
 /// Encode a sweep's texture and lookup as PNGs.
@@ -1100,6 +1207,72 @@ async fn live_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<live::Even
                         }
                     }
                     Err(e) => eprintln!("Backfill frame: {e}"),
+                }
+            }
+            live::Event::Overlay {
+                site,
+                start_ms,
+                image,
+                show,
+                provenance,
+            } => {
+                let (frame, catalog) = {
+                    let shared = shared.lock().unwrap();
+                    if shared.state.site.id != site || shared.state.source != Source::Live {
+                        continue;
+                    }
+                    let Some(station) = shared.sites.iter().find(|s| s.id == site) else {
+                        continue;
+                    };
+                    (
+                        overlay_frame(&shared.template, station, start_ms),
+                        shared.catalog.clone(),
+                    )
+                };
+                let stored_frame = frame.clone();
+                let stored = spawn_blocking(move || -> io::Result<(Entry, Vec<u8>)> {
+                    catalog.store(&site, &stored_frame, start_ms, &image, &[], &provenance)?;
+                    Ok((
+                        Entry {
+                            id: stored_frame.id,
+                            scan_time: stored_frame.scan_time,
+                            start_ms,
+                        },
+                        image,
+                    ))
+                })
+                .await
+                .map_err(io::Error::other)
+                .and_then(|r| r);
+                match stored {
+                    Ok((entry, image)) => {
+                        let mut shared = shared.lock().unwrap();
+                        // A switch while the picture was written: it belongs to
+                        // the previous station's timeline, which is gone.
+                        if !entry.id.starts_with(&shared.state.site.id)
+                            || shared.state.source != Source::Live
+                        {
+                            continue;
+                        }
+                        let result = if show {
+                            shared.arrived(
+                                Arrival {
+                                    frame,
+                                    texture: image,
+                                    lut: Vec::new(),
+                                    start_ms,
+                                    end_ms: start_ms,
+                                },
+                                true,
+                            )
+                        } else {
+                            shared.backfilled(entry)
+                        };
+                        if let Err(e) = result {
+                            eprintln!("Live frame: {e}");
+                        }
+                    }
+                    Err(e) => eprintln!("Live frame: {e}"),
                 }
             }
             live::Event::Offline { site, reason } => {
@@ -2172,6 +2345,7 @@ mod handoff_tests {
             lat,
             lon,
             alt_m: 0.0,
+            source: crate::protocol::StationSource::Nexrad,
         }
     }
     /// A point `fraction` of the way from `a` to `b` along the parallel.

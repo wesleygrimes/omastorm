@@ -149,7 +149,7 @@ FocusScope {
                     implicitWidth: product.implicitWidth + 10; implicitHeight: 20
                     color: Qt.alpha(card.theme.background, .92)
                     Label { id: product; anchors.centerIn: parent; font.pixelSize: 10; opacity: .8
-                        text: card.scan ? card.scan.productName.toUpperCase() + " " + card.scan.elevationDeg.toFixed(1) + "°" : "" }
+                        text: card.scan ? card.scan.productName.toUpperCase() + (card.scan.overlay ? "" : " " + card.scan.elevationDeg.toFixed(1) + "°") : "" }
                 }
                 Item { Layout.fillWidth: true }
                 Rectangle {

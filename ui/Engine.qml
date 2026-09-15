@@ -33,10 +33,22 @@ QtObject {
         var name = path.slice(4);
         return name !== "" && name !== "." && name !== ".." && !/[\/\\\0]/.test(name);
     }
-    /// The tile path rule (`docs/protocol.md`): the literal `tiles/` prefix,
-    /// a set (`ne` or `osm`), a zoom and a column as decimal integers, and
-    /// one further segment under the texture rule. The engine applies the
-    /// same rule before publishing.
+    /// A rendered product's frame (`docs/protocol.md`, frames): a lat/lon
+    /// ground box, the map area within the texture, and one more band edge
+    /// than the palette has colours. The engine applies the same rule before
+    /// publishing.
+    function validOverlay(frame) {
+        var box = frame.overlay;
+        if (!box || typeof box !== "object") return false;
+        var numbers = [box.north, box.south, box.east, box.west];
+        if (!numbers.every(function (v) { return typeof v === "number" && isFinite(v); })) return false;
+        if (!(box.north > box.south && box.east > box.west)) return false;
+        var crop = box.crop;
+        if (!crop || !(crop.width > 0 && crop.height > 0)) return false;
+        if (!(crop.x >= 0 && crop.y >= 0)) return false;
+        if (!Array.isArray(box.levels) || box.levels.length !== (frame.palette || []).length + 1) return false;
+        return box.levels.every(function (v) { return typeof v === "number" && isFinite(v); });
+    }
     function validTilePath(path) {
         if (typeof path !== "string") return false;
         var parts = path.split("/");
@@ -60,7 +72,13 @@ QtObject {
             else if (message.type === "state") {
                 if (!message.frame || !validTexturePath(message.frame.texture))
                     throw new Error("Invalid texture path: " + JSON.stringify(message.frame.texture));
-                if (!validTexturePath(message.frame.azimuthLut))
+                // A rendered product is a picture over a ground box: it has no
+                // azimuth lookup, so an empty one is expected there rather
+                // than a fault.
+                if (message.frame.kind === "overlay") {
+                    if (!validOverlay(message.frame))
+                        throw new Error("Invalid overlay box: " + JSON.stringify(message.frame.overlay));
+                } else if (!validTexturePath(message.frame.azimuthLut))
                     throw new Error("Invalid azimuth lookup path: " + JSON.stringify(message.frame.azimuthLut));
                 state = message;
                 error = "";

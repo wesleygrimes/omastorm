@@ -165,3 +165,32 @@ Live is now. Archive is a finished scan or a past day.
 
 One client for archive list, range-get, chunk list, and chunk get.
 Unsigned HTTPS. Timeouts on every call.
+
+## Rendered products
+
+One station in the table does not publish volumes at all. The Hong Kong
+Observatory renders its own rainfall-rate picture and republishes it every six
+minutes; the engine fetches the picture over plain HTTPS, no key, and
+publishes it as the frame's texture byte for byte (`engine/src/hko.rs`).
+
+| | Hong Kong Observatory |
+|---|---|
+| Index | `https://www.hko.gov.hk/wxinfo/radars/temp_json/nradar_img.json`, the `radar.range0.image` entries (256 km) |
+| Frame | `https://www.hko.gov.hk/wxinfo/radars/rad_256_png/2d256nradar_<YYYYMMDDHHMM>.jpg`, stamped Hong Kong time |
+| Cadence | six minutes; the index lists twenty frames |
+| Ground box | the Observatory's own KML ground overlay for the product: north 24.60560, south 20.00107, west 111.68321, east 116.66013 |
+| Attribution | © Hong Kong Observatory; non-commercial use with acknowledgement |
+
+The file carries its own basemap, terrain, legend and colour ramp, and the
+values behind that ramp never leave the Observatory, so nothing is decoded from
+it. The frame says `kind: overlay`; `frame.overlay` carries the ground box, the
+map area within the file (its columns beside that area are the Observatory's
+legend panel), and the Observatory's own band edges in mm/h. The UI draws the
+picture over the box and labels the legend from those edges
+([protocol.md](protocol.md), frames).
+
+Two things this fileshape does not allow, and the engine does not attempt:
+inverting the picture back into rainfall values (the echoes are composited over
+a shaded basemap, so light rain and coastline shading are not separable), and
+detail finer than the picture's own 1.29 km pixels.
+
