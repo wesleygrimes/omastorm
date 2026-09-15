@@ -45,11 +45,9 @@ and `nexrad-model` dependencies. It reads through the lowest cut, sorts rays
 stably by azimuth, and publishes a polar sweep texture and azimuth lookup.
 The UI samples these directly; radar arrays never enter JSON or QML JavaScript.
 
-`src/live_index.rs` lists occupied volume directories, then searches their
-rotating order by each one's newest scan timestamp. Expired directories are
-excluded from the search, as are older generations still present in the same
-directory. `src/live.rs` then polls dated chunks, replays the current
-volume's lowest cut, and assembles incoming radials.
+Fetch is [docs/radar-fetch.md](../docs/radar-fetch.md). `src/live.rs` polls
+dated chunks,
+replays the current volume's lowest cut, and assembles incoming radials.
 Each chunk that grows the cut publishes a partial frame; the cut's final
 radial or the next cut completes it. Gaps beyond 0.75° from any ray remain
 blank. Selecting another station cancels the poller and discards its late events.
