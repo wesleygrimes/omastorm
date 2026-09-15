@@ -119,8 +119,11 @@ camera. Do not persist the automatically selected station.
 Closing preserves the view. Reopening restores it, with explicit config
 values taking precedence. Expanding the popover preserves its center, zoom,
 station, frame, and playback. An engine reconnect restores the necessary
-commands without resetting the user's camera. Weather location supplies an
-initial view; subsequent weather changes do not overwrite a remembered view.
+commands without resetting the user's camera; the window and the bar share
+one remembered lock and follow it, so a restart brings back the station the
+user last chose, not whichever client reconnects last. Weather location
+supplies an initial view; subsequent weather changes do not overwrite a
+remembered view.
 
 Explicit coordinates are honored on every launch and do not imply a radar
 lock. A configured center far from a locked radar is valid: preserve both,
