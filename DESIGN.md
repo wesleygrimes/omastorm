@@ -157,7 +157,13 @@ file ownership and precedence. Do not write Omarchy, Hyprland, or system
 configuration.
 
 A product is a texture, legend, units, timestamp, and source from the engine.
-Level II is what is drawn.
+Level II is what is drawn for radar: reflectivity (`REF`) and radial velocity
+(`VEL`). Velocity is the component toward or away from the dish, not wind at
+a mast.
+
+Surface wind observations (`windObs`) are a separate layer: NDBC buoys/C-MAN
+and METARs, stamped with observation time and network. Dots, not a filled
+field, never mixed into the polar sweep or the radar tick strip. No forecasts.
 
 Live join is [docs/radar-fetch.md](docs/radar-fetch.md): read the last
 archive volume header, then poll the slots after it in the chunk bucket.

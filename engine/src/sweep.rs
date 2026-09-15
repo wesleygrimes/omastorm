@@ -13,8 +13,9 @@
 //! any ray, so unscanned azimuths draw nothing instead of smearing the
 //! nearest ray around the circle (`docs/protocol.md`, sweep texture).
 
+use crate::product::Product;
 use nexrad_data::volume::{File, Record};
-use nexrad_model::data::{DataMoment, Radial};
+use nexrad_model::data::{DataMoment, MomentData, Radial};
 
 /// An azimuth farther than this from every ray has not been scanned. Half a
 /// degree of spacing puts every entry within 0.25° of a ray; a 1° cut within
@@ -51,14 +52,23 @@ pub struct Sweep {
     pub offset: f32,
 }
 
-/// Decode the reflectivity of the first elevation cut in `archive`, a gzip
-/// wrapped or bare Archive II volume.
-pub fn lowest_reflectivity(archive: &[u8]) -> Result<Sweep, String> {
+fn moment_of(product: Product, radial: &Radial) -> Option<&MomentData> {
+    match product {
+        Product::Reflectivity => radial.reflectivity(),
+        Product::Velocity => radial.velocity(),
+    }
+}
+
+/// Decode the given moment of the lowest elevation that carries it. Super-res
+/// VCPs split the lowest angle: cut 1 is reflectivity-only, cut 2 is Doppler.
+pub fn lowest(archive: &[u8], product: Product) -> Result<Sweep, String> {
     let file = File::new(archive.to_vec())
         .decompress()
         .map_err(|e| format!("inflating volume: {e}"))?;
-    let mut radials: Vec<Radial> = Vec::new();
-    'records: for record in file
+    let mut cut: Vec<Radial> = Vec::new();
+    let mut elev: Option<u8> = None;
+    let mut last_err = format!("volume holds no {}", product.name().to_ascii_lowercase());
+    for record in file
         .records()
         .map_err(|e| format!("splitting records: {e}"))?
     {
@@ -73,29 +83,51 @@ pub fn lowest_reflectivity(archive: &[u8]) -> Result<Sweep, String> {
             .radials()
             .map_err(|e| format!("decoding record: {e}"))?
         {
-            if let Some(first) = radials.first()
-                && first.elevation_number() != radial.elevation_number()
-            {
-                break 'records;
+            if elev.is_some_and(|e| e != radial.elevation_number()) {
+                match Sweep::from_radials(&cut, product) {
+                    Ok(sweep) => return Ok(sweep),
+                    Err(e) => {
+                        last_err = e;
+                        if product == Product::Reflectivity {
+                            return Err(last_err);
+                        }
+                    }
+                }
+                cut.clear();
             }
-            radials.push(radial);
+            elev = Some(radial.elevation_number());
+            cut.push(radial);
         }
     }
-    Sweep::from_radials(&radials)
+    Sweep::from_radials(&cut, product).map_err(|_| last_err)
+}
+
+/// Decode the reflectivity of the first elevation cut in `archive`.
+pub fn lowest_reflectivity(archive: &[u8]) -> Result<Sweep, String> {
+    lowest(archive, Product::Reflectivity)
 }
 
 impl Sweep {
-    /// The reflectivity of `radials`, one cut in decoded order, as a sweep.
-    pub fn from_radials(radials: &[Radial]) -> Result<Sweep, String> {
-        let Some(first) = radials.first() else {
-            return Err("volume holds no radials".into());
+    /// One moment of `radials`, one cut in decoded order, as a sweep.
+    /// Radials that do not carry the moment are skipped so a velocity cut
+    /// can still draw when only some rays have VEL. The first radial that
+    /// carries the moment sets gate geometry; later radials that change it
+    /// are an error.
+    pub fn from_radials(radials: &[Radial], product: Product) -> Result<Sweep, String> {
+        let Some(first) = radials
+            .iter()
+            .find(|radial| moment_of(product, radial).is_some())
+        else {
+            return Err(format!(
+                "cut carries no {}",
+                product.name().to_ascii_lowercase()
+            ));
         };
-        let Some(moment) = first.reflectivity() else {
-            return Err("first cut carries no reflectivity".into());
-        };
+        let moment = moment_of(product, first).expect("checked");
         if moment.data_word_size() != 8 {
             return Err(format!(
-                "reflectivity uses {}-bit words; 8 expected",
+                "{} uses {}-bit words; 8 expected",
+                product.name().to_ascii_lowercase(),
                 moment.data_word_size()
             ));
         }
@@ -109,12 +141,12 @@ impl Sweep {
             .map_or(start_ms, Radial::collection_timestamp);
         let mut rays = Vec::with_capacity(radials.len());
         for radial in radials {
-            let Some(moment) = radial.reflectivity() else {
-                return Err(format!(
-                    "radial {} carries no reflectivity",
-                    radial.azimuth_number()
-                ));
+            let Some(moment) = moment_of(product, radial) else {
+                continue;
             };
+            if moment.data_word_size() != 8 {
+                continue;
+            }
             let same_geometry = moment.gate_count() == gates
                 && meters(moment.first_gate_range_km()) == first_gate_m
                 && meters(moment.gate_interval_km()) == gate_spacing_m
@@ -123,8 +155,9 @@ impl Sweep {
                 && moment.raw_values().len() == usize::from(gates);
             if !same_geometry {
                 return Err(format!(
-                    "radial {} changes gate geometry within the cut",
-                    radial.azimuth_number()
+                    "radial {} changes {} gate geometry within the cut",
+                    radial.azimuth_number(),
+                    product.name().to_ascii_lowercase()
                 ));
             }
             rays.push(Ray {
@@ -133,6 +166,12 @@ impl Sweep {
                 time_ms: radial.collection_timestamp(),
                 codes: moment.raw_values().to_vec(),
             });
+        }
+        if rays.is_empty() {
+            return Err(format!(
+                "cut carries no {}",
+                product.name().to_ascii_lowercase()
+            ));
         }
         rays.sort_by(|a, b| a.azimuth_deg.total_cmp(&b.azimuth_deg));
         Ok(Sweep {
@@ -323,6 +362,8 @@ mod tests {
         let started = Instant::now();
         let sweep = lowest_reflectivity(&archive).unwrap();
         eprintln!("decoded lowest sweep in {:?}", started.elapsed());
+        let velocity = lowest(&archive, Product::Velocity).expect("KTLX fixture velocity");
+        assert!(!velocity.rays.is_empty());
 
         assert_eq!(sweep.rays.len(), golden.rays);
         assert_eq!(sweep.gates, golden.gates);
