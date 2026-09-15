@@ -57,6 +57,8 @@ sock="$XDG_RUNTIME_DIR/omastorm/engine.sock"
 tell() { printf '%s\n' "$@" | socat -t0.2 - "UNIX-CONNECT:$sock" >/dev/null; }
 # Two deterministic complete frames, using the archived fixture's metadata
 # and PNGs, exercise the real catalog/transport without waiting two volumes.
+# Their start times are minutes ago: the catalog evicts frames older than
+# two hours when a station is selected.
 timeout 2 socat -t0.2 - "UNIX-CONNECT:$sock" < /dev/null | jq -c 'select(.type == "state")' | head -n1 > "$scratch/engine-state.json"
 ruby - "$scratch" <<'RUBY_SEED'
 require 'json'
@@ -67,6 +69,7 @@ frame = JSON.parse(File.read("#{scratch}/engine-state.json")).fetch('frame')
 dir = "#{scratch}/cache/omastorm/frames"
 FileUtils.mkdir_p("#{dir}/KTLX")
 sql = []
+now_ms = (Time.now.to_f * 1000).to_i
 2.times do |i|
   f = Marshal.load(Marshal.dump(frame))
   f['id'] = "popover-test-#{i}"
@@ -76,7 +79,7 @@ sql = []
   FileUtils.cp("#{scratch}/r/omastorm/#{frame['texture']}", "#{dir}/#{tex}")
   FileUtils.cp("#{scratch}/r/omastorm/#{frame['azimuthLut']}", "#{dir}/#{lut}")
   f['texture'] = ''; f['azimuthLut'] = ''
-  values = [f['id'], 'KTLX', 'REF', f['elevationDeg'], 1369080600000+i*300000,
+  values = [f['id'], 'KTLX', 'REF', f['elevationDeg'], now_ms - 600000 + i*300000,
             f['scanTime'], f['sweepEnd'], 'synthetic popover lifecycle test', 0, JSON.generate(f), tex, lut]
   sql << "INSERT INTO frames VALUES (#{values.map { |v| v.is_a?(Numeric) ? v.to_s : "'" + v.gsub("'", "''") + "'" }.join(',')});"
 end
