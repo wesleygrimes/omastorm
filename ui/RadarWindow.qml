@@ -99,19 +99,16 @@ Item {
         var timeStr = stamp12h ? Qt.formatTime(d, "h:mm AP") : Qt.formatTime(d, "HH:mm");
         return dateStr + " · " + timeStr + " " + Qt.formatTime(d, "t");
     }
-    // History fills 60 positions from the left when the strip is wide enough.
-    // Compact widths drop the empty pads — at ~5 px/slot they read as a
-    // dotted cliff after the playhead instead of "room to fill."
+    // One tick per timeline entry, spread across the strip, at every width:
+    // the loop is two hours of scans (DESIGN.md), so a fixed 60 positions
+    // would leave most of the strip as pads.
     readonly property var slots: {
         var result = [];
         for (var j = 0; j < frames.length; j++)
-            result.push({id: frames[j].id, partial: frames[j].status === "partial", empty: false});
-        if (!win.compact) {
-            for (var i = frames.length; i < 60; i++) result.push({empty: true, partial: false});
-        }
+            result.push({id: frames[j].id, partial: frames[j].status === "partial"});
         return result;
     }
-    readonly property int currentSlot: scan ? slots.findIndex(s => !s.empty && s.id === scan.id) : -1
+    readonly property int currentSlot: scan ? slots.findIndex(s => s.id === scan.id) : -1
     function togglePlay() { if (frames.length > 1) engine.send({type: playing ? "pause" : "play"}); }
     function step(delta) { if (frames.length > 1) engine.send({type: "step", delta: delta}); }
     function jump(toNewest) { if (frames.length > 1) engine.send({type: "seek", id: frames[toNewest ? frames.length - 1 : 0].id}); }
@@ -915,18 +912,16 @@ Item {
                             Rectangle {
                                 required property var modelData
                                 required property int index
-                                readonly property bool current: !modelData.empty && index === app.currentSlot
+                                readonly property bool current: index === app.currentSlot
                                 readonly property bool tall: current || modelData.partial
                                 x: app.slots.length > 1 ? Math.round(index * (strip.width - width) / (app.slots.length - 1)) : Math.round((strip.width - width) / 2)
                                 y: Math.round((strip.height - height) / 2)
                                 width: tall ? 3 : 2
-                                height: modelData.empty ? 3 : tall ? 14 : 8
-                                // Compact (no empty pads): even weight so a mid-loop
-                                // playhead does not cliff into dimmer stubs.
+                                height: tall ? 14 : 8
+                                // Even weight either side of the playhead, as the
+                                // popover draws it; there are no pads to cliff into.
                                 color: current ? app.theme.accent : modelData.partial ? "transparent"
-                                    : Qt.alpha(app.theme.foreground, modelData.empty ? .10
-                                        : win.compact ? .40
-                                        : index > app.currentSlot ? .28 : .42)
+                                    : Qt.alpha(app.theme.foreground, .40)
                                 border.width: modelData.partial && !current ? 1 : 0
                                 border.color: app.theme.accent
                             }
@@ -943,7 +938,6 @@ Item {
                                 var n = app.slots.length;
                                 if (n < 2) return;
                                 var i = Math.round(Math.max(0, Math.min(1, mx / strip.width)) * (n - 1));
-                                if (app.slots[i].empty) return;
                                 var id = app.slots[i].id;
                                 if (id && id !== target) { target = id; engine.send({type: "seek", id: id}); }
                             }

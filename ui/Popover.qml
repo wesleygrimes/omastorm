@@ -11,8 +11,8 @@ FocusScope {
     readonly property var state: connection.state
     readonly property var scan: state ? state.frame : null
     readonly property var frames: state ? state.timeline : []
-    // Popover is too narrow for the window's fixed 60 empties. One tick per
-    // frame, no gap stubs, pixel-snapped — same language, denser strip.
+    // One tick per frame, no gap stubs, pixel-snapped: the same strip the
+    // window draws, denser.
     readonly property var slots: {
         var result = [];
         for (var j = 0; j < frames.length; j++)

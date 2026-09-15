@@ -56,13 +56,11 @@ line is the age only, right-aligned under that row.
 strip stamp is the absolute observation time (date, time, zone). Locale
 picks date order and 12/24h only; dates stay numeric. Locale also picks
 kilometres or miles for the scale bar and picker distances. The tick strip is
-position in the loop, not a second clock. It has 60 positions when the
-window is wide enough; compact widths show one tick per available frame
-only (empty pads need room or they read as a dotted cliff). An extra live
-sweep beyond 60 completed scans adds a selectable tick and is included in
-the frame count. Available frames fill from the left; unused positions are
-faint, short, and cannot be sought. Each available tick represents one
-frame, without extra gap ticks or a baseline.
+position in the loop, not a second clock. One tick per timeline entry,
+spread across the strip, at every width; no empty pads. The sweep in
+progress is an outlined tick after the complete frames and is included in
+the frame count. Each tick represents one frame, without extra gap ticks
+or a baseline.
 
 ## Location, onboarding, and map
 
