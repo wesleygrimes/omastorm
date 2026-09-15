@@ -41,6 +41,38 @@ Item {
     // and tag stay away too.
     readonly property bool drawable: !!scan && scan.scanTime !== ""
     readonly property int bands: scan ? scan.palette.length : 0
+    // A rendered product (`docs/protocol.md`, frames): the publisher's own
+    // picture over the ground box the publisher states, instead of a polar
+    // sweep. The picture is drawn as published; no value is decoded from it.
+    readonly property bool overlayFrame: !!scan && scan.kind === "overlay" && !!scan.overlay
+    readonly property var overlayBox: overlayFrame ? scan.overlay : null
+    // The picture is linear in latitude while the camera is Web Mercator, so
+    // it is drawn in horizontal strips whose screen edges follow Mercator
+    // separately. Over this box the difference between the two is under two
+    // percent of the height; sixteen strips keep the edge error under a pixel.
+    readonly property int overlayStrips: 16
+    // Where strip `index` lands on screen: the box's Mercator rectangle,
+    // sliced by latitude.
+    function overlayStripRect(index) {
+        var box = overlayBox;
+        if (!box) return Qt.rect(0, 0, 0, 0);
+        var top = box.north + (box.south - box.north) * (index / overlayStrips);
+        var bottom = box.north + (box.south - box.north) * ((index + 1) / overlayStrips);
+        var left = sx(mercatorX(box.west));
+        var right = sx(mercatorX(box.east));
+        var yTop = sy(mercatorY(top));
+        var yBottom = sy(mercatorY(bottom));
+        return Qt.rect(left, yTop, right - left, yBottom - yTop);
+    }
+    // The rows of the published file that strip carries: the map area only,
+    // since the file keeps the publisher's legend panel beside it.
+    function overlayStripRows(index) {
+        var crop = overlayBox ? overlayBox.crop : null;
+        if (!crop) return Qt.rect(0, 0, 0, 0);
+        var y0 = Math.round(crop.y + crop.height * index / overlayStrips);
+        var y1 = Math.round(crop.y + crop.height * (index + 1) / overlayStrips);
+        return Qt.rect(crop.x, y0, crop.width, y1 - y0);
+    }
     property string error: ""
     signal tilesNeeded(int z, int x0, int y0, int x1, int y1)
     // The view centre once a pan or zoom settles, when it moved since the last
@@ -437,6 +469,9 @@ Item {
     }
     readonly property var coverageSites: {
         if (!drawable || !site) return [];
+        // A rendered product draws its own coverage rings inside its picture,
+        // and its extent is the publisher's, not the nominal NEXRAD footprint.
+        if (overlayFrame) return [];
         // Only the active radar gets a footprint; overlapping network circles
         // obscure geography at continental zoom. Use the measured scan site.
         return [{id:siteId, lat:site.lat, lon:site.lon}];
@@ -447,7 +482,8 @@ Item {
     // JavaScript visits radar cells.
     Image {
         id: sweepTexture
-        source: map.texture
+        // A rendered product's picture is the overlay; it is not a sweep.
+        source: map.overlayFrame ? "" : map.texture
         visible: false
         smooth: false
         mipmap: false
@@ -484,9 +520,30 @@ Item {
         smooth: false
         mipmap: false
     }
+    // A rendered product's picture, drawn over its published ground box. The
+    // crop keeps the publisher's own legend panel — part of the same file —
+    // out of the map; the app draws its own legend from the frame's palette
+    // and band edges, which are the publisher's scale.
+    Repeater {
+        id: overlayRepeater
+        model: map.overlayFrame ? map.overlayStrips : 0
+        Image {
+            required property int index
+            property rect placed: map.overlayStripRect(index)
+            property rect rows: map.overlayStripRows(index)
+            source: map.texture
+            sourceClipRect: rows
+            x: placed.x; y: placed.y
+            width: Math.max(0, placed.width); height: Math.max(0, placed.height)
+            visible: placed.width > 0 && placed.height > 0 && rows.height > 0
+            smooth: true
+            mipmap: true
+        }
+    }
     ShaderEffect {
         id: radarEffect
-        visible: map.drawable
+        // A rendered product draws its own picture instead of a sweep.
+        visible: map.drawable && !map.overlayFrame
         // The radar alone, not the basemap: .6 under UNAVAILABLE.
         opacity: map.radarOpacity
         anchors.fill: parent
