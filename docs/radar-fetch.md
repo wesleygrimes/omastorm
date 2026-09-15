@@ -16,8 +16,9 @@ lowest tilt, paint a texture.
 Live is a folder of **chunks** for the scan in progress. Archive is **one
 file** per finished volume.
 
-A volume takes a few minutes (about 2 in storm mode, 4–5 typical, ~10 in
-clear air). That is the radar, not the fetch.
+A volume takes a few minutes: about 4.3 in severe weather (VCP 12; AVSET
+can end one after ~3.2), 4.6–6 in typical rain (VCP 212, 215), ~7 in
+clear air (VCP 35). That is the radar, not the fetch.
 
 ## Buckets
 
@@ -76,7 +77,7 @@ not newer than the archive file, list `413`, then `414`. After `999`,
 list `1`.
 
 Three slots because the archive lags a finished volume by seconds to a
-couple of minutes and a volume takes at least about two minutes: the
+couple of minutes and a volume takes at least about three minutes: the
 slot after the archived one is the volume just finished or the one
 underway, the next is the one underway, and the third is margin for a
 skipped slot. If none of the three has names newer than the archive
