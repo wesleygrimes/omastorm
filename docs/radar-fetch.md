@@ -101,7 +101,9 @@ archive both stopped hours ago, the newest slot still wins the join and
 its picture is painted. The LIVE / STALE / UNAVAILABLE label comes from
 the age of the newest radial on screen, not from the join: `ok` under
 ten minutes, `stale` to thirty, `unavailable` past that. The join never
-labels.
+labels. In practice chunk keys expire within a few hours, so a site quiet
+longer than that lists no names newer than its archive file and is
+unavailable rather than stale.
 
 **4. Download chunks**
 

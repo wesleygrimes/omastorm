@@ -47,8 +47,8 @@ The UI samples these directly; radar arrays never enter JSON or QML JavaScript.
 
 Fetch is [docs/radar-fetch.md](../docs/radar-fetch.md). `src/live_index.rs`
 reads the last archive volume header, then lists the slots after it in the
-chunk bucket. `src/live.rs` polls dated chunks,
-replays the current volume's lowest cut, and assembles incoming radials.
+chunk bucket. `src/live.rs` polls dated chunks, replays the current
+volume's lowest cut, and assembles incoming radials.
 Each chunk that grows the cut publishes a partial frame; the cut's final
 radial or the next cut completes it. Gaps beyond 0.75° from any ray remain
 blank. Selecting another station cancels the poller and discards its late events.

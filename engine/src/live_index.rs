@@ -139,7 +139,6 @@ pub async fn archive_volumes(
 
 /// The last finished archive file: today in UTC, or yesterday if today is empty.
 pub async fn last_archived<F, Fut>(
-    _site: &str,
     now: NaiveDateTime,
     list: F,
 ) -> std::result::Result<Option<ArchiveVolume>, String>
@@ -272,10 +271,8 @@ fn pick_join(
 
 /// The live generation: archive header, then the first later slot with newer names.
 pub async fn latest(site: &str) -> std::result::Result<Option<Join>, String> {
-    let Some(archived) = last_archived(site, Utc::now().naive_utc(), |day| {
-        archive_volumes(site, day)
-    })
-    .await?
+    let Some(archived) =
+        last_archived(Utc::now().naive_utc(), |day| archive_volumes(site, day)).await?
     else {
         return Ok(None);
     };
@@ -376,7 +373,7 @@ mod tests {
         let today_file = archive("KFCX20260913_001500_V06", now);
 
         let calls = Cell::new(0);
-        let got = block_on(last_archived("KFCX", now, |day| {
+        let got = block_on(last_archived(now, |day| {
             calls.set(calls.get() + 1);
             let empty = day == today;
             let first = yesterday_first.clone();
@@ -394,7 +391,7 @@ mod tests {
         assert_eq!(calls.get(), 2);
 
         let calls = Cell::new(0);
-        let got = block_on(last_archived("KFCX", now, |day| {
+        let got = block_on(last_archived(now, |day| {
             calls.set(calls.get() + 1);
             assert_eq!(day, today, "files today must not ask for yesterday");
             let today_file = today_file.clone();
@@ -404,7 +401,7 @@ mod tests {
         assert_eq!(got, Some(today_file));
         assert_eq!(calls.get(), 1);
 
-        let got = block_on(last_archived("KFCX", now, |_| async { Ok(Vec::new()) })).unwrap();
+        let got = block_on(last_archived(now, |_| async { Ok(Vec::new()) })).unwrap();
         assert_eq!(got, None);
     }
 
