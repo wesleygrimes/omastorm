@@ -1,0 +1,16 @@
+{
+  "source": "https://www.hko.gov.hk/en/wxinfo/radars/radar.htm",
+  "retrieved": "2026-09-15",
+  "notes": "Hong Kong Observatory rainfall-rate imagery: one rendered frame every six minutes, 256 km range, rainfall rate at 3 km. A rendered product, not a volume, so the engine publishes the Observatory's image with the ground box from the Observatory's own KML ground overlay and the Observatory's own band edges, and never resamples its pixels (docs/radar-fetch.md). The station is the Observatory's weather radar on Tate's Cairn; the product's ground overlay places the picture's centre within 2.6 km of it. Non-commercial use with attribution, per the Observatory's Intellectual Property Rights Notice.",
+  "sites": [
+    {
+      "id": "HKO",
+      "name": "Hong Kong",
+      "state": "HK",
+      "lat": 22.3579,
+      "lon": 114.2177,
+      "altM": 583.0,
+      "source": "hko"
+    }
+  ]
+}

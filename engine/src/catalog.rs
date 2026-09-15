@@ -8,7 +8,7 @@
 //! real shows while the first live sweep loads; the timeline session reads
 //! the rest.
 
-use crate::protocol::Frame;
+use crate::protocol::{Frame, FrameKind};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::{
     fs, io,
@@ -97,10 +97,19 @@ impl Catalog {
         let mut record = frame.clone();
         record.texture.clear();
         record.azimuth_lut.clear();
-        let texture_path = format!("{site}/{}-sweep.png", frame.id);
-        let lut_path = format!("{site}/{}-azlut.png", frame.id);
+        // A rendered product keeps the publisher's own image; a sweep is the
+        // texture the engine encoded. Neither carries a lookup but a sweep.
+        let (texture_path, lut_path) = match frame.kind {
+            FrameKind::Overlay => (format!("{site}/{}-overlay.jpg", frame.id), String::new()),
+            FrameKind::Sweep => (
+                format!("{site}/{}-sweep.png", frame.id),
+                format!("{site}/{}-azlut.png", frame.id),
+            ),
+        };
         write(&self.dir.join(&texture_path), texture)?;
-        write(&self.dir.join(&lut_path), azimuth_lut)?;
+        if !lut_path.is_empty() {
+            write(&self.dir.join(&lut_path), azimuth_lut)?;
+        }
         let stored_ms = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
@@ -225,7 +234,13 @@ impl Catalog {
             frame: serde_json::from_str(&frame)?,
             start_ms,
             texture: fs::read(self.dir.join(texture))?,
-            azimuth_lut: fs::read(self.dir.join(lut))?,
+            // A rendered product has no azimuth lookup; an empty path is how
+            // the row says so.
+            azimuth_lut: if lut.is_empty() {
+                Vec::new()
+            } else {
+                fs::read(self.dir.join(lut))?
+            },
         }))
     }
 
@@ -285,7 +300,75 @@ mod tests {
             },
             palette: vec!["#000000".into()],
             bounds: vec![0, 10],
+            kind: FrameKind::Sweep,
+            overlay: None,
+            source: "NOAA NEXRAD".into(),
         }
+    }
+
+    /// A rendered product's frame: a picture over a ground box, no lookup.
+    fn overlay_frame(site: &str, minute: u32) -> Frame {
+        let mut f = frame(site, minute);
+        f.id = format!("{site}-20260906T12{minute:02}00Z");
+        f.kind = FrameKind::Overlay;
+        f.azimuth_lut.clear();
+        // The band edges are fractional in mm/h, so they ride in the overlay
+        // and `bounds` stays empty, as `main.rs::base_frame` leaves it.
+        f.bounds.clear();
+        f.overlay = Some(crate::protocol::Overlay {
+            north: 24.6,
+            south: 20.0,
+            east: 116.6,
+            west: 111.6,
+            crop: crate::protocol::Crop {
+                x: 0,
+                y: 0,
+                width: 398,
+                height: 395,
+            },
+            levels: vec![0.15, 0.5, 300.0],
+        });
+        f
+    }
+
+    #[test]
+    fn a_rendered_product_round_trips_without_a_lookup() {
+        let dir = std::env::temp_dir().join(format!("omastorm-overlay-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let catalog = Catalog::open(dir.clone()).unwrap();
+        let f = overlay_frame("HKO", 7);
+        // The publisher's JPEG, stored and served back byte for byte.
+        let image = vec![0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10];
+        catalog
+            .store(
+                "HKO",
+                &f,
+                1_789_453_800_000,
+                &image,
+                &[],
+                "HKO 256 KM frame",
+            )
+            .unwrap();
+        let stored = catalog.load(&f.id).unwrap().expect("the frame is stored");
+        assert_eq!(stored.texture, image);
+        assert!(
+            stored.azimuth_lut.is_empty(),
+            "a picture has no azimuth lookup"
+        );
+        assert_eq!(stored.frame.kind, FrameKind::Overlay);
+        let overlay = stored.frame.overlay.expect("the ground box is stored");
+        assert_eq!(
+            (overlay.crop.width, overlay.crop.height),
+            (398, 395),
+            "the map area rides with the frame"
+        );
+        assert_eq!(stored.frame.bounds, Vec::<i32>::new());
+        let files: Vec<_> = fs::read_dir(dir.join("HKO"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(files.len(), 1, "the picture and nothing beside it");
+        assert!(files[0].ends_with("-overlay.jpg"));
     }
 
     #[test]

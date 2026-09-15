@@ -762,7 +762,8 @@ mod tests {
                 .iter()
                 .map(|&(x, y)| {
                     let (lon, lat) = (f64::from(x) * QUANTUM, f64::from(y) * QUANTUM);
-                    (5.0..=75.0).contains(&lat) && (lon <= -20.0 || lon >= 120.0)
+                    (5.0..=75.0).contains(&lat)
+                        && (lon <= -20.0 || lon >= 120.0 || (113.0..=116.5).contains(&lon))
                 })
                 .collect();
             for i in 0..inside.len() {

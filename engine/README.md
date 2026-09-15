@@ -87,6 +87,23 @@ The station table's source, retrieval date, and caveats are in `data/sites.json`
 and hello. It includes archived and test sites; membership does not imply live
 availability. An archived scan retains its measured coordinates.
 
+## Rendered products
+
+One station does not publish volumes. `src/hko.rs` serves the Hong Kong
+Observatory's 256 km rainfall-rate product: it reads the frame index, keeps the
+newest frame and up to twelve behind it for the timeline, and publishes each
+JPEG as the frame's texture unchanged, with the ground box from the
+Observatory's own KML ground overlay and the Observatory's own band edges
+(`frame.kind` `overlay`; [docs/protocol.md](../docs/protocol.md), frames,
+[docs/radar-fetch.md](../docs/radar-fetch.md), rendered products). No pixel is
+decoded or resampled.
+
+The station it adds lives in `data/hko_sites.json` with its own provenance,
+which `site_table()` merges into the NEXRAD snapshot. That row says
+`source: hko`, and `Shared::restart_live` dispatches the poller on that field
+rather than on the station's id, so the next feed is a row in a table.
+
+
 ## Basemap
 
 `build.rs` converts Natural Earth lines to a compact polyline blob and embeds

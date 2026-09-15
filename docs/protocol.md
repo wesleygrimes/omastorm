@@ -20,8 +20,14 @@ travel over this protocol; they go to the GPU as texture files.
 ```json
 {"type":"hello","v":1,"engine":"0.1.1",
  "sites":[{"id":"KTLX","name":"Oklahoma City","state":"OK",
-           "lat":35.33306,"lon":-97.27748,"altM":388.0}]}
+           "lat":35.33306,"lon":-97.27748,"altM":388.0,"source":"nexrad"}]}
 ```
+
+- `sites[].source` names the feed that serves the station: `nexrad` for the
+  Level II path, `hko` for the Hong Kong Observatory's rendered imagery. The
+  engine dispatches on it and never on the station's id, so a new feed is a
+  row in a station table, not a rule about names. A client that does not know
+  a value shows the station as an ordinary one.
 
 `state` is the complete current state, re-sent whenever anything in it changes.
 It is small (a few KB) so clients replace rather than merge.
@@ -106,6 +112,23 @@ It is small (a few KB) so clients replace rather than merge.
   weak-return floor, a view setting in `units`, in code units for the shader
   (lookup rule, below). Both are 0 on the loading placeholder, which
   therefore has no floor.
+- `frame.kind` is how the texture is drawn: `sweep` (the default) is the polar
+  sweep above; `overlay` is a picture published by an operator that renders
+  its own product, drawn over the ground box in `frame.overlay`. An overlay
+  frame carries no azimuth lookup (`azimuthLut` is empty), no gate geometry,
+  and `scale` and `offset` of 0, so no weak-return floor applies to it.
+- `frame.overlay` is the picture's place on the ground: `north`, `south`,
+  `east`, `west` are the box the publisher states for the image, `crop` is the
+  map area within the file (the publisher's own legend panel may sit beside
+  it), and `levels` are the publisher's own band edges in `units`, one more
+  than `palette` has colors. `levels` may be fractional, which is why they are
+  not `bounds`, and `bounds` is empty on an overlay frame. The UI draws the
+  picture stretched between the box's Mercator corners and labels the legend
+  from `levels`: the picture is published whole, and the engine decodes no
+  value from it.
+- `frame.source` is the display name of the feed the frame came from
+  (`NOAA NEXRAD`, `HKO 256 KM`). The UI shows it beside the product; a client
+  that receives an empty one falls back to naming NEXRAD.
 
 `error` answers one command from one client. It goes only to the client that
 sent the command, `state` does not change, and nothing is broadcast, so a
@@ -361,7 +384,7 @@ wttr.in after an explicit click, not an engine command.
 `hello` additionally includes `pid`, `build` (an opaque fingerprint),
 `sitesSource`, `sitesRetrieved`, and `sitesNotes`. These allow the launcher to
 identify an existing build and preserve the station snapshot's provenance.
-The 163-site snapshot includes archived/test sites, not an availability list.
+The 164-site snapshot includes archived/test sites, not an availability list.
 `frame.site` retains the scan's measured coordinates.
 
 On disconnect the UI hides radar and retries; on an unknown version it

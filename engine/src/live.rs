@@ -104,6 +104,17 @@ pub enum Event {
     /// The bucket answered and holds no volume for the station: the feed is
     /// up and the station has published nothing.
     Silent { site: String, reason: String },
+    /// A feed that publishes a finished picture rather than radials
+    /// (`hko.rs`): the image is published as the frame's texture as it
+    /// arrived. `show` is true for the newest product, which takes the screen;
+    /// false stores it as history for the timeline.
+    Overlay {
+        site: String,
+        start_ms: i64,
+        image: Vec<u8>,
+        show: bool,
+        provenance: String,
+    },
 }
 
 /// The lowest cut of the current volume, radial by radial, in arrival order.

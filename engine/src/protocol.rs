@@ -117,6 +117,21 @@ pub struct Station {
     pub lat: f64,
     pub lon: f64,
     pub alt_m: f64,
+    /// Which feed serves the station. The engine dispatches on this field and
+    /// never on the station's id (`docs/protocol.md`, station table).
+    #[serde(default)]
+    pub source: StationSource,
+}
+
+/// A station's feed. `Nexrad` is the Level II path the engine has always
+/// served; `Hko` is the Hong Kong Observatory's rendered rainfall-rate
+/// imagery, which arrives as a picture rather than as radials.
+#[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum StationSource {
+    #[default]
+    Nexrad,
+    Hko,
 }
 
 #[derive(Serialize, PartialEq, Debug)]
@@ -298,6 +313,55 @@ pub struct Frame {
     pub site: Geometry,
     pub palette: Vec<String>,
     pub bounds: Vec<i32>,
+    /// How the texture is drawn. `sweep` samples the polar lookup; `overlay`
+    /// draws the texture as a picture over `overlay`'s ground box.
+    #[serde(default)]
+    pub kind: FrameKind,
+    /// The ground box and band edges of an `overlay` frame; absent on sweeps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub overlay: Option<Overlay>,
+    /// Display name of the feed this frame came from (`NOAA NEXRAD`,
+    /// `HKO 256 KM`). Empty when the frame predates the field.
+    #[serde(default)]
+    pub source: String,
+}
+
+/// How a frame's texture is drawn (`docs/protocol.md`, frames).
+#[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Debug, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum FrameKind {
+    #[default]
+    Sweep,
+    Overlay,
+}
+
+/// A frame that draws a published picture instead of a decoded sweep: a
+/// source that renders its own product, over a ground box its publisher
+/// states. Values never travel over the wire, so the picture is drawn as
+/// published and the legend is the publisher's own scale.
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Overlay {
+    pub north: f64,
+    pub south: f64,
+    pub east: f64,
+    pub west: f64,
+    /// The map area within the texture, in pixels: the published file may
+    /// carry the publisher's own legend beside the map.
+    pub crop: Crop,
+    /// Band edges in `frame.units`, one more than the palette's colours.
+    /// They may be fractional (rainfall rate), so they are not `bounds`.
+    pub levels: Vec<f64>,
+}
+
+/// A rectangle inside a texture, in pixels, from its top-left corner.
+#[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Crop {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Debug)]
