@@ -17,7 +17,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-/// Frames kept per station at most; two hours of storm-mode volumes.
+/// Frames kept per station at most. Two hours holds about 28 volumes at
+/// the fastest VCP (12, 4.3 min), 37 if AVSET cuts every one short, 17 in
+/// clear air (35, 7 min); the cap is headroom, `TTL_MS` is the real bound.
 pub const RING: usize = 60;
 /// Frames older than this are evicted, so the loop never stitches one
 /// session's scans onto another's from a day before. Files go with them.
