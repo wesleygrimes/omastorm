@@ -45,15 +45,15 @@ and `nexrad-model` dependencies. It reads through the lowest cut, sorts rays
 stably by azimuth, and publishes a polar sweep texture and azimuth lookup.
 The UI samples these directly; radar arrays never enter JSON or QML JavaScript.
 
-`src/live_index.rs` lists occupied volume directories, then searches their
-rotating order by each one's newest scan timestamp. Expired directories are
-excluded from the search, as are older generations still present in the same
-directory. `src/live.rs` then polls dated chunks, replays the current
+Fetch is [docs/radar-fetch.md](../docs/radar-fetch.md). `src/live_index.rs`
+reads the last archive volume header, then lists the slots after it in the
+chunk bucket. `src/live.rs` polls dated chunks, replays the current
 volume's lowest cut, and assembles incoming radials.
 Each chunk that grows the cut publishes a partial frame; the cut's final
 radial or the next cut completes it. Gaps beyond 0.75° from any ray remain
 blank. Selecting another station cancels the poller and discards its late events.
 A background backfill fetches up to twelve earlier volumes, skipping cached ones.
+Backfill reads the day's archive listing and each file's header for its slot.
 SAILS and MRLE extra low-level cuts are not separate frames.
 
 The poller bounds requests with timeouts and retries with backoff. Four
@@ -72,8 +72,10 @@ new radials; an empty station is
 unavailable, and an unreachable bucket is offline. Cached frames remain
 usable under every condition.
 
-`src/catalog.rs` stores the newest 60 complete frames per station in
-`$XDG_CACHE_HOME/omastorm/frames/`: a SQLite WAL catalog and PNG files.
+`src/catalog.rs` stores the newest 60 complete frames per station from the
+last two hours in `$XDG_CACHE_HOME/omastorm/frames/`: a SQLite WAL catalog
+and PNG files. Older frames are evicted, files included, when a station is
+selected and after each complete frame.
 Entries retain scan geometry, times, and source provenance. The UI never reads
 this store. The timeline serves cached frames through new runtime textures.
 Playback loops complete frames over about ten seconds, bounded to 250 ms–1 s

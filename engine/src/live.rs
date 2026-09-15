@@ -6,16 +6,17 @@
 //! into a republished texture and a `state` broadcast, so the sweep paints
 //! chunk by chunk as the antenna turns.
 //!
-//! Joining a volume in progress: the poller finds the newest dated chunk
-//! and replays the Start and first lowest-cut chunks once, so the
-//! last complete lowest sweep shows within seconds of selecting a station
-//! and the next volume paints live. Every network call sits under a
-//! `tokio::time::timeout`, since the client sets none. The bucket is public
-//! and needs no credentials; nothing here runs until a client selects a
-//! station, so launch still fetches nothing.
+//! Joining a volume in progress: the archive header names the slot. The
+//! poller lists the slots after that header, takes the first with names
+//! newer than the archive file, and replays the Start and first
+//! lowest-cut chunks once, so the last complete lowest sweep shows within
+//! seconds of selecting a station and the next volume paints live. Every
+//! network call sits under a `tokio::time::timeout`, since the client sets
+//! none. The bucket is public and needs no credentials; nothing here runs
+//! until a client selects a station, so launch still fetches nothing.
 
 use crate::{live_index, sweep::Sweep};
-use chrono::{NaiveDateTime, SecondsFormat, Utc};
+use chrono::{NaiveDateTime, SecondsFormat, TimeDelta, Utc};
 use nexrad_data::aws::realtime::{
     Chunk, ChunkIdentifier, ChunkType, DownloadedChunk, VolumeIndex, download_chunk,
 };
@@ -32,8 +33,8 @@ use tokio::{
 /// NOAA's real-time bucket, named in frame provenance (`nexrad-data` owns
 /// the address).
 pub const BUCKET: &str = "unidata-nexrad-level2-chunks";
-/// Finding the latest volume searches dated listings around the rotation.
-const START_TIMEOUT: Duration = Duration::from_secs(60);
+/// One archive listing, one 24-byte header range-get, and up to three slot listings.
+const START_TIMEOUT: Duration = Duration::from_secs(30);
 const CALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// Between empty polls. Chunks land every 4–12 s.
 const IDLE: Duration = Duration::from_secs(2);
@@ -57,10 +58,10 @@ const LOW_CUT_REPLAY: usize = 12;
 /// Volumes before the current one fetched on joining a station, newest
 /// first, so a fresh station has a loop to play rather than one frame. The
 /// fetch starts after `BACKFILL_DELAY`, so a hand-off passed while panning
-/// costs nothing, and ends with the poller. The bucket rotates volume
-/// numbers 1–999 and may retain older generations in each directory; a
-/// volume's lowest cut is within its first `BACKFILL_CHUNKS` chunks or is
-/// given up on.
+/// costs nothing, and ends with the poller. Prior volumes come from the
+/// day's archive listing (and yesterday's if today is short); each file's
+/// header names its chunk-bucket slot. A volume's lowest cut is within
+/// its first `BACKFILL_CHUNKS` chunks or is given up on.
 const BACKFILL_VOLUMES: usize = 12;
 const BACKFILL_DELAY: Duration = Duration::from_secs(3);
 const BACKFILL_CHUNKS: usize = 16;
@@ -293,31 +294,97 @@ async fn replay(site: &str, ids: &[ChunkIdentifier]) -> Vec<DownloadedChunk> {
     chunks
 }
 
-/// The volume `back` places before `current` in the bucket's 1–999 rotation.
-fn previous_volume(current: VolumeIndex, back: usize) -> VolumeIndex {
-    let n = current.as_number();
-    let back = back % 999;
-    VolumeIndex::new(if n > back { n - back } else { n + 999 - back })
+/// How many slots the live volume sits after the archive header (1–3, wrapping 999→1).
+fn slot_offset(from: VolumeIndex, to: VolumeIndex) -> usize {
+    let a = from.as_number();
+    let b = to.as_number();
+    if b >= a { b - a } else { b + 999 - a }
 }
 
-/// Fetch the lowest cut of the `BACKFILL_VOLUMES` volumes before `current`,
-/// newest first, and report each complete one as `Event::Backfill`. A
-/// volume whose start time is already catalogued (`cached`) costs one
-/// chunk; a volume with no Start chunk in the listing is skipped; a listing
-/// failure ends the backfill, since the bucket is not answering.
-async fn backfill(
-    site: String,
-    events: Sender<Event>,
-    current: VolumeIndex,
-    current_stamp: NaiveDateTime,
-    cached: Vec<i64>,
-) {
+fn catalogued_near(cached: &[i64], stamp: NaiveDateTime) -> bool {
+    let ms = stamp.and_utc().timestamp_millis();
+    cached.iter().any(|&t| (t - ms).abs() <= 2_000)
+}
+
+/// Earlier finished volumes for backfill: at most `limit`, newest first,
+/// none newer than the joined archive file. Yesterday is unused when today
+/// already has more than `limit` files.
+fn prior_volumes(
+    today: Vec<live_index::ArchiveVolume>,
+    yesterday: Vec<live_index::ArchiveVolume>,
+    archived_stamp: NaiveDateTime,
+    limit: usize,
+) -> Vec<live_index::ArchiveVolume> {
+    let mut vols = today;
+    if vols.len() < limit + 1 {
+        vols.extend(yesterday);
+    }
+    vols.retain(|v| v.stamp <= archived_stamp);
+    vols.sort_by_key(|v| v.stamp);
+    let start = vols.len().saturating_sub(limit);
+    vols[start..].iter().rev().cloned().collect()
+}
+
+/// Fetch the lowest cut of the `BACKFILL_VOLUMES` volumes at or before the
+/// joined archive file, newest first, and report each complete one as
+/// `Event::Backfill`. A volume whose start time is already catalogued
+/// (`cached`) is skipped; a volume with no Start chunk in the listing is
+/// skipped; a listing or header failure ends the backfill.
+async fn backfill(site: String, events: Sender<Event>, join: live_index::Join, cached: Vec<i64>) {
     sleep(BACKFILL_DELAY).await;
+    let today = Utc::now().date_naive();
+    let today_vols = match timeout(CALL_TIMEOUT, live_index::archive_volumes(&site, today)).await {
+        Ok(Ok(vols)) => vols,
+        Ok(Err(e)) => {
+            live_log(&site, format_args!("backfill listing archive: {e}"));
+            return;
+        }
+        Err(_) => {
+            live_log(&site, "backfill listing archive timed out");
+            return;
+        }
+    };
+    let yesterday = if today_vols.len() < BACKFILL_VOLUMES + 1 {
+        let Some(day) = today.pred_opt() else {
+            live_log(&site, "backfill listing archive: no yesterday");
+            return;
+        };
+        match timeout(CALL_TIMEOUT, live_index::archive_volumes(&site, day)).await {
+            Ok(Ok(vols)) => vols,
+            Ok(Err(e)) => {
+                live_log(&site, format_args!("backfill listing archive: {e}"));
+                return;
+            }
+            Err(_) => {
+                live_log(&site, "backfill listing archive timed out");
+                return;
+            }
+        }
+    } else {
+        Vec::new()
+    };
+    let entries = prior_volumes(today_vols, yesterday, join.archived.stamp, BACKFILL_VOLUMES);
     let mut fetched = 0;
-    let mut previous_stamp = current_stamp;
-    for back in 1..=BACKFILL_VOLUMES {
-        let volume = previous_volume(current, back);
-        let ids = match timeout(CALL_TIMEOUT, live_index::list(&site, volume)).await {
+    for entry in entries {
+        if catalogued_near(&cached, entry.stamp) {
+            continue;
+        }
+        let volume = match timeout(CALL_TIMEOUT, live_index::archived_slot(&entry.key)).await {
+            Ok(Ok(volume)) => volume,
+            Ok(Err(e)) => {
+                live_log(&site, format_args!("backfill header {}: {e}", entry.key));
+                return;
+            }
+            Err(_) => {
+                live_log(
+                    &site,
+                    format_args!("backfill header {} timed out", entry.key),
+                );
+                return;
+            }
+        };
+        let after = entry.stamp - TimeDelta::seconds(1);
+        let ids = match timeout(CALL_TIMEOUT, live_index::list_after(&site, volume, after)).await {
             Ok(Ok(ids)) => ids,
             Ok(Err(e)) => {
                 live_log(
@@ -334,17 +401,12 @@ async fn backfill(
                 return;
             }
         };
-        let Some((stamp, ids)) = live_index::generation(ids, |stamp| stamp < previous_stamp) else {
+        let Some((_, ids)) = live_index::generation(ids, |stamp| stamp == entry.stamp) else {
             continue;
         };
-        // Skip leftovers from an earlier trip around the ring.
-        if previous_stamp - stamp > chrono::Duration::hours(3) {
-            continue;
-        }
         if ids.first().map(ChunkIdentifier::sequence) != Some(1) {
             continue;
         }
-        previous_stamp = stamp;
         let name = format!("{site}/{:03}", volume.as_number());
         let mut assembler = Assembler::default();
         for id in ids.iter().take(BACKFILL_CHUNKS) {
@@ -500,13 +562,14 @@ pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>, skip_kn
     let mut known = cached;
     let mut skip_known = skip_known;
     loop {
-        let (volume, stamp, ids) = match timeout(START_TIMEOUT, live_index::latest(&site)).await {
-            Ok(Ok(Some(init))) => init,
+        let join = match timeout(START_TIMEOUT, live_index::latest(&site)).await {
+            Ok(Ok(Some(join))) => join,
             Ok(Ok(None)) => {
                 if events
                     .send(Event::Silent {
                         site: site.clone(),
-                        reason: "the bucket holds no volume for this station".into(),
+                        reason: "no archived volume or no chunks newer than it for this station"
+                            .into(),
                     })
                     .await
                     .is_err()
@@ -536,15 +599,29 @@ pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>, skip_kn
         };
         back_off = BACK_OFF;
         let mut assembler = Assembler::default();
-        let Some(newest) = ids.last() else { continue };
+        let Some(newest) = join.ids.last() else {
+            continue;
+        };
+        let volume = join.volume;
+        let stamp = join.stamp;
         let mut cursor = Cursor::new(volume, stamp, newest);
-        let replay = replay(&site, &ids).await;
+        let replay = replay(&site, &join.ids).await;
+        let archive_name = join
+            .archived
+            .key
+            .rsplit('/')
+            .next()
+            .unwrap_or(&join.archived.key);
         live_log(
             &site,
             format_args!(
-                "joined volume {} at chunk {}, replaying {} chunks",
+                "joined volume {} at chunk {}, age {}s, +{} from archive {} slot {}, replaying {} chunks",
                 volume.as_number(),
                 newest.name(),
+                (Utc::now().naive_utc() - stamp).num_seconds(),
+                slot_offset(join.header_slot, volume),
+                archive_name,
+                join.header_slot.as_number(),
                 replay.len()
             ),
         );
@@ -552,8 +629,7 @@ pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>, skip_kn
             backfilling = Some(AbortOnDrop(tokio::spawn(backfill(
                 site.clone(),
                 events.clone(),
-                volume,
-                stamp,
+                join,
                 known.clone(),
             ))));
         }
@@ -652,6 +728,7 @@ pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>, skip_kn
 mod tests {
     use super::*;
     use crate::sweep::lowest_reflectivity;
+    use chrono::NaiveDate;
     use nexrad_data::volume::File;
     use std::fs;
 
@@ -660,13 +737,104 @@ mod tests {
             .unwrap()
     }
 
+    fn archive_vol(name: &str, stamp: NaiveDateTime) -> live_index::ArchiveVolume {
+        live_index::ArchiveVolume {
+            key: format!("2026/09/13/KJAX/{name}"),
+            stamp,
+        }
+    }
+
     #[test]
-    fn earlier_volumes_wrap_through_the_rotation() {
-        assert_eq!(previous_volume(VolumeIndex::new(598), 1).as_number(), 597);
-        assert_eq!(previous_volume(VolumeIndex::new(3), 5).as_number(), 997);
-        assert_eq!(previous_volume(VolumeIndex::new(5), 5).as_number(), 999);
-        assert_eq!(previous_volume(VolumeIndex::new(1), 1).as_number(), 999);
-        assert_eq!(previous_volume(VolumeIndex::new(999), 12).as_number(), 987);
+    fn joining_an_ended_volume_advances_on_the_next_poll() {
+        let newest = chunk_id(130, "20260913-231906-055-E");
+        let join = live_index::Join {
+            volume: VolumeIndex::new(130),
+            stamp: *newest.date_time_prefix(),
+            ids: vec![newest.clone()],
+            archived: archive_vol("KJAX20260913_231906_V06", *newest.date_time_prefix()),
+            header_slot: VolumeIndex::new(129),
+        };
+        let mut cursor = Cursor::new(join.volume, join.stamp, join.ids.last().unwrap());
+        assert!(cursor.ended);
+        cursor.queue_current(join.ids.clone());
+        assert!(cursor.pending.is_empty());
+        cursor.queue_next(
+            VolumeIndex::new(131),
+            vec![
+                chunk_id(131, "20260913-232324-001-S"),
+                chunk_id(131, "20260913-232324-002-I"),
+            ],
+        );
+        assert_eq!(cursor.volume.as_number(), 131);
+        assert_eq!(cursor.sequence, 0);
+        assert!(!cursor.ended);
+        assert_eq!(
+            cursor
+                .pending
+                .iter()
+                .map(ChunkIdentifier::sequence)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+
+        let mut leftover = Cursor::new(join.volume, join.stamp, join.ids.last().unwrap());
+        leftover.queue_next(
+            VolumeIndex::new(131),
+            vec![chunk_id(131, "20260909-050000-001-S")],
+        );
+        assert_eq!(leftover.volume.as_number(), 130);
+        assert!(leftover.pending.is_empty());
+    }
+
+    #[test]
+    fn backfill_picks_prior_volumes_from_the_archive_day() {
+        let day = NaiveDate::from_ymd_opt(2026, 9, 13).unwrap();
+        let archived_stamp = day.and_hms_opt(12, 0, 0).unwrap();
+        let today: Vec<_> = (0..3)
+            .map(|h| {
+                let stamp = day.and_hms_opt(10 + h, 0, 0).unwrap();
+                archive_vol(&format!("KJAX20260913_{:02}0000_V06", 10 + h), stamp)
+            })
+            .collect();
+        let yesterday: Vec<_> = (0..20)
+            .map(|i| {
+                let stamp = day.pred_opt().unwrap().and_hms_opt(i, 0, 0).unwrap();
+                archive_vol(&format!("KJAX20260912_{i:02}0000_V06"), stamp)
+            })
+            .collect();
+        let picked = prior_volumes(today.clone(), yesterday.clone(), archived_stamp, 12);
+        assert_eq!(picked.len(), 12);
+        assert!(picked.windows(2).all(|w| w[0].stamp >= w[1].stamp));
+        assert!(picked.iter().all(|v| v.stamp <= archived_stamp));
+        assert_eq!(picked[0].stamp, archived_stamp);
+
+        let many_today: Vec<_> = (0..30)
+            .map(|i| {
+                let hour = i / 2;
+                let minute = (i % 2) * 30;
+                let stamp = day.and_hms_opt(hour, minute, 0).unwrap();
+                archive_vol(&format!("KJAX20260913_{hour:02}{minute:02}00_V06"), stamp)
+            })
+            .collect();
+        let from_today = prior_volumes(many_today.clone(), yesterday, archived_stamp, 12);
+        assert_eq!(from_today.len(), 12);
+        assert!(
+            from_today
+                .iter()
+                .all(|v| v.key.contains("20260913") && v.stamp <= archived_stamp)
+        );
+        assert!(!from_today.iter().any(|v| v.key.contains("20260912")));
+    }
+
+    #[test]
+    fn backfill_skips_a_catalogued_volume() {
+        let stamp = NaiveDate::from_ymd_opt(2026, 9, 13)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap();
+        let ms = stamp.and_utc().timestamp_millis();
+        assert!(catalogued_near(&[ms + 1_000], stamp));
+        assert!(!catalogued_near(&[ms + 3_000], stamp));
     }
 
     #[test]

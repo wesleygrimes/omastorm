@@ -3,9 +3,10 @@
 //! `$XDG_CACHE_HOME/omastorm/frames/`, with the sweep and lookup PNGs as
 //! files beside it. Storage is a catalog, not a transport: the UI never reads
 //! it. The engine writes each complete live frame here, keeps the newest
-//! `RING` per station, and on a station switch republishes the newest stored
-//! frame to the runtime directory so something real shows while the first
-//! live sweep loads; the timeline session reads the rest.
+//! `RING` per station from the last `TTL_MS`, and on a station switch
+//! republishes the newest stored frame to the runtime directory so something
+//! real shows while the first live sweep loads; the timeline session reads
+//! the rest.
 
 use crate::protocol::Frame;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -16,8 +17,13 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-/// Frames kept per station: about five hours of volume scans.
+/// Frames kept per station at most. Two hours holds about 28 volumes at
+/// the fastest VCP (12, 4.3 min), 37 if AVSET cuts every one short, 17 in
+/// clear air (35, 7 min); the cap is headroom, `TTL_MS` is the real bound.
 pub const RING: usize = 60;
+/// Frames older than this are evicted, so the loop never stitches one
+/// session's scans onto another's from a day before. Files go with them.
+pub const TTL_MS: i64 = 2 * 60 * 60 * 1000;
 
 pub struct Catalog {
     conn: Mutex<Connection>,
@@ -121,15 +127,37 @@ impl Catalog {
         )
         .map_err(sql)?;
         // The ring: everything past the newest RING for this station goes.
+        self.remove(
+            &conn,
+            "SELECT id, texture, azimuth_lut FROM frames WHERE site = ?1
+             ORDER BY start_ms DESC, id DESC LIMIT -1 OFFSET ?2",
+            params![site, RING as i64],
+        )
+    }
+
+    /// Drop the station's frames whose scan began before `cutoff_ms`, files
+    /// included: the time bound on the ring, applied when a station is
+    /// selected and after each frame is stored.
+    pub fn evict_before(&self, site: &str, cutoff_ms: i64) -> io::Result<()> {
+        let conn = self.conn.lock().unwrap();
+        self.remove(
+            &conn,
+            "SELECT id, texture, azimuth_lut FROM frames WHERE site = ?1 AND start_ms < ?2",
+            params![site, cutoff_ms],
+        )
+    }
+
+    /// Delete the rows `query` selects (id, texture, azimuth_lut) and their files.
+    fn remove(
+        &self,
+        conn: &Connection,
+        query: &str,
+        params: impl rusqlite::Params,
+    ) -> io::Result<()> {
         let expired: Vec<(String, String, String)> = conn
-            .prepare(
-                "SELECT id, texture, azimuth_lut FROM frames WHERE site = ?1
-                 ORDER BY start_ms DESC, id DESC LIMIT -1 OFFSET ?2",
-            )
+            .prepare(query)
             .map_err(sql)?
-            .query_map(params![site, RING as i64], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
-            })
+            .query_map(params, |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))
             .map_err(sql)?
             .collect::<Result<_, _>>()
             .map_err(sql)?;
@@ -331,6 +359,61 @@ mod tests {
         drop(catalog);
         let again = Catalog::open(dir.clone()).unwrap();
         assert_eq!(again.count("KTLX").unwrap(), RING);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// A station watched yesterday morning and again tonight must not loop
+    /// from one to the other: frames older than the cutoff go, files too,
+    /// and only the selected station is touched.
+    #[test]
+    fn eviction_drops_frames_older_than_the_cutoff_with_their_files() {
+        let dir = std::env::temp_dir().join(format!("omastorm-catalog-ttl-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let catalog = Catalog::open(dir.clone()).unwrap();
+        let yesterday = 1_757_160_000_000;
+        let tonight = yesterday + 37 * 60 * 60 * 1000;
+        for (minute, start_ms) in [(0, yesterday), (5, yesterday + 300_000)] {
+            catalog
+                .store(
+                    "KJAX",
+                    &frame("KJAX", minute),
+                    start_ms,
+                    &[minute as u8],
+                    &[1],
+                    "p",
+                )
+                .unwrap();
+        }
+        catalog
+            .store("KJAX", &frame("KJAX", 10), tonight, &[10], &[1], "p")
+            .unwrap();
+        catalog
+            .store("KRAX", &frame("KRAX", 0), yesterday, &[0], &[1], "p")
+            .unwrap();
+        assert_eq!(catalog.count("KJAX").unwrap(), 3);
+
+        catalog.evict_before("KJAX", tonight - TTL_MS).unwrap();
+
+        let listed = catalog.list("KJAX").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].start_ms, tonight);
+        assert!(catalog.load(&frame("KJAX", 0).id).unwrap().is_none());
+        let files: Vec<_> = fs::read_dir(dir.join("KJAX"))
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(
+            files.len(),
+            2,
+            "one sweep and one lookup for the kept frame"
+        );
+        assert!(files.iter().all(|f| f.contains("T121000Z")));
+        // Another station's old frames are its own business.
+        assert_eq!(catalog.count("KRAX").unwrap(), 1);
+        // Nothing to evict is not an error, and a cutoff behind every frame keeps all.
+        catalog.evict_before("KJAX", tonight - TTL_MS).unwrap();
+        catalog.evict_before("KRAX", yesterday).unwrap();
+        assert_eq!(catalog.count("KRAX").unwrap(), 1);
         let _ = fs::remove_dir_all(&dir);
     }
 }

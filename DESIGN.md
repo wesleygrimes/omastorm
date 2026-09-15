@@ -4,8 +4,9 @@ How a change, feature, or fix should behave.
 
 [README.md](README.md) is install and use. [docs/protocol.md](docs/protocol.md)
 is the wire. [docs/configuration.md](docs/configuration.md) is the config keys.
-[CONTRIBUTING.md](CONTRIBUTING.md) is the contribution workflow. Honor these; ask before
-violating them.
+[docs/radar-fetch.md](docs/radar-fetch.md) is how to get live and archived
+Level II bytes. [CONTRIBUTING.md](CONTRIBUTING.md) is the contribution
+workflow. Honor these; ask before violating them.
 
 ## Picture
 
@@ -57,10 +58,12 @@ strip stamp is the absolute observation time (date, time, zone). Locale
 picks date order and 12/24h only; dates stay numeric. Locale also picks
 kilometres or miles for the scale bar and picker distances. The tick strip is
 position in the loop, not a second clock. One tick per timeline entry,
-spread across the strip, at every width; no empty pads. The sweep in
-progress is an outlined tick after the complete frames and is included in
-the frame count. Each tick represents one frame, without extra gap ticks
-or a baseline.
+spread across the strip, at every width; no empty pads. The loop is the
+last two hours of completed scans, 60 at most; older frames leave the
+catalog, so a station watched yesterday and again tonight loops tonight
+only. The sweep in progress is an outlined tick after the complete frames
+and is included in the frame count. Each tick represents one frame, without
+extra gap ticks or a baseline.
 
 ## Location, onboarding, and map
 
@@ -153,9 +156,12 @@ configuration.
 A product is a texture, legend, units, timestamp, and source from the engine.
 Level II is what is drawn.
 
-The live poller follows the latest dated volume generation. Empty polls are
-normal between chunks, but 90 seconds without a recent chunk restarts
-discovery. Old keys left in a reused volume directory are ignored.
+Live join is [docs/radar-fetch.md](docs/radar-fetch.md): read the last
+archive volume header, then poll the slots after it in the chunk bucket.
+The newest name timestamp is the live volume; leftover keys in a reused
+1–999 folder are not. The join picks the volume; radial age alone says
+LIVE, STALE, or UNAVAILABLE. Empty polls are normal between chunks, but
+90 seconds without a recent chunk restarts discovery.
 Independently, if the poller task has exited, or the newest radial is thirty
 minutes old and discovery has not been tried since, spawn a new poller.
 Reselecting the current station is a no-op while the poller is running; if

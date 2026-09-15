@@ -242,6 +242,17 @@ impl Timeline {
         self.stored.insert(at, entry);
         let excess = self.stored.len().saturating_sub(catalog::RING);
         self.stored.drain(..excess);
+        self.repin()
+    }
+    /// Complete frames that began before `cutoff_ms` leave the loop, as they
+    /// leave the catalog. True when the pinned frame was one of them.
+    fn expire(&mut self, cutoff_ms: i64) -> bool {
+        self.stored.retain(|e| e.start_ms >= cutoff_ms);
+        self.repin()
+    }
+    /// After frames left: a pin on one of them moves to the oldest. True
+    /// when it moved.
+    fn repin(&mut self) -> bool {
         match &self.shown {
             Some(id) if self.index_of(id).is_none() => {
                 self.shown = self.stored.first().map(|e| e.id.clone());
@@ -631,6 +642,14 @@ impl Shared {
                 Some(format!("Unknown site {id}; stations are listed in hello.")),
             );
         };
+        // Frames from an earlier session, hours or days old, leave before
+        // the timeline is built, so the loop never spans that gap.
+        if let Err(e) = self
+            .catalog
+            .evict_before(&station.id, now_ms() - catalog::TTL_MS)
+        {
+            eprintln!("Frame catalog: {e}");
+        }
         let listed = self.catalog.list(&station.id).unwrap_or_else(|e| {
             eprintln!("Frame catalog: {e}");
             Vec::new()
@@ -727,7 +746,15 @@ impl Shared {
         let shown = if complete {
             self.frame_ms = Some(start_ms);
             self.pending = None;
-            let dropped = self.timeline.complete(entry);
+            let mut dropped = self.timeline.complete(entry);
+            // A long session ages frames past the window while the ring
+            // still has room: evict them from the catalog and the timeline
+            // together, on one cutoff, so no listed frame is missing on disk.
+            let cutoff = now_ms() - catalog::TTL_MS;
+            if let Err(e) = self.catalog.evict_before(&self.state.site.id, cutoff) {
+                eprintln!("Frame catalog: {e}");
+            }
+            dropped |= self.timeline.expire(cutoff);
             if following {
                 self.show(frame, &texture, &lut)
             } else if dropped {
@@ -1900,6 +1927,29 @@ mod tests {
         assert!(!timeline.complete(entry(catalog::RING as i64 + 1)));
         assert_eq!(timeline.position(), Some(4));
         assert_eq!(timeline.id_at(4), Some(entry(6).id.as_str()));
+    }
+
+    /// Frames that age past the window leave the loop even while the ring
+    /// has room, and a pin on one of them moves to the oldest that remains.
+    #[test]
+    fn frames_past_the_window_leave_the_loop() {
+        let mut timeline = Timeline::new(vec![entry(0), entry(5), entry(10), entry(15)]);
+        assert!(
+            !timeline.expire(entry(0).start_ms),
+            "nothing older than the oldest"
+        );
+        assert_eq!(timeline.len(), 4);
+        assert_eq!(timeline.step(-3), Some(0));
+        assert!(timeline.expire(entry(10).start_ms), "the pinned frame left");
+        assert_eq!(ids(&timeline).len(), 2);
+        assert_eq!(timeline.position(), Some(0));
+        assert_eq!(timeline.id_at(0), Some(entry(10).id.as_str()));
+        // Following the newest, an expiry that spares it changes nothing shown.
+        assert_eq!(timeline.step(1), Some(1));
+        assert!(timeline.following());
+        assert!(!timeline.expire(entry(15).start_ms));
+        assert_eq!(timeline.len(), 1);
+        assert!(timeline.following());
     }
 
     #[test]
