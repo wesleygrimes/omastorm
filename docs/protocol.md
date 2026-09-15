@@ -76,7 +76,12 @@ It is small (a few KB) so clients replace rather than merge.
   seek lands on the newest entry again. Archived, the timeline is the one
   archived frame; before any `select_site` it is empty.
 - `playing` is true while the engine advances `frame` one complete timeline
-  entry at a time, oldest after newest, pacing the loop to about ten seconds
+  entry at a time, returning to the completed frame selected when `play`
+  started. It captures the start by frame ID, so backfill does not shift it.
+  If the start expires from the catalog, or playback starts
+  on the newest completed frame or a partial sweep, the loop returns to the
+  oldest available completed frame. Playback retains its pacing
+  based on the total completed history: about ten seconds for the full history
   (250 ms to 1 s per frame, by how many there are). The sweep in progress is not part of
   the loop.
 - `frame.status`: `complete` | `partial`. Partial frames are live sweeps still
@@ -212,6 +217,9 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
   and a move that lands where it already is changes nothing. `play` starts
   the loop when the timeline holds at least two complete frames (otherwise
   nothing changes); `pause` stops it and leaves the frame shown.
+  Each paused-to-playing transition captures the current frame as the loop
+  start; an already-playing engine ignores another `play`. Seeking the oldest
+  frame before `play` selects the full history.
 - `tiles_needed` is the visible inclusive rectangle at one zoom, at
   most 64 tiles, sent when the viewport settles; it names no set (the engine
   chooses, see `tile_ready`). The engine serves it centre-out, and a newer

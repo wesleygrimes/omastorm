@@ -100,6 +100,11 @@ A scale bar under the map shows ground distance in your locale (km or mi).
 A station you arrive at fetches its last dozen scans, so there is a loop to
 play within a few seconds; the cache then grows to 60 as new scans arrive,
 and scans older than two hours drop out.
+Space and the Play button loop from the selected completed frame through the
+newest completed scan, returning to the selection each time. Starting from
+the newest completed frame or a sweep still painting loops the full history;
+Home then Play also selects the full history. Space or the button pauses
+while playing, and the next Play captures the current selection as its start.
 The stamp above the timeline is the absolute scan time; the meta line is how
 stale that frame is. LIVE, STALE after ten minutes, UNAVAILABLE or OFFLINE
 when the feed cannot be reached, with cached frames kept.
@@ -113,7 +118,7 @@ when the feed cannot be reached, with cached frames kept.
 | `n` | Nearest site |
 | `Shift+L` | Lock the station |
 | `Shift+H` | Choose a location |
-| `Space` | Loop the frames |
+| `Space` | Loop from the selected frame / pause |
 | `[` `]` | Step a frame |
 | `Home` `End` | Oldest or newest frame |
 | `1` `2` `3` | Pixels, Glyphs, Stipple |

@@ -138,6 +138,7 @@ struct Timeline {
     stored: Vec<Entry>,
     partial: Option<Entry>,
     shown: Option<String>,
+    loop_start: Option<String>,
 }
 impl Timeline {
     fn new(stored: Vec<Entry>) -> Self {
@@ -145,6 +146,7 @@ impl Timeline {
             stored,
             partial: None,
             shown: None,
+            loop_start: None,
         }
     }
     fn len(&self) -> usize {
@@ -200,15 +202,28 @@ impl Timeline {
         let index = self.index_of(id).ok_or(())?;
         Ok(self.pin(index))
     }
-    /// Playback: the next complete frame, wrapping to the oldest after the
-    /// newest; nothing to loop over with fewer than two.
+    /// Capture the selected complete frame on Play. Keep its identity so
+    /// backfilled scans do not move the start. Selecting the last complete
+    /// frame or a partial sweep starts a complete-history loop instead.
+    fn start_playback(&mut self) {
+        self.loop_start = self
+            .position()
+            .filter(|&index| index + 1 < self.stored.len())
+            .and_then(|index| self.stored.get(index))
+            .map(|entry| entry.id.clone());
+    }
+    /// Playback wraps to the frame selected on Play. If that frame has
+    /// expired from the catalog, fall back to the oldest available frame.
     fn advance(&mut self) -> Option<usize> {
         if self.stored.len() < 2 {
             return None;
         }
         let from = self.position().unwrap_or(0);
         let to = if from + 1 >= self.stored.len() {
-            0
+            self.loop_start
+                .as_ref()
+                .and_then(|id| self.stored.iter().position(|entry| &entry.id == id))
+                .unwrap_or(0)
         } else {
             from + 1
         };
@@ -826,6 +841,7 @@ impl Shared {
         if self.state.playing || self.timeline.stored.len() < 2 {
             return false;
         }
+        self.timeline.start_playback();
         self.state.playing = true;
         self.wake.notify_one();
         true
@@ -1996,6 +2012,103 @@ mod tests {
         assert!(timeline.following());
         assert_eq!(timeline.advance(), Some(0));
         assert!(!timeline.following());
+    }
+
+    #[test]
+    fn playback_starts_at_selection_and_home_restores_full_history() {
+        let mut timeline = Timeline::new(vec![entry(0), entry(5), entry(10), entry(15)]);
+        timeline.seek(&entry(5).id).unwrap();
+        timeline.start_playback();
+        for expected in [2, 3, 1] {
+            assert_eq!(timeline.advance(), Some(expected));
+        }
+        timeline.seek(&entry(0).id).unwrap();
+        timeline.start_playback();
+        for expected in [1, 2, 3, 0, 1, 2, 3, 0] {
+            assert_eq!(timeline.advance(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn playback_returns_to_selected_frame_on_every_loop() {
+        let mut timeline = Timeline::new(vec![entry(0), entry(5), entry(10), entry(15)]);
+        timeline.seek(&entry(5).id).unwrap();
+        timeline.start_playback();
+        for expected in [2, 3, 1, 2, 3, 1] {
+            assert_eq!(timeline.advance(), Some(expected));
+        }
+        // A new selection and Play choose a new loop start.
+        timeline.seek(&entry(10).id).unwrap();
+        timeline.start_playback();
+        for expected in [3, 2, 3, 2] {
+            assert_eq!(timeline.advance(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn playback_anchor_survives_backfill_and_includes_new_frames() {
+        let mut timeline = Timeline::new(vec![entry(5), entry(10), entry(15)]);
+        timeline.seek(&entry(10).id).unwrap();
+        timeline.start_playback();
+        timeline.insert(entry(0));
+        timeline.complete(entry(20));
+        timeline.begin(entry(25));
+        for expected in [3, 4, 2, 3, 4, 2] {
+            assert_eq!(timeline.advance(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn playback_from_last_complete_frame_loops_from_beginning() {
+        for partial in [false, true] {
+            let mut timeline = Timeline::new(vec![entry(0), entry(5), entry(10)]);
+            if partial {
+                timeline.begin(entry(15));
+            }
+            timeline.seek(&entry(10).id).unwrap();
+            timeline.start_playback();
+            for expected in [0, 1, 2, 0, 1, 2] {
+                assert_eq!(timeline.advance(), Some(expected));
+            }
+        }
+    }
+
+    #[test]
+    fn playback_from_partial_still_loops_complete_history() {
+        let mut timeline = Timeline::new(vec![entry(0), entry(5), entry(10)]);
+        timeline.begin(entry(15));
+        timeline.start_playback();
+        for expected in [0, 1, 2, 0] {
+            assert_eq!(timeline.advance(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn playback_anchor_survives_age_eviction_until_its_frame_expires() {
+        let mut timeline = Timeline::new(vec![entry(0), entry(5), entry(10), entry(15), entry(20)]);
+        timeline.seek(&entry(10).id).unwrap();
+        timeline.start_playback();
+        assert!(!timeline.expire(entry(5).start_ms));
+        for expected in [2, 3, 1] {
+            assert_eq!(timeline.advance(), Some(expected));
+        }
+        assert!(timeline.expire(entry(15).start_ms));
+        for expected in [1, 0, 1, 0] {
+            assert_eq!(timeline.advance(), Some(expected));
+        }
+    }
+
+    #[test]
+    fn playback_falls_back_to_oldest_when_anchor_expires() {
+        let mut timeline = Timeline::new((0..catalog::RING as i64).map(entry).collect());
+        timeline.seek(&entry(1).id).unwrap();
+        timeline.start_playback();
+        timeline.complete(entry(catalog::RING as i64));
+        timeline.complete(entry(catalog::RING as i64 + 1));
+        for expected in 1..catalog::RING {
+            assert_eq!(timeline.advance(), Some(expected));
+        }
+        assert_eq!(timeline.advance(), Some(0));
     }
 
     #[test]

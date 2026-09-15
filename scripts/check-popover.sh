@@ -21,6 +21,11 @@ set_manifest_version() { # version: replaced whole, as a git fast-forward does
   jq --arg v "$1" '.version = $v' manifest.json > "$OMASTORM_ROOT/manifest.next"
   mv "$OMASTORM_ROOT/manifest.next" "$OMASTORM_ROOT/manifest.json"
 }
+# Station selection starts live polling. Keep the seeded timeline
+# deterministic by refusing HTTP fetches in this isolated check process.
+export http_proxy=http://127.0.0.1:9
+export https_proxy=$http_proxy HTTP_PROXY=$http_proxy HTTPS_PROXY=$http_proxy
+export all_proxy=$http_proxy ALL_PROXY=$http_proxy no_proxy='' NO_PROXY=''
 : > "$OMASTORM_CONFIG"
 jq -c '.sites[] | select(.id=="KTLX") | {lat, lon, span: 210}' engine/data/sites.json > "$OMASTORM_STATE"
 pid=
@@ -44,6 +49,30 @@ until_status() {
   done
   fail "Timed out: $filter"
 }
+# Require every transition in both clients, rather than waiting past an
+# incorrect intermediate frame until the expected frame eventually appears.
+expect_frames() {
+  local previous="popover-test-$1" expected actual frame window matched
+  shift
+  for expected in "$@"; do
+    expected="popover-test-$expected"
+    matched=0
+    for _ in {1..100}; do
+      actual=$(status)
+      frame=$(jq -r .frame <<< "$actual")
+      window=$(jq -r .windowFrame <<< "$actual")
+      [[ $frame == "$previous" || $frame == "$expected" ]] || fail "Unexpected frame: $previous -> $frame (expected $expected)"
+      [[ $window == "$previous" || $window == "$expected" ]] || fail "Unexpected window frame: $previous -> $window (expected $expected)"
+      if [[ $frame == "$expected" && $window == "$expected" ]]; then
+        matched=1
+        break
+      fi
+      sleep .05
+    done
+    (( matched )) || fail "Playback never advanced from $previous to $expected"
+    previous=$expected
+  done
+}
 until_status '.site == "KTLX" and .windowSite == "KTLX"'
 before=$(status | jq -r .frame)
 call expand
@@ -64,7 +93,7 @@ call capture "$PWD/review/popover-archived.png"
 for _ in {1..50}; do [[ -s review/popover-archived.png ]] && break; sleep .1; done
 sock="$XDG_RUNTIME_DIR/omastorm/engine.sock"
 tell() { printf '%s\n' "$@" | socat -t0.2 - "UNIX-CONNECT:$sock" >/dev/null; }
-# Two deterministic complete frames, using the archived fixture's metadata
+# Four deterministic complete frames, using the archived fixture's metadata
 # and PNGs, exercise the real catalog/transport without waiting two volumes.
 # Their start times are minutes ago: the catalog evicts frames older than
 # two hours when a station is selected.
@@ -79,7 +108,7 @@ dir = "#{scratch}/cache/omastorm/frames"
 FileUtils.mkdir_p("#{dir}/KTLX")
 sql = []
 now_ms = (Time.now.to_f * 1000).to_i
-2.times do |i|
+4.times do |i|
   f = Marshal.load(Marshal.dump(frame))
   f['id'] = "popover-test-#{i}"
   f['scanTime'] = "2013-05-20T20:#{10+i*5}:00Z"
@@ -88,7 +117,7 @@ now_ms = (Time.now.to_f * 1000).to_i
   FileUtils.cp("#{scratch}/r/omastorm/#{frame['texture']}", "#{dir}/#{tex}")
   FileUtils.cp("#{scratch}/r/omastorm/#{frame['azimuthLut']}", "#{dir}/#{lut}")
   f['texture'] = ''; f['azimuthLut'] = ''
-  values = [f['id'], 'KTLX', 'REF', f['elevationDeg'], now_ms - 600000 + i*300000,
+  values = [f['id'], 'KTLX', 'REF', f['elevationDeg'], now_ms - 1200000 + i*300000,
             f['scanTime'], f['sweepEnd'], 'synthetic popover lifecycle test', 0, JSON.generate(f), tex, lut]
   sql << "INSERT INTO frames VALUES (#{values.map { |v| v.is_a?(Numeric) ? v.to_s : "'" + v.gsub("'", "''") + "'" }.join(',')});"
 end
@@ -107,8 +136,34 @@ tell '{"type":"select_site","id":"KTLX"}' '{"type":"lock","enabled":true}' '{"ty
 until_status '.frame == "popover-test-0"'
 call step 1
 until_status '.frame == "popover-test-1" and .windowFrame == "popover-test-1"'
+# The popover Play button loops from the selected completed scan.
 call play
 until_status '.playing and .windowPlaying'
+expect_frames 1 2 3 1 2 3 1
+call play
+until_status '.playing == false'
+# Home then Space deliberately chooses the full history.
+quickshell ipc --pid "$pid" call keys run oldest
+until_status '.frame == "popover-test-0" and .windowFrame == "popover-test-0"'
+quickshell ipc --pid "$pid" call keys run play
+until_status '.playing and .windowPlaying'
+expect_frames 0 1 2 3 0
+quickshell ipc --pid "$pid" call keys run play
+until_status '.playing == false'
+# The window's Space action uses the same selected-frame loop.
+tell '{"type":"seek","id":"popover-test-1"}'
+until_status '.frame == "popover-test-1" and .windowFrame == "popover-test-1"'
+quickshell ipc --pid "$pid" call keys run play
+until_status '.playing and .windowPlaying'
+expect_frames 1 2 3 1
+quickshell ipc --pid "$pid" call keys run play
+until_status '.playing == false'
+# Starting on the newest completed scan also selects the full loop.
+tell '{"type":"seek","id":"popover-test-3"}'
+until_status '.frame == "popover-test-3" and .windowFrame == "popover-test-3"'
+call play
+until_status '.playing and .windowPlaying'
+expect_frames 3 0 1 2 3 0
 # Expand while playing forwards the shared position instead of seek/pause.
 call reopen
 call expand

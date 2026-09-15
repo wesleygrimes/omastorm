@@ -50,6 +50,13 @@ the ids and comments in `ui/RadarWindow.qml`.
 strip, with the strip stamp left-aligned and frame index right-aligned
 on one row above the ticks. Playback buttons align with the track at the bottom.
 
+**Playback.** Space and the Play button start at the selected completed scan,
+play through the newest completed scan, and wrap back to the selection.
+Starting on the newest scan or a sweep still painting loops the full history;
+Home then Play also chooses the full history. Pause keeps the current frame,
+and playing again captures a new start. If the start leaves the catalog,
+continue from the oldest available completed scan.
+
 **Product stack.** Compact product line (name, then NOAA NEXRAD). The meta
 line is the age only, right-aligned under that row.
 
