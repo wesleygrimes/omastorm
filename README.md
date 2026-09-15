@@ -25,7 +25,8 @@ client: it displays those textures in the bar popover and full window.
   the antenna turns. Stale data says it is stale.
 - **Every site.** Pan the map and it follows the nearest station, or search by
   id, city, or state.
-- **Timeline.** Up to 60 scans per station, cached locally. Play, step, scrub.
+- **Timeline.** The last two hours of scans per station, up to 60, cached locally.
+  Play, step, scrub.
 - **Three treatments.** Glyphs, Pixels, and Stipple sample the same gate and
   paint the cell differently.
 - **Native.** Colors, font, and spacing come from the active Omarchy theme and
@@ -87,7 +88,8 @@ station as you pan unless you lock it; a locked radar stays put even when
 the camera leaves its coverage, and the lock turns yellow outside the rings.
 A scale bar under the map shows ground distance in your locale (km or mi).
 A station you arrive at fetches its last dozen scans, so there is a loop to
-play within a few seconds; the cache then grows to 60 as new scans arrive.
+play within a few seconds; the cache then grows to 60 as new scans arrive,
+and scans older than two hours drop out.
 The stamp above the timeline is the absolute scan time; the meta line is how
 stale that frame is. LIVE, STALE after ten minutes, UNAVAILABLE or OFFLINE
 when the feed cannot be reached, with cached frames kept.

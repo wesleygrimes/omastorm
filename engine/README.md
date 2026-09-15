@@ -72,8 +72,10 @@ new radials; an empty station is
 unavailable, and an unreachable bucket is offline. Cached frames remain
 usable under every condition.
 
-`src/catalog.rs` stores the newest 60 complete frames per station in
-`$XDG_CACHE_HOME/omastorm/frames/`: a SQLite WAL catalog and PNG files.
+`src/catalog.rs` stores the newest 60 complete frames per station from the
+last two hours in `$XDG_CACHE_HOME/omastorm/frames/`: a SQLite WAL catalog
+and PNG files. Older frames are evicted, files included, when a station is
+selected and after each complete frame.
 Entries retain scan geometry, times, and source provenance. The UI never reads
 this store. The timeline serves cached frames through new runtime textures.
 Playback loops complete frames over about ten seconds, bounded to 250 ms–1 s
