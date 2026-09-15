@@ -8,6 +8,13 @@ QtObject {
     property bool registerIpc: true
     readonly property string themePath: Quickshell.env("OMASTORM_THEME_DIR") || (Quickshell.env("HOME") + "/.local/state/omarchy/current/theme")
     readonly property string userPath: Quickshell.env("OMASTORM_USER_SHELL") || (Quickshell.env("HOME") + "/.config/omarchy/shell.toml")
+    // `omarchy theme set` replaces the whole theme directory (`rm -rf`, then
+    // `mv`) and then rewrites `theme.name` beside it. A watched file's change
+    // event can arrive while the old directory is gone and before the new one
+    // is in place, and reloading then fails and leaves the watch on a deleted
+    // file. So theme events wait for the swap to settle before reloading, and
+    // `theme.name`, rewritten in place, marks every switch.
+    readonly property string themeNamePath: themePath.replace(/\/+$/, "").replace(/\/[^\/]*$/, "") + "/theme.name"
     property var colors: ({})
     property var shell: ({})
     property var user: ({})
@@ -37,11 +44,15 @@ QtObject {
         shellFile.reload();
         userFile.reload();
     }
+    property Timer settle: Timer {
+        interval: 150
+        onTriggered: root.reload()
+    }
     property FileView colorsFile: FileView {
         path: root.themePath + "/colors.toml"
         watchChanges: true
         printErrors: false
-        onFileChanged: reload()
+        onFileChanged: root.settle.restart()
         onLoaded: root.colors = root.parse(text())
         onLoadFailed: root.colors = ({})
     }
@@ -49,7 +60,7 @@ QtObject {
         path: root.themePath + "/shell.toml"
         watchChanges: true
         printErrors: false
-        onFileChanged: reload()
+        onFileChanged: root.settle.restart()
         onLoaded: root.shell = root.parse(text())
         onLoadFailed: root.shell = ({})
     }
@@ -60,6 +71,15 @@ QtObject {
         onFileChanged: reload()
         onLoaded: root.user = root.parse(text())
         onLoadFailed: root.user = ({})
+    }
+    property FileView themeNameFile: FileView {
+        path: root.themeNamePath
+        watchChanges: true
+        printErrors: false
+        onFileChanged: {
+            reload();
+            root.settle.restart();
+        }
     }
     property IpcHandler ipc: IpcHandler {
         target: root.registerIpc ? "theme" : ""
