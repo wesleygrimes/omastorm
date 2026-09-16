@@ -16,6 +16,7 @@
 //! public and needs no credentials; nothing here runs until a client
 //! selects a station, so launch still fetches nothing.
 
+use crate::product::Product;
 use crate::{live_index, sweep::Sweep};
 use chrono::{NaiveDateTime, SecondsFormat, TimeDelta, Utc};
 use nexrad_data::aws::realtime::{Chunk, ChunkIdentifier, ChunkType, DownloadedChunk, VolumeIndex};
@@ -88,6 +89,7 @@ pub enum Event {
     Backfill {
         site: String,
         sweep: Sweep,
+        velocity: Option<Sweep>,
         provenance: String,
     },
     /// The lowest cut of the current volume grew or completed; `provenance`
@@ -95,6 +97,7 @@ pub enum Event {
     Sweep {
         site: String,
         sweep: Sweep,
+        velocity: Option<Sweep>,
         complete: bool,
         provenance: String,
     },
@@ -109,6 +112,10 @@ pub enum Event {
 #[derive(Default)]
 pub struct Assembler {
     radials: Vec<Radial>,
+    /// Doppler cut at the lowest angle (often elevation 2 on split-cut VCPs).
+    vel_radials: Vec<Radial>,
+    vel_elev: Option<u8>,
+    vel_done: bool,
     /// The cut has ended: its last radial said so, or the next cut began.
     done: bool,
     volume: String,
@@ -119,6 +126,7 @@ pub struct Assembler {
 /// The sweep after a chunk changed it.
 pub struct Update {
     pub sweep: Sweep,
+    pub velocity: Option<Sweep>,
     pub complete: bool,
     pub provenance: String,
 }
@@ -142,14 +150,28 @@ impl Assembler {
     ) -> Result<Option<Update>, String> {
         if starts_volume || volume != self.volume {
             self.radials.clear();
+            self.vel_radials.clear();
+            self.vel_elev = None;
+            self.vel_done = false;
             self.done = false;
             self.volume = volume.to_owned();
             self.first_chunk = chunk.to_owned();
         }
         let mut changed = false;
         for radial in radials {
+            if radial.velocity().is_some() && !self.vel_done {
+                match self.vel_elev {
+                    None => self.vel_elev = Some(radial.elevation_number()),
+                    Some(elev) if elev != radial.elevation_number() => self.vel_done = true,
+                    Some(_) => {}
+                }
+                if !self.vel_done {
+                    self.vel_radials.push(radial.clone());
+                    changed = true;
+                }
+            }
             if self.done {
-                break;
+                continue;
             }
             if radial.elevation_number() == 1 {
                 let ends = matches!(radial.radial_status(), RadialStatus::ElevationEnd);
@@ -159,7 +181,7 @@ impl Assembler {
                     self.done = true;
                 }
             } else if !self.radials.is_empty() {
-                // The next cut's first radial: the lowest cut is complete.
+                // The next cut's first radial: the lowest reflectivity cut is complete.
                 self.done = true;
                 changed = true;
             }
@@ -169,7 +191,8 @@ impl Assembler {
         }
         self.last_chunk = chunk.to_owned();
         Ok(Some(Update {
-            sweep: Sweep::from_radials(&self.radials)?,
+            sweep: Sweep::from_radials(&self.radials, Product::Reflectivity)?,
+            velocity: Sweep::from_radials(&self.vel_radials, Product::Velocity).ok(),
             complete: self.done,
             provenance: format!(
                 "{BUCKET}/{}/{}..{}",
@@ -240,6 +263,7 @@ async fn deliver(
                 .send(Event::Sweep {
                     site: site.to_owned(),
                     sweep: update.sweep,
+                    velocity: update.velocity,
                     complete: update.complete,
                     provenance: update.provenance,
                 })
@@ -518,6 +542,7 @@ async fn backfill(site: String, events: Sender<Event>, join: live_index::Join, c
                     .send(Event::Backfill {
                         site: site.clone(),
                         sweep: update.sweep,
+                        velocity: update.velocity,
                         provenance: update.provenance,
                     })
                     .await;
@@ -1193,12 +1218,15 @@ mod tests {
                 .unwrap();
             match update {
                 Some(update) if update.complete => {
-                    assert!(complete.is_none(), "completed twice");
-                    assert_eq!(
-                        update.provenance,
-                        format!("{BUCKET}/KTLX/001/20130520-201643-001-I..{name}")
-                    );
-                    complete = Some(update.sweep);
+                    if complete.is_none() {
+                        assert_eq!(
+                            update.provenance,
+                            format!("{BUCKET}/KTLX/001/20130520-201643-001-I..{name}")
+                        );
+                        complete = Some(update.sweep);
+                    } else {
+                        assert_eq!(update.sweep.rays.len(), expected.rays.len());
+                    }
                 }
                 Some(update) => {
                     assert!(complete.is_none(), "grew after completing");
@@ -1259,12 +1287,13 @@ mod tests {
         assert!(update.complete);
         assert_eq!(update.sweep.rays.len(), 700);
         assert_eq!(update.sweep.rows(), 701, "the missing rays leave a gap");
-        assert!(
-            assembler
-                .feed(false, "v", "c", radials[800..900].to_vec())
-                .unwrap()
-                .is_none()
-        );
+        if let Some(later) = assembler
+            .feed(false, "v", "c", radials[800..900].to_vec())
+            .unwrap()
+        {
+            assert!(later.complete);
+            assert_eq!(later.sweep.rays.len(), 700);
+        }
     }
 
     /// A Start chunk begins with the Archive II header: the whole fixture

@@ -41,9 +41,14 @@ textures. Transport, commands, state, and texture encoding are defined in
 ## Radar
 
 `src/sweep.rs` decodes Level II with the pinned `nexrad-data`, `nexrad-decode`,
-and `nexrad-model` dependencies. It reads through the lowest cut, sorts rays
-stably by azimuth, and publishes a polar sweep texture and azimuth lookup.
-The UI samples these directly; radar arrays never enter JSON or QML JavaScript.
+and `nexrad-model` dependencies. It reads the lowest cut that carries the
+requested moment (`REF` or `VEL`; super-res splits Doppler onto the next
+cut), sorts rays stably by azimuth, and publishes a polar sweep texture and
+azimuth lookup. The UI samples these directly; radar arrays never enter JSON
+or QML JavaScript.
+
+`src/wind_obs.rs` fetches NDBC latest_obs and METARs after `wind_needed`.
+Observations land on `state.windObs`, separate from the radar frame.
 
 Fetch is [docs/radar-fetch.md](../docs/radar-fetch.md). `src/live_index.rs`
 reads the last archive volume header, then lists the slots after it in the

@@ -131,6 +131,27 @@ pub struct State {
     /// The tile sources (`docs/protocol.md`, `tile_ready`).
     pub basemap: Basemap,
     pub playing: bool,
+    /// Surface wind observations near the last `wind_needed` centre (NDBC + METAR).
+    pub wind_obs: Vec<WindObs>,
+}
+
+/// One anemometer report (`docs/protocol.md`, wind observations).
+#[derive(Serialize, PartialEq, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct WindObs {
+    pub id: String,
+    pub name: String,
+    /// `NDBC` or `METAR`.
+    pub network: String,
+    pub lat: f64,
+    pub lon: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speed_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gust_ms: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dir_deg: Option<i32>,
+    pub observed_at: String,
 }
 
 /// `state.basemap`: what draws the tiles and, for `osm`, whether it can.
@@ -363,6 +384,14 @@ pub enum Command {
     /// `places` to the sender; optional `lat`/`lon` order nearer matches first.
     SearchPlaces {
         query: String,
+        #[serde(default)]
+        lat: Option<f64>,
+        #[serde(default)]
+        lon: Option<f64>,
+    },
+    /// Fetch surface observations for this centre, or the last
+    /// `view_center` / selected site when lat/lon are omitted.
+    WindNeeded {
         #[serde(default)]
         lat: Option<f64>,
         #[serde(default)]
