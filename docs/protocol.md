@@ -167,6 +167,9 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
 {"type":"play"}  {"type":"pause"}  {"type":"step","delta":-1}  {"type":"seek","id":"..."}
 {"type":"set_product","product":"REF","elevationIndex":0}
 {"type":"tiles_needed","z":11,"x0":469,"y0":807,"x1":472,"y1":810}
+{"type":"aqi_query","lat":35.4,"lon":-97.5,"token":""}
+{"type":"aqi_stations","lat0":35.6,"lon0":-97.8,"lat1":35.2,"lon1":-97.2,"max":200,"token":"..."}
+{"type":"aqi_station_detail","uid":7536,"token":"..."}
 ```
 
 - `select_site` names a station from `hello.sites`. The engine goes
@@ -203,6 +206,54 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
 ```
   `region` is the admin-1 name (a US state, a Canadian province);
   `country` is the ISO 3166-1 alpha-2 code. Either may be omitted when empty.
+- `aqi_query` asks for the air quality at one place and is answered with
+  `aqi` to the sender only, like `places` (issue #3). With a WAQI token the
+  engine asks the nearest ground station first and falls back to
+  Open-Meteo's model analysis on any failure; without one, Open-Meteo
+  answers. The answer caches on a 0.05° grid for 30 minutes, serves stale
+  up to two hours while the sources are down, and drops after a day. A
+  latitude or longitude outside range is answered with an `error`.
+  Raw concentrations (µg/m³, CO in µg/m³) are the comparable datapoint;
+  the indices are labeled regional wrappers — `us` and `european` pass
+  through from Open-Meteo, `china` is WAQI's own index when the source is
+  WAQI and computed here (HJ 633-2012) otherwise, and `india` is always
+  computed here (CPCB NAQI). The scale the user reads is a UI choice and
+  every label names it.
+
+```json
+{"type":"aqi","v":1,"lat":35.3,"lon":-97.4,"source":"open-meteo","observed_at":1789646400,
+ "pm2_5":14.2,"pm10":40.0,"o3":120.0,"no2":8.0,"so2":2.0,"co":240.0,
+ "us_aqi":56,"european_aqi":38,"china_aqi":40,"india_aqi":129}
+```
+- `aqi_stations` names the visible bounds rectangle (north, west, south,
+  east degrees) and is answered with `aqi_stations` to the sender only.
+  It needs a token; the fetch is paced (at least ten seconds apart, a
+  politeness budget a day), so a repeat request serves the last list,
+  however stale. Stations arrive deduplicated by `uid` and decimated to
+  at most `max` (default 200): each cluster keeps its worst reading.
+  A station whose `aqi` is `-` has no current reading (`aqi` null).
+
+```json
+{"type":"aqi_stations","v":1,"source":"waqi",
+ "stations":[{"uid":7536,"lat":40.69,"lon":-73.92,"aqi":45,
+              "name":"Brooklyn, New York, USA","observed_at":1705338000}]}
+```
+- `aqi_station_detail` asks one station (by `uid`) for its breakdown and
+  is answered with `aqi_station` to the sender only: the station, its
+  pollutant map (µg/m³, CO in µg/m³), and the full reading, so the card
+  can label whichever scale the user chose. The answer caches per station
+  for five minutes. Both WAQI commands need a token; it travels per
+  command and the engine stores nothing.
+
+```json
+{"type":"aqi_station","v":1,
+ "station":{"uid":7536,"lat":40.69,"lon":-73.92,"aqi":45,
+            "name":"Brooklyn, New York, USA","observed_at":1705338000},
+ "pollutants":[["o3",15.0],["pm10",22.0],["pm2_5",30.0]],
+ "computed":{"v":1,"lat":40.69,"lon":-73.92,"source":"waqi","observed_at":1705338000,
+             "pm2_5":30.0,"pm10":22.0,"o3":15.0,"no2":null,"so2":null,"co":null,
+             "us_aqi":null,"european_aqi":null,"china_aqi":45,"india_aqi":42}}
+```
 - `set_product` requests a product and elevation. An unsupported selection
   returns an `error` to its sender and retains the current frame.
 - `step` moves `delta` entries along `timeline` from the frame shown, stopping
@@ -339,7 +390,9 @@ Explicit preferences override remembered view state. The UI resolves the map
 center and radar lock independently, then sends `select_site`, `lock`,
 `follow`, and settled `view_center` commands as needed. Unlocked navigation
 uses follow; locked navigation preserves the selected radar. Treatment and
-the weak-return floor stay in the UI. File ownership, launch precedence,
+the weak-return floor stay in the UI. The `[aqi]` table (issue #3) seeds the
+air quality chip and station dots; the WAQI token it may hold travels per
+command and the engine stores nothing. File ownership, launch precedence,
 onboarding, and validation are in [configuration.md](configuration.md).
 
 ## Implementation notes

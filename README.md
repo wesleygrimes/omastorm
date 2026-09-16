@@ -130,6 +130,33 @@ map. It is not a new row of chrome.
 
 ![Approximate location failed](docs/media/readme/locate-fail.png)
 
+## Air quality
+
+A small chip beside **LIVE** shows the air quality where the map is centred:
+an index in its category color, the scale always named, since the world's
+AQI scales are not comparable. `a` turns the chip on and off for the
+session; `~/.config/omastorm/config.toml` makes it a launch default. The
+chip opens a card: the raw concentrations in µg/m³, the source, and how old
+the reading is. Click it again to close.
+
+- No token: the reading is [Open-Meteo](https://open-meteo.com)'s model
+  analysis, global, no key. It shows the **US** (EPA) and **European** (EEA)
+  indices as the source serves them, and computes the **Chinese** (HJ 633)
+  and **Indian** (CPCB NAQI) indices from the raw concentrations.
+- With a token from [WAQI](https://aqicn.org/data-platform/token/) in the
+  `[aqi]` table, the reading is the nearest real ground station, and `d`
+  shows its dots on the map: every station in view in the band palette, a
+  click for its full breakdown. Station dots carry WAQI's own index — the
+  China scale — and the card says so.
+
+```
+[aqi]
+show = false
+scale = "us"     # us | european | china | india | raw
+token = ""       # a WAQI token; empty is Open-Meteo only
+stations = false # the dot overlay; needs the token
+```
+
 ## The loop
 
 A station you arrive at fetches recent scans so there is something to play
@@ -177,6 +204,8 @@ Chrome follows the Omarchy theme. Radar color comes only from the sweep.
 | Home / End | Oldest or newest frame |
 | `1` `2` `3` | Pixels, Glyphs, Stipple |
 | `w` | Show weak returns |
+| `a` | Air quality chip off / on |
+| `d` | Station dots off / on (needs a WAQI token) |
 | `?` | This map |
 | Esc | Close |
 
@@ -259,6 +288,11 @@ tiles by [OpenFreeMap](https://openfreemap.org); Natural Earth, public domain.
 Location search: [GeoNames](https://www.geonames.org/),
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 Approximate location: [wttr.in](https://wttr.in).
+Air quality: [Open-Meteo](https://open-meteo.com), CC BY 4.0, built on the
+Copernicus Atmosphere Monitoring Service (CAMS);
+[WAQI](https://aqicn.org) station data under the
+[data-platform terms](https://aqicn.org/data-platform/token/) with the
+user's own token.
 Code: MIT, see [LICENSE](LICENSE).
 
 ## Contributing
