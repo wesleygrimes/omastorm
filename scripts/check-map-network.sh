@@ -6,7 +6,7 @@ check_dir=$(mktemp -d /tmp/omastorm-check-map-network.XXXXXX)
 trap 'rm -rf "$check_dir"' EXIT
 mkdir -p review
 rm -f review/network-*.png
-cp ui/RadarMap.qml ui/Engine.qml "$check_dir/"
+cp ui/RadarMap.qml ui/Engine.qml ui/Aqi.js "$check_dir/"
 cp tests/map-network.qml "$check_dir/shell.qml"
 ln -sfn "$PWD/ui/shaders" "$check_dir/shaders"
 OMASTORM_QML="$check_dir/shell.qml" OMASTORM_REVIEW="$PWD/review" \

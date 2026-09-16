@@ -31,6 +31,13 @@ QtObject {
     readonly property var treatment: values.treatment
     // The raw value; the window judges it: a dBZ number, false, or unset.
     readonly property var weakFloor: values.weak_floor
+    // The `[aqi]` table (issue #3): the chip's default, the scale, the
+    // optional WAQI token, and the station dots. Judged like weak_floor:
+    // Aqi.js names a bad scale and the default holds.
+    readonly property bool aqiShow: values.aqi_show === true
+    readonly property string aqiScale: typeof values.aqi_scale === "string" ? values.aqi_scale : "us"
+    readonly property string aqiToken: typeof values.aqi_token === "string" ? values.aqi_token : ""
+    readonly property bool aqiStations: values.aqi_stations === true
     // The `[keys]` table as action id -> value, for Keys.resolve.
     readonly property var keys: {
         var table = {};

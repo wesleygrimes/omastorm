@@ -142,7 +142,8 @@ the machine's own state and weather files are not read unless
   `pan_down` `pan_up` `pan_right` (`h j k l` and the arrows), `zoom_in`
   (`+ =`), `zoom_out` (`-`), `reset` (`0`, the resolved location), `previous_frame` (`[`),
   `next_frame` (`]`), `play` (`Space`), `oldest` (`Home`), `newest` (`End`),
-  `pixels` `glyphs` `stipple` (`1 2 3`), `weak` (`w`), `help` (`?`), `close`
+  `pixels` `glyphs` `stipple` (`1 2 3`), `weak` (`w`), `aqi` (`a`),
+  `stations` (`d`), `help` (`?`), `close`
   (`Escape`).
   A value that is not a quoted string, a sequence Qt cannot parse, an
   unknown action, or a key another action already holds leaves that action
@@ -151,6 +152,37 @@ the machine's own state and weather files are not read unless
   fixed; a bad `treatment`, `weak_floor`, centre, or `locked_radar` is
   reported the same way. `home_site` and `follow` are unused and named if
   present.
+
+## Air quality (issue #3)
+
+The `[aqi]` table turns on the air quality chip and the WAQI station dots.
+Nothing is fetched until a view exists and the popover or window is open;
+`scale` names the index the chip shows, and the label names it, since the
+scales are not comparable.
+
+```toml
+[aqi]
+show = false        # the chip on launch; `a` toggles the session
+scale = "us"        # us | european | china | india | raw
+token = ""          # a WAQI token (aqicn.org/data-platform/token); empty is Open-Meteo only
+stations = false    # station dots on launch; `d` toggles the session
+station_max = 200   # at most this many dots per view
+daily_budget = 500  # a soft politeness cap on bounds fetches per day
+```
+
+- `scale`: `us` (EPA), `european` (EEA), `china` (HJ 633), `india` (CPCB
+  NAQI), or `raw` (concentrations only). Anything else is reported in the
+  status slot and `us` holds. Open-Meteo serves the US and European
+  indices; the engine computes the Chinese and Indian ones from the raw
+  concentrations; a WAQI station's index is the China scale.
+- `token`: the user's own WAQI token; it lives in this file, travels per
+  command, and is never stored by the engine. Empty, the chip answers
+  from Open-Meteo alone and the station dots stay away.
+- `stations`: the dot overlay needs the token. `station_max` and
+  `daily_budget` are clamped engine-side; a bad value keeps the default.
+- `aqi_show` (chip) and `aqi_stations` (dots) above are launch defaults;
+  the `a` and `d` keys toggle the session without writing the file, and an
+  edit to the file re-seeds both.
 
 ## Remembered state
 

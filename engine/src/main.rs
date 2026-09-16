@@ -1,3 +1,4 @@
+mod aqi;
 mod catalog;
 mod live;
 mod live_index;
@@ -6,12 +7,14 @@ mod protocol;
 mod sweep;
 mod tiles;
 
+use aqi::Service as AqiService;
 use catalog::Entry;
 use chrono::{DateTime, Utc};
 use protocol::{
-    Basemap, Command, Connection, ConnectionStatus, Frame, FrameStatus, Geometry, Handshake, Hello,
-    Message, NaturalEarth, Places, Rejection, SiteSelection, SiteTable, Source, State, Station,
-    TileReady, TimelineEntry, VERSION, is_texture_path,
+    AqiStationReply, AqiStations, Basemap, Command, Connection, ConnectionStatus, Frame,
+    FrameStatus, Geometry, Handshake, Hello, Message, NaturalEarth, Places, Rejection,
+    SiteSelection, SiteTable, Source, State, Station, StationAqi, TileReady, TimelineEntry,
+    VERSION, is_texture_path,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -536,6 +539,10 @@ struct Shared {
     pending: Option<Pending>,
     /// Wakes the player task when `playing` becomes true.
     wake: Arc<Notify>,
+    /// The air-quality fetch path (`aqi.rs`): caches and client, shared by
+    /// every connection. Holds no token; tokens travel per command. `None`
+    /// when the HTTP client could not be built; commands are then rejected.
+    aqi: Arc<std::sync::Mutex<Option<AqiService>>>,
     /// The last `state` line sent, so a tick that changed nothing is not
     /// re-sent.
     last_broadcast: String,
@@ -887,10 +894,15 @@ impl Shared {
                 false,
                 Some("Only reflectivity at elevation index 0 is available in this build.".into()),
             ),
-            // Tile requests and place search are answered to the sender, not state.
+            // Tile requests, place search, and air quality are answered to
+            // the sender, not state; the three aqi commands never reach
+            // here (receive handles them), but the match is exhaustive.
             Command::TilesNeeded { .. } | Command::SearchPlaces { .. } | Command::Unsupported => {
                 return None;
             }
+            Command::AqiQuery { .. }
+            | Command::AqiStations { .. }
+            | Command::AqiStationDetail { .. } => (false, None),
         };
         if changed {
             self.broadcast();
@@ -1222,7 +1234,7 @@ fn cleanup(dir: &Path, shared: &Mutex<Shared>, retirement: &mut Retirement) -> i
 /// queue, so no other client hears about a command it did not send; a tile
 /// request goes to that client's tile task on `tiles`.
 fn receive(
-    shared: &Mutex<Shared>,
+    shared: &Arc<Mutex<Shared>>,
     reply: &Sender<String>,
     tiles: &Sender<tiles::Request>,
     bytes: &[u8],
@@ -1280,6 +1292,63 @@ fn receive(
                 return;
             }
         }
+        Ok(Command::AqiQuery { lat, lon, token }) => {
+            if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+                "aqi_query needs lat in [-90, 90] and lon in [-180, 180].".into()
+            } else if token.len() > 256 {
+                "aqi_query token is too long.".into()
+            } else {
+                spawn_aqi_point(
+                    shared.clone(),
+                    reply.clone(),
+                    kind.to_owned(),
+                    lat,
+                    lon,
+                    token,
+                );
+                return;
+            }
+        }
+        Ok(Command::AqiStations {
+            lat0,
+            lon0,
+            lat1,
+            lon1,
+            max,
+            token,
+        }) => {
+            let in_range = |lat: f64, lon: f64| {
+                (-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon)
+            };
+            if !(in_range(lat0, lon0) && in_range(lat1, lon1)) {
+                "aqi_stations needs both corners inside lat [-90, 90] and lon [-180, 180].".into()
+            } else if token.len() > 256 {
+                "aqi_stations token is too long.".into()
+            } else {
+                spawn_aqi_stations(
+                    shared.clone(),
+                    reply.clone(),
+                    kind.to_owned(),
+                    Bounds {
+                        lat0,
+                        lon0,
+                        lat1,
+                        lon1,
+                        max: max.unwrap_or(200).clamp(1, 500),
+                    },
+                    token,
+                );
+                return;
+            }
+        }
+        Ok(Command::AqiStationDetail { uid, token }) => {
+            if token.len() > 256 {
+                "aqi_station_detail token is too long.".into()
+            } else {
+                spawn_aqi_detail(shared.clone(), reply.clone(), kind.to_owned(), uid, token);
+                return;
+            }
+        }
         Ok(command) => match shared.lock().unwrap().apply(command) {
             Some(message) => message,
             None => return,
@@ -1293,6 +1362,216 @@ fn receive(
     };
     // A full queue means this client has stalled; the next broadcast drops it.
     let _ = reply.try_send(line(&Message::Error(&rejection)));
+}
+/// Answer one client's `aqi_query` on its own task: the cached reading when
+/// it is fresh, else a fetch that never holds the service lock across the
+/// network, then the stale cache while the fetch keeps failing. Rejections
+/// name the reason; the shared state is untouched either way.
+fn spawn_aqi_point(
+    shared: Arc<Mutex<Shared>>,
+    reply: Sender<String>,
+    kind: String,
+    lat: f64,
+    lon: f64,
+    token: String,
+) {
+    let aqi = shared.lock().unwrap().aqi.clone();
+    tokio::spawn(async move {
+        let (client, cached) = {
+            let guard = aqi.lock().unwrap();
+            let cached = guard.as_ref().and_then(|s| s.point_cached(lat, lon));
+            (guard.as_ref().map(|s| s.client().clone()), cached)
+        };
+        let reading = match cached {
+            Some(aqi) => Ok(aqi),
+            None => match client {
+                None => Err("Air quality is unavailable in this daemon.".to_owned()),
+                Some(client) => aqi::fetch_point(&client, lat, lon, &token).await,
+            },
+        };
+        match reading {
+            Ok(reading) => {
+                if let Some(service) = aqi.lock().unwrap().as_mut() {
+                    service.point_store(lat, lon, reading.clone());
+                }
+                let _ = reply.send(line(&Message::Aqi(&reading))).await;
+            }
+            Err(reason) => {
+                let stale = aqi
+                    .lock()
+                    .unwrap()
+                    .as_ref()
+                    .and_then(|s| s.point_stale(lat, lon));
+                match stale {
+                    Some(reading) => {
+                        let _ = reply.send(line(&Message::Aqi(&reading))).await;
+                    }
+                    None => {
+                        reject(&reply, &kind, &reason).await;
+                    }
+                }
+            }
+        }
+    });
+}
+/// The visible bounds rectangle (degrees) and the decimation cap a
+/// `aqi_stations` request names.
+struct Bounds {
+    lat0: f64,
+    lon0: f64,
+    lat1: f64,
+    lon1: f64,
+    max: u32,
+}
+/// One client's `aqi_stations`: the fresh list answers at once; past it a
+/// fetch goes out only past the pacing and inside the day's politeness
+/// budget, one at a time; deferred or failed, the last list still shows;
+/// with no token there is no fetch at all.
+fn spawn_aqi_stations(
+    shared: Arc<Mutex<Shared>>,
+    reply: Sender<String>,
+    kind: String,
+    bounds: Bounds,
+    token: String,
+) {
+    let Bounds {
+        lat0,
+        lon0,
+        lat1,
+        lon1,
+        max,
+    } = bounds;
+    let aqi = shared.lock().unwrap().aqi.clone();
+    tokio::spawn(async move {
+        let client = {
+            let guard = aqi.lock().unwrap();
+            guard.as_ref().map(|s| s.client().clone())
+        };
+        let Some(client) = client else {
+            reject(&reply, &kind, "Air quality is unavailable in this daemon.").await;
+            return;
+        };
+        let max = (max as usize).min(600);
+        if token.trim().is_empty() {
+            reject(
+                &reply,
+                &kind,
+                "Station dots need a WAQI token; set [aqi] token in config.toml.",
+            )
+            .await;
+            return;
+        }
+        let (fresh, deferred) = {
+            let mut guard = aqi.lock().unwrap();
+            let Some(service) = guard.as_mut() else {
+                return;
+            };
+            let fresh = service.stations_cached(lat0, lon0, lat1, lon1);
+            if fresh.is_some() {
+                (fresh, None)
+            } else {
+                let may = service.bounds_may_fetch();
+                let deferred = (!may)
+                    .then(|| service.bounds_deferred(lat0, lon0, lat1, lon1))
+                    .flatten();
+                (None, deferred)
+            }
+        };
+        match fresh.or(deferred) {
+            Some(stations) => answer_stations(&reply, stations).await,
+            None => match aqi::fetch_stations(&client, lat0, lon0, lat1, lon1, &token).await {
+                Ok(stations) => {
+                    let stations = aqi::decimate(stations, max);
+                    if let Some(service) = aqi.lock().unwrap().as_mut() {
+                        service.bounds_stored(lat0, lon0, lat1, lon1, stations.clone());
+                    }
+                    answer_stations(&reply, stations).await;
+                }
+                Err(reason) => {
+                    // The fetch failed: back off, and the last list, if
+                    // any, still shows.
+                    if let Some(service) = aqi.lock().unwrap().as_mut() {
+                        service.bounds_failed();
+                    }
+                    let deferred = aqi
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .and_then(|s| s.bounds_deferred(lat0, lon0, lat1, lon1));
+                    match deferred {
+                        Some(stations) => answer_stations(&reply, stations).await,
+                        None => reject(&reply, &kind, &reason).await,
+                    }
+                }
+            },
+        }
+    });
+}
+async fn answer_stations(reply: &Sender<String>, stations: Vec<StationAqi>) {
+    let message = AqiStations {
+        v: VERSION,
+        stations,
+        source: "waqi",
+    };
+    let _ = reply.send(line(&Message::AqiStations(&message))).await;
+}
+/// One client's `aqi_station_detail`: cache first, then the feed, answered
+/// with the station, its pollutant map, and the full reading for the card.
+fn spawn_aqi_detail(
+    shared: Arc<Mutex<Shared>>,
+    reply: Sender<String>,
+    kind: String,
+    uid: u32,
+    token: String,
+) {
+    let aqi = shared.lock().unwrap().aqi.clone();
+    tokio::spawn(async move {
+        let (client, cached) = {
+            let guard = aqi.lock().unwrap();
+            let cached = guard.as_ref().and_then(|s| s.detail_cached(uid));
+            (guard.as_ref().map(|s| s.client().clone()), cached)
+        };
+        let detail = match cached {
+            Some(reading) => Ok((
+                StationAqi {
+                    uid,
+                    ..Default::default()
+                },
+                reading,
+                Vec::new(),
+            )),
+            None => match client {
+                None => Err("Air quality is unavailable in this daemon.".to_owned()),
+                Some(client) => aqi::fetch_detail(&client, uid, &token).await,
+            },
+        };
+        match detail {
+            Ok((station, reading, pollutants)) => {
+                let message = AqiStationReply {
+                    v: VERSION,
+                    station,
+                    pollutants,
+                    computed: reading,
+                };
+                if let Some(service) = aqi.lock().unwrap().as_mut() {
+                    service.detail_store(uid, message.computed.clone());
+                }
+                let _ = reply.send(line(&Message::AqiStation(&message))).await;
+            }
+            Err(reason) => {
+                reject(&reply, &kind, &reason).await;
+            }
+        }
+    });
+}
+/// A rejection to one client's own queue, without touching shared state.
+async fn reject(reply: &Sender<String>, command: &str, message: &str) {
+    let rejection = Rejection {
+        v: VERSION,
+        command,
+        message,
+    };
+    let _ = reply.send(line(&Message::Error(&rejection))).await;
 }
 /// Register a connection and start its two tasks: a writer draining the
 /// client's queue and a reader turning its lines into commands. Must run
@@ -1593,6 +1872,13 @@ fn serve(dir: PathBuf) -> io::Result<()> {
     let osm = Arc::new(osm::Osm::open()?);
     // The frame ring buffer; live frames are written here as they complete.
     let catalog = Arc::new(catalog::Catalog::open(osm::cache_root()?.join("frames"))?);
+    let aqi = match AqiService::new() {
+        Ok(service) => Arc::new(std::sync::Mutex::new(Some(service))),
+        Err(reason) => {
+            eprintln!("Air quality: {reason}");
+            Arc::new(std::sync::Mutex::new(None))
+        }
+    };
     let (events, event_rx) = mpsc::channel(16);
     let wake = Arc::new(Notify::new());
     let shared = Arc::new(Mutex::new(Shared {
@@ -1611,6 +1897,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
         timeline: Timeline::new(entries),
         pending: None,
         wake: wake.clone(),
+        aqi,
         last_broadcast: String::new(),
     }));
     let runtime = tokio::runtime::Builder::new_current_thread()

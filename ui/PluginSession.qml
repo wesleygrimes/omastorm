@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Io
 import "Location.js" as Location
 import "Keys.js" as KeyMap
+import "Aqi.js" as Aqi
 
 QtObject {
     id: session
@@ -45,6 +46,46 @@ QtObject {
     property var appliedExplicit: null
     signal viewChanged()
     signal locationPickerRequested()
+    // Air quality (issue #3): the chip and the station dots are session
+    // state so surfaces share one reading; the engine holds no scale, and
+    // the user's scale decides what the chip shows. Seeded from config's
+    // [aqi]; the `a` and `d` keys toggle the session without writing the
+    // file, and a config edit re-seeds both.
+    property bool aqiOn: false
+    property bool stationsOn: false
+    property bool aqiCardOpen: false
+    property var aqi: null
+    property var aqiStations: []
+    property var stationDetail: null
+    readonly property string aqiScale: Aqi.validScale(config.aqiScale) ? config.aqiScale : "us"
+    readonly property bool aqiReady: aqiOn && !!aqi
+    function requestAqi() {
+        if (!engine.state || !hasView || needsLocation || !aqiOn) return;
+        engine.send({type: "aqi_query", lat: centerLat, lon: centerLon, token: config.aqiToken});
+    }
+    function requestStations(lat0, lon0, lat1, lon1) {
+        if (!engine.state || !hasView || !stationsOn || !config.aqiToken) return;
+        engine.send({type: "aqi_stations", lat0: lat0, lon0: lon0, lat1: lat1, lon1: lon1, token: config.aqiToken});
+    }
+    function requestStationDetail(uid) {
+        if (!config.aqiToken) return;
+        stationDetail = null;
+        engine.send({type: "aqi_station_detail", uid: uid, token: config.aqiToken});
+    }
+    function toggleAqi() {
+        aqiOn = !aqiOn;
+        aqiCardOpen = false;
+        if (aqiOn) aqiTimer.restart();
+        else { aqi = null; aqiCardOpen = false; }
+    }
+    function toggleStations() {
+        stationsOn = !stationsOn;
+        aqiCardOpen = false;
+        if (!stationsOn) aqiStations = [];
+        // With dots on, the surfaces re-emit their bounds (RadarMap.reemitBounds)
+        // on the next settle; the list fills then.
+    }
+    property Timer aqiTimer: Timer { interval: 400; onTriggered: session.requestAqi() }
 
     function requestLocationPicker() {
         cancelIpLocation();
@@ -449,6 +490,10 @@ QtObject {
         adoptRememberedLock();
         applyRadar();
         persist();
+        // Air quality defaults (issue #3): config seeds the session once;
+        // the keys toggle the session without writing the file.
+        aqiOn = config.aqiShow;
+        stationsOn = config.aqiStations;
     }
 
     function applyTreatment() {
@@ -459,6 +504,13 @@ QtObject {
 
     property Timer persistTimer: Timer { interval: 400; onTriggered: session.persist() }
     onLocatingChanged: viewChanged()
+    onViewChanged: aqiTimer.restart()
+    property Connections aqiEvents: Connections {
+        target: session.engine
+        function onAqiReady(message) { session.aqi = message; }
+        function onStationsReady(message) { session.aqiStations = message.stations || []; }
+        function onStationReady(message) { session.stationDetail = message; }
+    }
     property Connections engineEvents: Connections {
         target: session.engine
         function onStateChanged() {
@@ -469,7 +521,16 @@ QtObject {
     property Connections configEvents: Connections {
         target: session.config
         function onReadyChanged() { session.resolve(); session.initialize(); }
-        function onValuesChanged() { if (session.initialized) { session.resolve(); session.applyRadar(); } }
+        function onValuesChanged() {
+            if (session.initialized) {
+                session.resolve();
+                session.applyRadar();
+                // An [aqi] edit re-seeds the session toggles (a deliberate
+                // preference outranks the session toggle).
+                session.aqiOn = session.config.aqiShow;
+                session.stationsOn = session.config.aqiStations;
+            }
+        }
         function onLocationChanged() { if (!session.hasView) session.resolve(); if (session.initialized) session.applyRadar(); }
         function onTreatmentChanged() { session.applyTreatment(); }
         function onWeakFloorChanged() { session.applyTreatment(); }
