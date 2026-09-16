@@ -18,6 +18,69 @@ pub enum Message<'a> {
     Error(&'a Rejection<'a>),
     TileReady(&'a TileReady<'a>),
     Places(&'a Places<'a>),
+    Aqi(&'a Aqi),
+    AqiStations(&'a AqiStations),
+    AqiStation(&'a AqiStationReply),
+}
+
+/// One air-quality reading at one place, answered to a client's
+/// `aqi_query` (`engine/src/aqi.rs`). A reply, not shared state. Raw
+/// pollutant concentrations (µg/m³) are the comparable datapoint; the
+/// indices are labeled regional wrappers — `us`/`european` pass through
+/// from Open-Meteo, `china` is WAQI's own index when the source is WAQI
+/// and computed here otherwise, and `india` is always computed here.
+#[derive(Serialize, Clone, PartialEq, Debug, Default)]
+pub struct Aqi {
+    pub v: u32,
+    pub lat: f64,
+    pub lon: f64,
+    /// `open-meteo` or `waqi`.
+    pub source: &'static str,
+    /// Unix seconds of the reading.
+    pub observed_at: u64,
+    pub pm2_5: Option<f64>,
+    pub pm10: Option<f64>,
+    pub o3: Option<f64>,
+    pub no2: Option<f64>,
+    pub so2: Option<f64>,
+    pub co: Option<f64>,
+    pub us_aqi: Option<u32>,
+    pub european_aqi: Option<u32>,
+    pub china_aqi: Option<u32>,
+    pub india_aqi: Option<u32>,
+}
+
+/// One WAQI station answering `aqi_stations` and `aqi_station_detail`.
+/// `aqi` is WAQI's index (the China scale) or `None` when the station
+/// has no current reading; it carries no scale other than its own.
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug, Default)]
+pub struct StationAqi {
+    pub uid: u32,
+    pub lat: f64,
+    pub lon: f64,
+    pub aqi: Option<u32>,
+    pub name: String,
+    pub observed_at: u64,
+}
+
+/// The decimated station list answering one client's `aqi_stations`. A
+/// reply, not shared state.
+#[derive(Serialize, Clone, Debug)]
+pub struct AqiStations {
+    pub v: u32,
+    pub stations: Vec<StationAqi>,
+    pub source: &'static str,
+}
+
+/// One station's full breakdown answering `aqi_station_detail`: the
+/// station, its pollutant map (µg/m³, CO in µg/m³), and the reading the
+/// user's chosen scale computes from it. A reply, not shared state.
+#[derive(Serialize, Clone, Debug)]
+pub struct AqiStationReply {
+    pub v: u32,
+    pub station: StationAqi,
+    pub pollutants: Vec<(String, f64)>,
+    pub computed: Aqi,
 }
 
 /// One tile answering a client's `tiles_needed`, sent to that client alone
@@ -367,6 +430,36 @@ pub enum Command {
         lat: Option<f64>,
         #[serde(default)]
         lon: Option<f64>,
+    },
+    /// Air quality at one place (`engine/src/aqi.rs`), answered with `aqi`
+    /// to the sender. The optional WAQI token travels per command and is
+    /// never stored by the engine; without one, Open-Meteo answers alone.
+    AqiQuery {
+        lat: f64,
+        lon: f64,
+        #[serde(default)]
+        token: String,
+    },
+    /// The WAQI stations inside a bounds rectangle (north, west, south,
+    /// east degrees), answered with `aqi_stations` to the sender. Needs a
+    /// token; without one the answer names no stations. `max` clamps the
+    /// decimation cap engine-side (200 by default).
+    AqiStations {
+        lat0: f64,
+        lon0: f64,
+        lat1: f64,
+        lon1: f64,
+        #[serde(default)]
+        max: Option<u32>,
+        #[serde(default)]
+        token: String,
+    },
+    /// One WAQI station's pollutant breakdown by station id, answered
+    /// with `aqi_station` to the sender. Needs a token.
+    AqiStationDetail {
+        uid: u32,
+        #[serde(default)]
+        token: String,
     },
     /// Anything newer than this build.
     #[serde(other)]
