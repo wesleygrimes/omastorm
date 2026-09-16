@@ -19,6 +19,12 @@ QtObject {
     signal tileReady(var tile)
     /// Places answering this client's `search_places`; a reply, not state.
     signal placesReady(var message)
+    /// Air quality answering this client's `aqi_query`; a reply, not state.
+    signal aqiReady(var message)
+    /// Station dots answering this client's `aqi_stations`; a reply.
+    signal stationsReady(var message)
+    /// One station's breakdown answering `aqi_station_detail`; a reply.
+    signal stationReady(var message)
     readonly property string runtime: Quickshell.env("XDG_RUNTIME_DIR") + "/omastorm/"
     readonly property string texture: state && state.frame ? "file://" + runtime + state.frame.texture : ""
     readonly property string azimuthLut: state && state.frame ? "file://" + runtime + state.frame.azimuthLut : ""
@@ -71,11 +77,19 @@ QtObject {
                 tileReady(message);
             } else if (message.type === "places") {
                 placesReady(message);
+            } else if (message.type === "aqi") {
+                aqiReady(message);
+            } else if (message.type === "aqi_stations") {
+                stationsReady(message);
+            } else if (message.type === "aqi_station") {
+                stationReady(message);
             }
         } catch (e) { state = null; error = "Invalid engine message: " + e; }
     }
     function send(command) {
-        if (command.type !== "tiles_needed" && command.type !== "search_places") rejection = "";
+        if (command.type !== "tiles_needed" && command.type !== "search_places"
+            && command.type !== "aqi_query" && command.type !== "aqi_stations"
+            && command.type !== "aqi_station_detail") rejection = "";
         socket.write(JSON.stringify(command) + "\n");
     }
     property var socket: socketFactory.createObject(engine)

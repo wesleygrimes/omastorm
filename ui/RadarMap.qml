@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Shapes
 import Quickshell
+import "Aqi.js" as Aqi
 
 // The radar map: camera, GPU radar shader, basemap tile layer, camera-translated
 // overlay, and pointer handling. Surfaces place it, feed it state,
@@ -33,6 +34,10 @@ Item {
     property real radarOpacity: 1    // the radar layer alone; the basemap keeps its strength
     property bool locked: false      // the accent frame on the active marker and tag (DESIGN.md, markers)
     property bool interactive: true  // false while location prompt/picker owns the surface
+    // Station dots (issue #3): WAQI stations with their own index, drawn
+    // in the AQI band palette; a click picks one for the card.
+    property var aqiStations: []
+    signal aqiStationPicked(var station)
     // A frame with a scan time is radar to draw. The loading placeholder
     // (docs/protocol.md, frame.status: no scan time, one blank row) draws no
     // radar; tiles, labels, markers, and coverage still show, so a station
@@ -47,6 +52,9 @@ Item {
     // report; the surface sends it as `view_center` and the engine decides the
     // hand-off. The camera is never moved from here in answer.
     signal viewSettled(real lat, real lon)
+    // The viewport's bounds in degrees once a pan or zoom settles, for the
+    // station-dot request (issue #3).
+    signal stationsBounds(real lat0, real lon0, real lat1, real lon1)
 
     // The frame is Web Mercator: the unit square is the world, x east, y
     // south. Defined once here in double and handed to the shaders as the
@@ -172,6 +180,19 @@ Item {
         if (!scan || (centerLat === reportedLat && centerLon === reportedLon && span === reportedSpan)) return;
         reportedLat = centerLat; reportedLon = centerLon; reportedSpan = span;
         viewSettled(centerLat, centerLon);
+        // The visible ground rectangle, clamped to the pyramid's edges, for
+        // the station-dot request; the engine rounds it to its fetch grid.
+        var latN = Math.max(-90, Math.min(90, latitude(viewCenterY - height / 2 * unitsPerPixel)));
+        var latS = Math.max(-90, Math.min(90, latitude(viewCenterY + height / 2 * unitsPerPixel)));
+        var lonW = Math.max(-180, Math.min(180, longitude(viewCenterX - width / 2 * unitsPerPixel)));
+        var lonE = Math.max(-180, Math.min(180, longitude(viewCenterX + width / 2 * unitsPerPixel)));
+        stationsBounds(latN, lonW, latS, lonE);
+    }
+    // Force the next settle to report even an unchanged camera, so a
+    // station toggle that turned the dots on fetches without a pan.
+    function reemitBounds() {
+        reportedLat = NaN;
+        reportCenter();
     }
     function tileRect(z) {
         var n = Math.pow(2, z);
@@ -573,6 +594,21 @@ Item {
                 border.width: 1; border.color: Qt.alpha(map.theme.foreground, .7)
             }
         }
+        // Air quality station dots (issue #3): one 9 px circle each, in the
+        // AQI band palette; a station with no current reading is grey.
+        Repeater {
+            model: map.aqiStations
+            Rectangle {
+                required property var modelData
+                x: (map.mercatorX(modelData.lon)-map.siteMx)*map.worldPixels-4.5
+                y: (map.mercatorY(modelData.lat)-map.siteMy)*map.worldPixels-4.5
+                width: 9; height: 9; radius: 4.5
+                color: modelData.aqi != null ? Aqi.band(modelData.aqi) : Qt.alpha(map.theme.foreground, .4)
+                border.width: 1
+                border.color: Qt.alpha(map.theme.background, .85)
+                antialiasing: true
+            }
+        }
         Repeater {
             model: map.siteLabels
             Rectangle {
@@ -640,7 +676,24 @@ Item {
         cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
         property real lastX
         property real lastY
-        onPressed: mouse => { lastX=mouse.x; lastY=mouse.y; }
+        property real pressX
+        property real pressY
+        onPressed: mouse => { lastX=mouse.x; lastY=mouse.y; pressX=mouse.x; pressY=mouse.y; }
+        // A click that did not pan picks a station dot, if one is under it.
+        onClicked: mouse => {
+            if (Math.hypot(mouse.x - pressX, mouse.y - pressY) > 4) return;
+            var station = map.stationAt(mouse.x, mouse.y);
+            if (station) map.aqiStationPicked(station);
+        }
+        function stationAt(x, y) {
+            var best = null, bestPx = 8;
+            for (var s of map.aqiStations) {
+                var px = map.sx(map.mercatorX(s.lon)), py = map.sy(map.mercatorY(s.lat));
+                var d = Math.hypot(px - x, py - y);
+                if (d <= bestPx) { bestPx = d; best = s; }
+            }
+            return best;
+        }
         onPositionChanged: mouse => {
             if(pressed && (mouse.x !== lastX || mouse.y !== lastY)) {
                 map.look(map.viewCenterX - (mouse.x-lastX)*map.unitsPerPixel, map.viewCenterY - (mouse.y-lastY)*map.unitsPerPixel);

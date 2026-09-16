@@ -11,4 +11,5 @@ RadarBar 1.0 RadarBar.qml
 RadarMap 1.0 RadarMap.qml
 RadarMark 1.0 RadarMark.qml
 RadarWindow 1.0 RadarWindow.qml
+AqiCard 1.0 AqiCard.qml
 Theme 1.0 Theme.qml

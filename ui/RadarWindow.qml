@@ -6,6 +6,7 @@ import Quickshell.Io
 import "Sites.js" as Sites
 import "Keys.js" as KeyMap
 import "Location.js" as Location
+import "Aqi.js" as Aqi
 
 Item {
     id: app
@@ -113,6 +114,15 @@ Item {
     function step(delta) { if (frames.length > 1) engine.send({type: "step", delta: delta}); }
     function jump(toNewest) { if (frames.length > 1) engine.send({type: "seek", id: frames[toNewest ? frames.length - 1 : 0].id}); }
     readonly property int bands: scan ? scan.palette.length : 0
+    // Air quality (issue #3): the chip shows the chosen scale's index in the
+    // band palette, yellow while the reading ages past two hours.
+    readonly property var aqiIndex: Aqi.indexFor(store.aqi, store.aqiScale)
+    readonly property color aqiBandColor: {
+        if (store.aqiReady && store.aqi.observed_at && Date.now() / 1000 - store.aqi.observed_at > 7200)
+            return app.theme.yellow;
+        return Aqi.band(aqiIndex) || app.theme.foreground;
+    }
+    readonly property string aqiChipText: Aqi.chipText(store.aqi, store.aqiScale)
     function legendLabel(index) {
         var bounds = scan.bounds;
         return index === 0 ? "<" + bounds[1] : index === bands - 1 ? bounds[index] + "+" : String(bounds[index]);
@@ -145,6 +155,14 @@ Item {
         return shown;
     }
     Engine { id: engine }
+    // Air quality replies (issue #3) go to the connection that asked, so
+    // the window's own engine answers here; the popover has its own.
+    Connections {
+        target: engine
+        function onAqiReady(message) { store.aqi = message; }
+        function onStationsReady(message) { store.aqiStations = message.stations || []; }
+        function onStationReady(message) { store.stationDetail = message; }
+    }
     // Deliberate preferences and remembered view (DESIGN.md, location).
     // PluginSession owns config.toml, state.json, and the camera; this
     // window applies the view to its map and sends map-local tile requests.
@@ -241,6 +259,8 @@ Item {
         case "newest": jump(true); break;
         case "pixels": case "glyphs": case "stipple": treatment = action.toUpperCase(); treatmentMenu.close(); break;
         case "weak": weakFloor = weakFloor === null ? configuredFloor : null; break;
+        case "aqi": store.toggleAqi(); break;
+        case "stations": store.toggleStations(); if (store.stationsOn) map.reemitBounds(); break;
         case "help": treatmentMenu.close(); if (sheet.open) sheet.close(); else sheet.show(); break;
         case "close": dismiss(); break;
         }
@@ -575,6 +595,38 @@ Item {
                         }
                     }
                     LabelText { text: app.sourceBadge; color: app.theme.accent; font.letterSpacing: 1.5 }
+                    // The air quality chip (issue #3): index + scale name in
+                    // the band palette; the click opens the reading card.
+                    Rectangle {
+                        visible: store.aqiReady
+                        implicitWidth: app.aqiChipText.length * 7 + 26
+                        implicitHeight: 20
+                        radius: 3
+                        color: aqiArea.containsMouse ? Qt.alpha(app.theme.accent, .18) : "transparent"
+                        border.width: 1
+                        border.color: Qt.alpha(app.theme.foreground, .22)
+                        Row {
+                            anchors.centerIn: parent
+                            spacing: 5
+                            Rectangle {
+                                width: 8; height: 8; radius: 4
+                                anchors.verticalCenter: parent.verticalCenter
+                                color: app.aqiBandColor
+                            }
+                            LabelText {
+                                text: app.aqiChipText
+                                font.pixelSize: 11
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+                        MouseArea {
+                            id: aqiArea
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: store.aqiCardOpen = !store.aqiCardOpen
+                        }
+                    }
                 }
             }
             Rectangle { Layout.fillWidth: true; height: 1; color: Qt.alpha(app.theme.foreground, .25) }
@@ -689,6 +741,7 @@ Item {
                     theme: app.theme
                     treatment: app.treatment
                     weakFloor: app.weakFloor
+                    aqiStations: store.stationsOn ? store.aqiStations : []
                     radarOpacity: app.condition === "unavailable" ? .6 : 1
                     labelSize: win.compact ? 10 : 12
                     locked: app.locked
@@ -707,7 +760,10 @@ Item {
                             return;
                         engine.send({type: "view_center", lat: lat, lon: lon});
                         app.store.rememberView(lat, lon, map.span);
+                        app.store.requestAqi();
                     }
+                    onStationsBounds: (lat0, lon0, lat1, lon1) => app.store.requestStations(lat0, lon0, lat1, lon1)
+                    onAqiStationPicked: station => app.store.requestStationDetail(station.uid)
                     onResetRequested: app.resetView()
                     Component.onCompleted: app.applyView()
                     // The map asks for tiles when its camera settles and the
@@ -743,6 +799,18 @@ Item {
                         text: "N ↑"; opacity: .75
                         anchors.verticalCenter: parent.verticalCenter
                     }
+                }
+                // The air quality reading (issue #3): the chip opens it over
+                // the map; a station dot click swaps in that station's
+                // breakdown. Below the locate chip row, top-left.
+                AqiCard {
+                    anchors.top: parent.top
+                    anchors.left: parent.left
+                    anchors.margins: 10
+                    anchors.topMargin: 38
+                    visible: store.aqiCardOpen && (store.stationDetail !== null || store.aqiReady)
+                    session: store
+                    theme: app.theme
                 }
                 // The `?` chip in the map's top-right corner (DESIGN.md, window
                 // chrome) opens the keys sheet, as does the key itself.

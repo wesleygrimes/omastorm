@@ -20,7 +20,7 @@ cat > "$check_dir/config.toml" <<'TOML'
 treatment = "neon"
 weak_floor = true
 [keys]
-pan_left = "a Left"
+pan_left = "b Left"
 zoom_in = "foo"
 nearest = "s"
 bogus = "x"
@@ -53,7 +53,7 @@ call status > /dev/null || fail "The window's keys IPC never answered"
 # with the first action.
 until_field site KFCX
 b=$(call bindings)
-[[ $b == *'"pan_left":["A","Left"]'* ]] || fail "pan_left was not rebound: $b"
+[[ $b == *'"pan_left":["B","Left"]'* ]] || fail "pan_left was not rebound: $b"
 [[ $b == *'"zoom_in":["+","="]'* ]] || fail "A bad zoom_in did not keep its default: $b"
 [[ $b == *'"reset":["0"]'* ]] || fail "A numeric reset did not keep its default: $b"
 [[ $b == *'"search":["/","S"]'* && $b == *'"nearest":["N"]'* ]] || fail "The conflict on s did not stay with search: $b"

@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import "Keys.js" as KeyMap
+import "Aqi.js" as Aqi
 
 FocusScope {
     id: card
@@ -21,6 +22,15 @@ FocusScope {
     }
     readonly property int currentSlot: scan ? slots.findIndex(s => s.id === scan.id) : -1
     readonly property string condition: state ? state.source === "archived" ? "archived" : state.connection.status : "offline"
+    // Air quality (issue #3): the chip's index under the session's scale,
+    // its band color, and the stale cue: yellow past two hours.
+    readonly property var aqiIndex: Aqi.indexFor(session.aqi, session.aqiScale)
+    readonly property color aqiBand: {
+        if (session.aqiReady && session.aqi.observed_at
+            && Date.now() / 1000 - session.aqi.observed_at > 7200) return theme.yellow;
+        return Aqi.band(aqiIndex) || theme.foreground;
+    }
+    readonly property string aqiChipText: Aqi.chipText(session.aqi, session.aqiScale)
     readonly property color statusColor: condition === "stale" ? theme.yellow
         : condition === "offline" || condition === "unavailable" ? theme.red : theme.accent
     readonly property string statusText: {
@@ -53,7 +63,7 @@ FocusScope {
     Component.onCompleted: applyKeys()
     Connections { target: card.session.config; function onKeysChanged() { card.applyKeys(); } }
     Instantiator {
-        model: ["previous_frame", "next_frame", "play", "close"]
+        model: ["previous_frame", "next_frame", "play", "close", "aqi"]
         delegate: Shortcut {
             required property string modelData
             sequences: card.bindings[modelData] || []
@@ -61,6 +71,7 @@ FocusScope {
             onActivated: {
                 if (modelData === "close") card.closeRequested();
                 else if (modelData === "play") card.play();
+                else if (modelData === "aqi") card.session.toggleAqi();
                 else card.step(modelData === "previous_frame" ? -1 : 1);
             }
         }
@@ -104,6 +115,35 @@ FocusScope {
             Label { Layout.fillWidth: true; text: connection.site ? connection.site.name : ""; opacity: .65 }
             Rectangle { width: 5; height: 5; radius: 3; color: card.statusColor }
             Label { text: card.statusText; color: card.statusColor; font.pixelSize: 11 }
+            // The air quality chip (issue #3): the chosen scale's index and
+            // its band color; a click opens the reading card on the map.
+            Rectangle {
+                visible: card.session.aqiReady
+                implicitWidth: aqiChip.implicitWidth + 10
+                implicitHeight: 20
+                radius: 3
+                color: aqiArea.containsMouse ? Qt.alpha(card.theme.accent, .18) : Qt.alpha(card.theme.background, .92)
+                border.width: 1
+                border.color: Qt.alpha(card.theme.foreground, .22)
+                Row {
+                    id: aqiChip
+                    anchors.centerIn: parent
+                    spacing: 5
+                    Rectangle {
+                        width: 8; height: 8; radius: 4
+                        anchors.verticalCenter: parent.verticalCenter
+                        color: card.aqiBand
+                    }
+                    Label { text: card.aqiChipText; anchors.verticalCenter: parent.verticalCenter }
+                }
+                MouseArea {
+                    id: aqiArea
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: card.session.aqiCardOpen = !card.session.aqiCardOpen
+                }
+            }
         }
         Rectangle {
             Layout.fillWidth: true
@@ -126,7 +166,11 @@ FocusScope {
                 labelSize: 10
                 radarOpacity: card.condition === "unavailable" ? .6 : 1
                 interactive: !card.session.needsLocation
+                aqiStations: card.session.stationsOn ? card.session.aqiStations : []
                 onNavigated: (lat, lon, spanKm) => card.session.userNavigated(lat, lon, spanKm)
+                onViewSettled: (lat, lon) => card.session.requestAqi()
+                onStationsBounds: (lat0, lon0, lat1, lon1) => card.session.requestStations(lat0, lon0, lat1, lon1)
+                onAqiStationPicked: station => card.session.requestStationDetail(station.uid)
                 onTilesNeeded: (z, x0, y0, x1, y1) => connection.send({type: "tiles_needed", z: z, x0: x0, y0: y0, x1: x1, y1: y1})
                 function applyView() {
                     if (!card.session.hasView) return;
@@ -178,6 +222,14 @@ FocusScope {
                 border.color: card.theme.accent
                 Label { id: updated; anchors.centerIn: parent; font.pixelSize: 10; color: card.theme.accent; text: card.session.updateNotice }
                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: card.session.restartShell() }
+            }
+            // The air quality reading (issue #3): the chip opens it over the
+            // map; a station dot click swaps in that station's breakdown.
+            AqiCard {
+                anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 8
+                visible: card.session.aqiCardOpen && (card.session.stationDetail !== null || card.session.aqiReady)
+                session: card.session
+                theme: card.theme
             }
             Label {
                 anchors.centerIn: parent; width: parent.width - 24; wrapMode: Text.Wrap

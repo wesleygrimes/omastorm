@@ -6,7 +6,7 @@ check_dir=$(mktemp -d /tmp/omastorm-check-map-sites.XXXXXX)
 trap 'rm -rf "$check_dir"' EXIT
 mkdir -p review
 rm -f review/site-overlay.png
-cp ui/RadarMap.qml ui/Engine.qml "$check_dir/"
+cp ui/RadarMap.qml ui/Engine.qml ui/Aqi.js "$check_dir/"
 # Expose the real delegate only in the harness, to check its scene transform.
 sed -i '/id: map$/a\    property alias coverageForTest: coverageRepeater' "$check_dir/RadarMap.qml"
 cp tests/map-sites.qml "$check_dir/shell.qml"
