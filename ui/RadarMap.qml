@@ -60,12 +60,36 @@ Item {
     function longitude(mx) { return mx * 360 - 180; }
     function latitude(my) { return Math.atan(Math.sinh(Math.PI * (1 - 2 * my))) * 180 / Math.PI; }
     readonly property var site: scan ? scan.site : null
+    // Ground-scale latitude is pinned to the camera on lookAt / pan-settle,
+    // not to the dish. A radar hand-off or the first sweep must not change
+    // kmPerUnit (that used to rescale span and look like a zoom). Until the
+    // camera pins one, fall back to hello station / frame / centre.
+    property real pinnedScaleLat: 0
+    property bool hasPinnedScale: false
+    function pinScaleLat(lat) {
+        if (!isFinite(lat)) return;
+        pinnedScaleLat = Number(lat);
+        hasPinnedScale = true;
+    }
+    readonly property var scaleStation: {
+        if (!siteId || !sites || !sites.length) return null;
+        for (var i = 0; i < sites.length; i++)
+            if (sites[i].id === siteId) return sites[i];
+        return null;
+    }
+    readonly property real scaleLat: {
+        if (hasPinnedScale) return pinnedScaleLat;
+        if (scaleStation) return scaleStation.lat;
+        if (site) return site.lat;
+        if (center) return center.y;
+        return 0;
+    }
     readonly property real siteLat: site ? site.lat : 0
     readonly property real siteMx: site ? mercatorX(site.lon) : 0.5
     readonly property real siteMy: site ? mercatorY(site.lat) : 0.5
-    // Ground kilometres per Mercator unit at the site's latitude, on the
-    // shader's 6371 km sphere; span and the range rings are measured there.
-    readonly property real kmPerUnit: 2 * Math.PI * 6371 * Math.cos(siteLat * Math.PI / 180)
+    // Ground kilometres per Mercator unit at scaleLat, on the shader's
+    // 6371 km sphere; span and the range rings are measured there.
+    readonly property real kmPerUnit: 2 * Math.PI * 6371 * Math.cos(scaleLat * Math.PI / 180)
 
     // Camera. `center` is a longitude/latitude point, or null for the home
     // view: the site offset by `home` kilometres east and north. `span` is
@@ -84,7 +108,11 @@ Item {
     readonly property real wantedY: center ? mercatorY(center.y) : siteMy - home.y / kmPerUnit
     readonly property real viewCenterX: Math.max(width/2*unitsPerPixel, Math.min(1-width/2*unitsPerPixel, wantedX))
     readonly property real viewCenterY: Math.max(height/2*unitsPerPixel, Math.min(1-height/2*unitsPerPixel, wantedY))
-    function reset() { center = null; span = Math.min(210, maxSpan); }
+    function reset() {
+        center = null;
+        hasPinnedScale = false;
+        span = Math.min(210, maxSpan);
+    }
     signal navigated(real lat, real lon, real spanKm)
     function zoom(value, notify) {
         if (!interactive) return;
@@ -98,6 +126,7 @@ Item {
         // A fresh object: assigning Qt.point onto `var` can no-op when Qt
         // treats the previous point as equal, so the camera never moves.
         center = { x: Number(lon), y: Number(lat) };
+        pinScaleLat(lat);
     }
     signal resetRequested()
     // The keyboard pan (DESIGN.md, keyboard map): one step is an eighth of
@@ -115,16 +144,19 @@ Item {
     function jumpTo(lat, lon) {
         var k = 2 * Math.PI * 6371 * Math.cos(lat * Math.PI / 180);
         center = Qt.point(longitude(mercatorX(lon) + home.x / k), latitude(mercatorY(lat) - home.y / k));
+        pinScaleLat(lat);
     }
-    // A hand-off changes the site under a camera the user placed. The span
-    // is measured at the site's latitude, so it is rescaled to keep the
-    // ground scale on screen exactly where it was.
+    // Span is measured at the pinned camera latitude. When that pin moves
+    // (lookAt / pan settle), rescale so Mercator scale on screen stays put.
+    // Dish hand-offs and the first sweep do not change the pin, so they no
+    // longer nudge the zoom.
     property real heldKmPerUnit: 0
-    // Restoring a remembered view sets span itself; a site change under that
+    // Restoring a remembered view sets span itself; a pin change under that
     // restore must not rescale it.
     property bool holdSpan: false
     onKmPerUnitChanged: {
-        if (center && heldKmPerUnit > 0 && !holdSpan) span *= kmPerUnit / heldKmPerUnit;
+        if (hasPinnedScale && center && heldKmPerUnit > 0 && !holdSpan)
+            span *= kmPerUnit / heldKmPerUnit;
         heldKmPerUnit = kmPerUnit;
     }
     function distanceKm(lat1, lon1, lat2, lon2) {
@@ -171,6 +203,9 @@ Item {
     function reportCenter() {
         if (!scan || (centerLat === reportedLat && centerLon === reportedLon && span === reportedSpan)) return;
         reportedLat = centerLat; reportedLon = centerLon; reportedSpan = span;
+        // Pin scale at the settled camera so a long pan does not live-zoom,
+        // and a later dish hand-off still leaves kmPerUnit alone.
+        if (center) pinScaleLat(centerLat);
         viewSettled(centerLat, centerLon);
     }
     function tileRect(z) {
