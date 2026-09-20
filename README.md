@@ -259,7 +259,9 @@ restores your last view, then falls back to the weather location or location
 picker. Radar selection is independent: a configured lock wins, otherwise a
 remembered lock is restored, otherwise the nearest radar follows the map.
 With a GPS receiver on a running `gpsd`, `gpsd = true` makes the map follow
-the receiver instead, handing the radar off as you drive.
+the receiver once a view exists, handing the radar off as you drive. The
+crosshair on the map is the follow chip: click to pause and resume; `NO FIX`
+shows when the receiver is silent.
 
 ```toml
 # Optional: always open here. Omit both to remember the last map position.

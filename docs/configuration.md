@@ -123,15 +123,22 @@ zoom_in = "+ ="
   config applies again on launch. Remove this setting and unlock in the UI
   to keep automatic selection across launches.
 - `gpsd`: `true` relays the local gpsd through `gpspipe -w` (part of the
-  gpsd package). While a receiver has a 2D-or-better fix, each fix that has
-  moved more than 100 m becomes the map centre — the source reads `gps`,
-  the chip `FOLLOWING · GPS` — and the engine's ordinary hand-off picks
-  the nearest radar, with its own hysteresis, exactly as a pan would. A
-  lock holds the radar while the map keeps following. The remembered view
-  is written like any other centre, so the last fix is where a relaunch
-  opens. A lost fix leaves the view where the receiver last was; gpsd not
-  answering is retried every five seconds while the key is on. Off when
-  omitted.
+  gpsd package). While a receiver has a 2D-or-better fix, each fix that
+  has moved more than 100 m becomes the map centre — the source reads
+  `gps` — and the engine's ordinary hand-off picks the nearest radar,
+  with its own hysteresis, exactly as a pan would. Follow starts only
+  once a view exists: it never places the launch view, and an explicit
+  `center_lat` / `center_lon` still wins. The crosshair on the
+  map is the follow chip: filled while a fix is steering the camera,
+  outlined after a pan has paused it, outlined dimmed with `NO FIX`
+  while the receiver has nothing to report. Click the chip to pause and
+  resume; turning `gpsd` off hides the chip and stops following. A lock
+  holds the radar while the map keeps following; a user pan pauses the
+  follow so the chip click resumes from where the camera was. The
+  remembered view is written like any other centre, so the last fix is
+  where a relaunch opens. A lost fix leaves the view where the receiver
+  last was; gpsd not answering is retried every five seconds while the
+  key is on. Off when omitted.
 
 A Jacksonville map center with `locked_radar = "KFCX"` is valid. Honor both
 settings even when the sweep is outside the view. Show the selected station
