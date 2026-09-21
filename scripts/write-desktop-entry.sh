@@ -28,7 +28,7 @@ cat > "$tmp" <<EOF
 Type=Application
 Name=Omastorm
 GenericName=Weather radar
-Comment=Live weather radar for the Omarchy desktop
+Comment=Omarchy-native live radar
 Exec=omarchy shell shell toggle com.omastorm.radar "{}"
 TryExec=omarchy
 Icon=$mark

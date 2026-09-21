@@ -6,7 +6,7 @@
   "author": "Wes Grimes",
   "license": "MIT",
   "homepage": "https://omastorm.com",
-  "description": "Live weather radar for the Omarchy desktop",
+  "description": "Omarchy-native live radar"
   "kinds": [
     "bar-widget",
     "panel"
