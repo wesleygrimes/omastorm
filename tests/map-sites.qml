@@ -13,7 +13,7 @@ ShellRoot {
             texture: engine.texture
             azimuthLut: engine.azimuthLut
             sites: engine.sites
-            siteId: engine.state ? engine.state.site.id : ""
+            siteId: engine.selectedSiteId
         }
     }
     function check(ok, message) { if (!ok) throw new Error(message); }
@@ -44,7 +44,7 @@ ShellRoot {
                     check(active.length === 1 && active[0].lat === map.scan.site.lat, "Active coverage did not use measured location");
                     // Independent inverse-distance check at ordinary, Alaskan,
                     // and date-line coordinates; every destination is 460 km.
-                    for (var site of [{lat:35,lon:-97}, {lat:65,lon:-165}, {lat:60,lon:179.8}]) {
+                    for (var site of [{lat:35,lon:-97,radiusKm:460}, {lat:65,lon:-165,radiusKm:460}, {lat:60,lon:179.8,radiusKm:460}]) {
                         var points = map.coveragePoints(site);
                         check(points.length === 361, "Incomplete circle");
                         check(points[0].x === points[360].x && points[0].y === points[360].y, "Circle not closed");
@@ -64,8 +64,8 @@ ShellRoot {
                         && Math.abs(clipped[0][1].x-(cx+rx)*100000)<1e-7, "Clipping moved the crossing");
                     for (var line of clipped) for (var p of line)
                         check(Math.abs(p.x-cx*100000)<=rx*100000+1e-7 && Math.abs(p.y-cy*100000)<=ry*100000+1e-7, "Unbounded coverage geometry");
-                    check(!map.coverageInReach({lat:35,lon:-160})
-                        && map.coverageInReach({lat:35,lon:-92}), "Coverage culling lost a nearby arc");
+                    check(!map.coverageInReach({lat:35,lon:-160,radiusKm:460})
+                        && map.coverageInReach({lat:35,lon:-92,radiusKm:460}), "Coverage culling lost a nearby arc");
                     heldLabels = map.siteLabels;
                     map.look(map.siteMx+.0001, map.siteMy);
                 } else if (stage === 1) {
@@ -75,11 +75,15 @@ ShellRoot {
                 } else if (stage === 2) {
                     checkCoverageOrigin();
                     check(map.siteLabels !== heldLabels && map.siteLabels.some(s => s.name === "KOUN"), "Zoom failed to lay out station IDs");
-                    // Reconnecting with no frame must clear both label sets.
+                    // No frame is the idle / lean-start map: coverage and the
+                    // selection tag leave, but the network and place labels stay.
                     map.scan = null;
+                    map.siteId = "";
                 } else if (stage === 3) {
-                    check(map.siteLabels.length === 0 && map.coverageSites.length === 0, "Disconnected overlay retained");
+                    check(map.coverageSites.length === 0, "Idle overlay kept coverage");
+                    check(map.siteLabels.some(s => s.name === "KTLX"), "Idle map hid the network");
                     map.scan = engine.state.frame;
+                    map.siteId = engine.selectedSiteId;
                     map.reset();
                 } else if (stage === 4) {
                     map.grabToImage(result => {

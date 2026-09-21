@@ -26,6 +26,12 @@ for _ in {1..50}; do [[ $(call matches) != '[]' ]] && break; sleep .1; done
 m=$(call matches)
 [[ $m == '["KTLX","K'* && $m == *KOUN* && $m == *KCRI* ]] || fail "Empty query did not list the nearest stations first: $m"
 expect 'Empty query counts the whole table' '{"open":true,"query":"","selected":0,"total":163,"focused":true}' "$(call status)"
+call open opera
+m=$(call matches)
+[[ $m == *opera* ]] || fail "opera did not list the EUMETNET mosaic: $m"
+call open eumetnet
+m=$(call matches)
+[[ $m == *opera* ]] || fail "eumetnet did not list the EUMETNET mosaic: $m"
 call open tlx
 expect 'ID without its leading letter ranks first' '"KTLX"' "$(call matches | cut -d, -f1 | tr -d '[]')"
 call open tulsa
@@ -61,11 +67,13 @@ expect 'Enter closes the picker' 'false' "$(call status | grep -o '"open":[a-z]*
 expect 'Enter hands the keyboard back' 'false' "$(call status | grep -o '"focused":[a-z]*' | cut -d: -f2)"
 sock="$XDG_RUNTIME_DIR/omastorm/engine.sock"
 for _ in {1..50}; do
-  site=$(timeout 2 socat -t0.2 - "UNIX-CONNECT:$sock" < /dev/null | sed -n 2p | grep -o '"site":{[^}]*}' || true)
-  [[ $site == *"\"id\":\"$first\""* && $site == *'"locked":true'* ]] && break
+  line=$(timeout 2 socat -t0.2 - "UNIX-CONNECT:$sock" < /dev/null | sed -n 2p || true)
+  id=$(jq -r '.selection.target.siteId // empty' <<< "$line" 2>/dev/null || true)
+  locked=$(jq -r '.navigation.locked // false' <<< "$line" 2>/dev/null || true)
+  [[ $id == "$first" && $locked == true ]] && break
   sleep .1
 done
-[[ $site == *"\"id\":\"$first\""* && $site == *'"locked":true'* ]] || fail "Enter did not select and lock $first: $site"
+[[ $id == "$first" && $locked == true ]] || fail "Enter did not select and lock $first: $line"
 want_lat=$(jq -r --arg id "$first" '.sites[] | select(.id==$id) | ((.lat * 1000) | round) / 1000' engine/data/sites.json)
 want_lon=$(jq -r --arg id "$first" '.sites[] | select(.id==$id) | ((.lon * 1000) | round) / 1000' engine/data/sites.json)
 for _ in {1..50}; do

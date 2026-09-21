@@ -72,7 +72,7 @@ ShellRoot {
         s.remembered.parsed = Location.parseState(saved);
         s.config.location = weather;
         fake.sent = [];
-        fake.state = {source: source || "live", site: {id: "", locked: false, follow: true}};
+        fake.state = {mode: source || "live", navigation: {follow: true, locked: false}, selection: null, connection: {status: "idle", ageSeconds: 0}};
         s.initialize();
     }
     function waitSettled(next) {
@@ -119,6 +119,18 @@ ShellRoot {
                 var sitesFirst = Location.mergeSearch(
                     [{kind: "site", name: "KFCX"}], [{kind: "place", name: "X"}], null, "kfcx", false, 4);
                 assertThat(sitesFirst[0].name === "KFCX", "sites first for a site id");
+                var opera = {id:"opera", kind:"mosaic", name:"EUMETNET OPERA",
+                    coverage:{kind:"box", north:70, south:32, west:-30, east:50}};
+                var covering = Location.rankMosaics([opera, {id:"fixture-mosaic", kind:"mosaic", name:"Fixture",
+                    coverage:{kind:"box", north:1, south:0, west:0, east:1}}], "", 48.8, 2.3, true, "opera", 4, true);
+                assertThat(covering.length === 1 && covering[0].id === "opera" && covering[0].covering, "covering mosaic in browse");
+                var oklahoma = Location.rankMosaics([opera], "", 35, -97, true, "", 4, false);
+                assertThat(oklahoma.length === 0, "far mosaic stays out of empty browse");
+                var typed = Location.rankMosaics([opera], "eumetnet", 35, -97, false, "", 4, false);
+                assertThat(typed.length === 1 && typed[0].id === "opera", "name search finds opera");
+                var withOpera = Location.mergeSearch(
+                    [{kind:"site", name:"KTLX"}], [], null, "opera", false, 4, typed);
+                assertThat(withOpera[0].id === "opera", "mosaic first when the query is its id");
 
                 fresh({}, "", null);
                 assertThat(!s.locating && s.needsLocation && !s.locationPending, "startup requires consent");
@@ -169,6 +181,15 @@ ShellRoot {
         s.finishIpLocation(0, '{"nearest_area":[{"areaName":[{"value":"Late"}],"latitude":"41.05","longitude":"-73.54"}]}');
         assertThat(s.centerLat === 35 && s.lockId === "KTLX", "late reply after radar choice");
 
+        fresh({}, '{"lat":35,"lon":-97,"span":210}', null);
+        var kept = Location.scaleSpan(35, 51, 210);
+        s.chooseRadar("KTLX", 51, 10, "Hop");
+        assertThat(Math.abs(s.span - kept) < 1e-9, "radar pick keeps mercator scale");
+        fake.sent = [];
+        s.chooseMosaic("opera", 51, 10, "EUMETNET OPERA");
+        assertThat(s.lock && s.lock.target.kind === "mosaic" && s.lock.sourceId === "opera", "mosaic lock");
+        assertThat(fake.sent.some(c => c.type === "select_source" && c.id === "opera"), "mosaic select_source");
+
         fresh({}, "", null);
         s.requestIpLocation();
         s.userNavigated(36,-98,170);
@@ -209,7 +230,7 @@ ShellRoot {
         s.activeAttempt = s.locateAttempt;
         s.ipLocationDismissed = false;
         s.locationPending = true;
-        fake.state = {source: "archived", site: {id: "", locked: false, follow: true}};
+        fake.state = {mode: "archived", navigation: {follow: true, locked: false}, selection: null, connection: {status: "ok", ageSeconds: 0}};
         s.finishIpLocation(0, '{"nearest_area":[{"areaName":[{"value":"Late"}],"latitude":"41.05","longitude":"-73.54"}]}', s.locateAttempt);
         assertThat(s.needsLocation && !s.hasView && !s.locationPending, "archive mid-lookup clears pending");
 
@@ -230,11 +251,23 @@ ShellRoot {
         var s = PluginSession;
         assertThat(s.centerLat === 41.05 && s.centerLon === -73.54, "locate recenters");
         assertThat(s.locationSource === "ip" && !s.lockWanted, "locate unlocks nearest");
-        assertThat(s.span === 210, "locate keeps zoom");
+        var kept = 210 * Math.cos(41.05 * Math.PI / 180) / Math.cos(36.23708 * Math.PI / 180);
+        assertThat(Math.abs(s.span - kept) < 0.05, "locate keeps visual zoom");
         s.requestApproximateLocation("locate");
         s.setPlace(30, -81, "Picked");
         s.finishIpLocation(0, '{"nearest_area":[{"areaName":[{"value":"Late"}],"latitude":"41.05","longitude":"-73.54"}]}', s.locateAttempt);
         assertThat(s.centerLat === 30 && s.placeName === "Picked", "late locate after picker");
+
+        fresh({}, '{"lat":51.5,"lon":-0.12,"span":210,"name":"London"}', {lat:36,lon:-79});
+        assertThat(s.centerLat === 51.5 && s.hasView, "stale session at London");
+        s.remembered.parsed = Location.parseState('{"lat":45.455833,"lon":-98.413333,"span":26.5,"name":"ABERDEEN"}');
+        s.initialized = false;
+        fake.state = null;
+        fake.state = {mode: "live", navigation: {follow: true, locked: false}, selection: null, connection: {status: "ok", ageSeconds: 0}};
+        s.initialize();
+        assertThat(Math.abs(s.centerLat - 45.455833) < 1e-6 && Math.abs(s.centerLon + 98.413333) < 1e-6, "reconnect adopts state.json");
+        assertThat(s.placeName === "ABERDEEN", "reconnect adopts remembered name");
+
         console.log("IP_LOCATION_PASSED");
         Qt.quit();
     }

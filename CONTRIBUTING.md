@@ -106,8 +106,8 @@ checks still run locally. A pull request is ready when `mise check` passes.
 For shader, sampling, or camera changes, also run `mise check --gpu` and
 `bash scripts/capture-review.sh`, inspect the images in `review/`, and include
 captures with the review. The rendering test replays the shader's sampling
-rule in Rust; update both when changing that rule. Rebuild changed radar or
-tile shaders with `bash scripts/build-shader.sh` and commit their `.qsb` files.
+rule in Rust; update both when changing that rule. Rebuild changed radar,
+tile, or grid shaders with `bash scripts/build-shader.sh` and commit their `.qsb` files.
 The GPU checks need a desktop OpenGL context; software Qt Quick is unsupported.
 If the environment cannot run a required check, report that explicitly.
 

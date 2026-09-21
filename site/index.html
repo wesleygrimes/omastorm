@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Omastorm: live NEXRAD radar for Omarchy</title>
-<meta name="description" content="Live NEXRAD weather radar in your Omarchy bar. Search cities, radar sites, or coordinates, play a two-hour loop, and follow the weather in your theme. Beta.">
+<title>Omastorm: live weather radar for Omarchy</title>
+<meta name="description" content="Live weather radar in your Omarchy bar. Search cities, radar sites, or coordinates, view U.S. and European radar, and play recent scans. Beta.">
 <meta name="color-scheme" content="dark light">
-<meta property="og:title" content="Omastorm: live NEXRAD radar for Omarchy">
-<meta property="og:description" content="Live NEXRAD weather radar in your Omarchy bar. A two-hour loop, three treatments, and your theme. Beta.">
+<meta property="og:title" content="Omastorm: live weather radar for Omarchy">
+<meta property="og:description" content="Live weather radar in your Omarchy bar. U.S. NOAA NEXRAD and European EUMETNET OPERA coverage, recent scans, and your theme. Beta.">
 <meta property="og:image" content="https://omastorm.com/media/hero.png">
 <meta property="og:url" content="https://omastorm.com/">
 <meta property="og:type" content="website">
@@ -25,7 +25,7 @@
   "@type": "SoftwareApplication",
   "name": "Omastorm",
   "url": "https://omastorm.com/",
-  "description": "Live NEXRAD weather radar in the Omarchy bar, with a two-hour loop, location search, and three radar treatments.",
+  "description": "Live weather radar in the Omarchy bar, with location search, playback of recent scans, and three radar treatments.",
   "applicationCategory": "WeatherApplication",
   "operatingSystem": "Linux (Omarchy 4)",
   "softwareRequirements": "Omarchy 4 on x86_64 or aarch64",
@@ -258,8 +258,8 @@
   </div>
   <div class="rule"></div>
   <header>
-    <h1>Live NEXRAD radar in your Omarchy bar.</h1>
-    <p class="intro">A radar that lives next to the clock. Open the popover for the nearest station and the actual scan time. Expand to the full window for the sweep at native resolution, a two-hour loop, and every dish in the network—drawn in your Omarchy theme.</p>
+    <h1>Live weather radar in your Omarchy bar.</h1>
+    <p class="intro">A radar that lives next to the clock. Open the popover for your selected radar and its actual scan time. Expand to the full window for NOAA NEXRAD sweeps in the U.S. or the EUMETNET OPERA European mosaic, drawn in your Omarchy theme.</p>
     <nav class="links" aria-label="Get started">
       <a href="#install">Install Omastorm</a>
       <a href="https://github.com/wesleygrimes/omastorm">View on GitHub</a>
@@ -277,13 +277,14 @@
     </figure>
   </div>
   <ul class="points">
-    <li><b>Live sweeps.</b> Radar paints as the antenna turns. Actual scan times and stale-data status stay visible.</li>
-    <li><b>Two-hour loop.</b> Up to 60 cached frames. Play, step, and scrub recent scans.</li>
+    <li><b>Live radar.</b> NEXRAD paints as the antenna turns; OPERA supplies complete mosaic frames. Actual scan times and stale-data status stay visible.</li>
+    <li><b>Recent scans.</b> Play, step, and scrub the history each source provides.</li>
     <li><b>Find your place.</b> Search a city, a radar site, or pasted coordinates.</li>
-    <li><b>Your theme.</b> Chrome follows Omarchy. Radar color comes from the measured sweep.</li>
+    <li><b>Your theme.</b> Chrome follows Omarchy. Radar color comes from the measured reflectivity.</li>
     <li><b>Keyboard controls.</b> Pan, zoom, search, and play. Every key is rebindable.</li>
-    <li><b>NEXRAD coverage.</b> NOAA’s radar network. International radar networks are not supported yet.</li>
+    <li><b>U.S. and Europe.</b> NOAA NEXRAD in the U.S. and EUMETNET OPERA in Europe.</li>
   </ul>
+  <p class="fine">Coverage varies with radar range and available data. A city appearing in search does not guarantee radar coverage.</p>
   <section class="install" id="install">
     <div class="row">
       <h2>Install</h2>
@@ -310,8 +311,8 @@ o.bind("SUPER + SHIFT + R", "Omastorm", "omarchy shell shell toggle com.omastorm
   <section class="guide" aria-labelledby="find-place">
     <h2 id="find-place">Your place. Your radar.</h2>
     <div class="cards">
-      <div><h3>One search field</h3><p>Press <kbd>/</kbd> or <kbd>s</kbd>. A city or coordinates centers the map and follows the nearest radar. A site ID such as <kbd>KTLX</kbd> locks that dish and centers on it.</p></div>
-      <div><h3>Follow or lock</h3><p>Pan to follow nearby stations, or use the padlock to pin one radar. Click the station name for nearby dishes. <kbd>n</kbd> selects the nearest radar without moving the camera.</p></div>
+      <div><h3>One search field</h3><p>Press <kbd>/</kbd> or <kbd>s</kbd>. A city or coordinates centers the map and selects radar covering that location. Add a region or country qualifier such as <kbd>London, UK</kbd>. A site ID such as <kbd>KTLX</kbd> locks that dish and centers on it. Search <kbd>opera</kbd> to select and lock the European mosaic.</p></div>
+      <div><h3>Follow or lock</h3><p>Pan to follow radar covering the map, or use the padlock to pin one radar. Click the source name for covering mosaics and nearby dishes. <kbd>n</kbd> resumes automatic selection for the current map centre.</p></div>
     </div>
     <figure class="gallery"><img src="media/search-city.png" width="640" height="480" alt="Search results for a city in the radar window." loading="lazy"><figcaption>Search cities, site IDs, or latitude and longitude in decimal degrees.</figcaption></figure>
     <p class="fine">Approximate location is optional. On click, wttr.in estimates your city from the request’s public IP. There is no GPS or background tracking. A VPN can put the estimate in the wrong place; choose manually instead. Press <kbd>m</kbd> to locate again.</p>
@@ -319,7 +320,7 @@ o.bind("SUPER + SHIFT + R", "Omastorm", "omarchy shell shell toggle com.omastorm
 
   <section class="guide" aria-labelledby="watch-loop">
     <h2 id="watch-loop">Watch the weather move.</h2>
-    <p>Recent scans arrive within a few seconds of selecting a station. The cache grows toward 60 frames / two hours. <kbd>Space</kbd> plays or pauses, <kbd>[</kbd> and <kbd>]</kbd> step a frame, and <kbd>Home</kbd> / <kbd>End</kbd> jump to the oldest or newest.</p>
+    <p>Selecting a radar loads its recent scans for playback. NEXRAD keeps up to 60 frames over two hours; OPERA keeps up to 12 mosaic frames. <kbd>Space</kbd> plays or pauses, <kbd>[</kbd> and <kbd>]</kbd> step a frame, and <kbd>Home</kbd> / <kbd>End</kbd> jump to the oldest or newest.</p>
   <figure class="gallery">
     <img src="media/hero.png" alt="Omastorm’s full radar window beside its compact bar popover." width="1099" height="516">
     <figcaption>Next to the clock, or room to explore. The popover expands with your view and playback intact.</figcaption>
@@ -335,8 +336,8 @@ o.bind("SUPER + SHIFT + R", "Omastorm", "omarchy shell shell toggle com.omastorm
 
   <section class="guide" aria-labelledby="reading-radar">
     <h2 id="reading-radar">What the colors mean</h2>
-    <p>Omastorm shows reflectivity on the lowest tilt of NOAA’s NEXRAD Level II scans. Color is <b>dBZ</b>: stronger returns get warmer colors. It is not a rain rate, a forecast, or the NWS warning stack. Returns can include rain and snow, birds and insects, ground clutter, and other objects.</p>
-    <p class="fine">Measured returns below 5 dBZ are hidden by default, as the legend indicates. Press <kbd>w</kbd> to show them. <a href="https://github.com/wesleygrimes/omastorm#what-you-are-looking-at">Learn to read the sweep</a></p>
+    <p>For NOAA NEXRAD, Omastorm shows reflectivity on the lowest tilt of Level II scans. EUMETNET OPERA combines the strongest returns from multiple radars and elevations into one image. Color is <b>dBZ</b>: stronger returns get warmer colors. Reflectivity is not a rain rate, a forecast, or a weather warning.</p>
+    <p class="fine">Measured returns below 5 dBZ are hidden by default, as the legend indicates. Press <kbd>w</kbd> to show them. <a href="https://github.com/wesleygrimes/omastorm#what-you-are-looking-at">Learn to read the radar</a></p>
   </section>
 
   <section class="guide" aria-labelledby="keep-current">
@@ -359,7 +360,7 @@ omarchy restart shell</code></pre><button type="button" data-copy="update-cmd" a
 <footer>
   <div class="foot">
     <span><a href="https://github.com/wesleygrimes/omastorm">GitHub</a> · <a href="https://github.com/wesleygrimes/omastorm#readme">README</a> · <a href="https://github.com/wesleygrimes/omastorm/releases">Releases</a> · <a href="https://github.com/sponsors/wesleygrimes">Sponsor</a> · MIT</span>
-    <span>Radar: NOAA NEXRAD · Map: © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, <a href="https://openfreemap.org">OpenFreeMap</a>, Natural Earth · Search: <a href="https://www.geonames.org/">GeoNames</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>) · © 2026 Wesley Grimes</span>
+    <span>Radar: NOAA NEXRAD · <a href="https://www.eumetnet.eu/observations/weather-radar-network/">EUMETNET OPERA</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>) · Map: © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, <a href="https://openfreemap.org">OpenFreeMap</a>, Natural Earth · Search: <a href="https://www.geonames.org/">GeoNames</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>) · © 2026 Wesley Grimes</span>
   </div>
 </footer>
 <script>

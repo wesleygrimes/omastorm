@@ -20,10 +20,22 @@ QtObject {
     /// Places answering this client's `search_places`; a reply, not state.
     signal placesReady(var message)
     readonly property string runtime: Quickshell.env("XDG_RUNTIME_DIR") + "/omastorm/"
-    readonly property string texture: state && state.frame ? "file://" + runtime + state.frame.texture : ""
-    readonly property string azimuthLut: state && state.frame ? "file://" + runtime + state.frame.azimuthLut : ""
-    /// The selected station's row from `hello`, or null before it arrives.
-    readonly property var site: state ? (sites.find(s => s.id === state.site.id) || null) : null
+    property var sources: []
+    readonly property string texture: state && state.frame && state.frame.texture ? "file://" + runtime + state.frame.texture : ""
+    readonly property string azimuthLut: state && state.frame && state.frame.azimuthLut ? "file://" + runtime + state.frame.azimuthLut : ""
+    readonly property string selectedSiteId: {
+        if (!state || !state.selection || !state.selection.target) return "";
+        return state.selection.target.kind === "site" ? (state.selection.target.siteId || "") : "";
+    }
+    /// The selected station's row from `hello`, or null when the selection is not a polar site.
+    readonly property var site: {
+        var id = selectedSiteId;
+        return id ? (sites.find(s => s.id === id) || null) : null;
+    }
+    readonly property var source: {
+        if (!state || !state.selection) return null;
+        return sources.find(s => s.id === state.selection.sourceId) || null;
+    }
     /// The protocol's one rule for texture paths (`docs/protocol.md`): the
     /// literal `tex/` prefix and exactly one further segment that is not empty,
     /// `.`, or `..` and holds no `/`, backslash, or NUL. The engine applies the
@@ -49,21 +61,31 @@ QtObject {
         if (incompatible) return;
         try {
             var message = JSON.parse(data);
-            if (message.v !== 1) {
+            if (message.v !== 2) {
                 incompatible = true;
                 state = null;
                 error = "Unsupported engine protocol version: " + message.v;
                 socket.connected = false;
                 return;
             }
-            if (message.type === "hello") sites = message.sites;
+            if (message.type === "hello") {
+                sites = message.sites;
+                sources = message.sources || [];
+            }
             else if (message.type === "state") {
-                if (!message.frame || !validTexturePath(message.frame.texture))
-                    throw new Error("Invalid texture path: " + JSON.stringify(message.frame.texture));
-                if (!validTexturePath(message.frame.azimuthLut))
-                    throw new Error("Invalid azimuth lookup path: " + JSON.stringify(message.frame.azimuthLut));
-                state = message;
-                error = "";
+                if (message.frame === null || message.frame === undefined) {
+                    state = message;
+                    error = "";
+                } else {
+                    if (!validTexturePath(message.frame.texture))
+                        throw new Error("Invalid texture path: " + JSON.stringify(message.frame.texture));
+                    if (message.frame.kind === "mosaic") {
+                        // Mosaic frames have texture only; no azimuth lookup.
+                    } else if (!validTexturePath(message.frame.azimuthLut))
+                        throw new Error("Invalid azimuth lookup path: " + JSON.stringify(message.frame.azimuthLut));
+                    state = message;
+                    error = "";
+                }
             } else if (message.type === "error") rejection = message.message;
             else if (message.type === "tile_ready") {
                 if (!validTilePath(message.path))

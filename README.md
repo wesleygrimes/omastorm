@@ -1,15 +1,15 @@
 # Omastorm
 
-Live NEXRAD radar in your Omarchy bar. Beta.
+Live weather radar in your Omarchy bar. Beta.
 
 <p align="center">
   <img src="docs/media/readme/hero.png" alt="Omastorm window and bar popover">
 </p>
 
-A radar that lives next to the clock. The popover is the station nearest you
-and the actual scan time. Click the map (or press Enter) for the full window:
-every dish in the network, the sweep at native resolution, a two-hour loop
-you can play and scrub, drawn in your Omarchy theme.
+A radar that lives next to the clock. The popover shows your selected radar
+and its actual scan time. Click the map (or press Enter) for the full
+window: individual NOAA NEXRAD sweeps in the U.S. and the EUMETNET OPERA
+European mosaic, drawn in your Omarchy theme.
 
 This page is the user guide: install, first run, and everyday use. How the
 code is built lives in [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -57,16 +57,27 @@ wrong.
 The view is remembered. Next time you open the popover, you are back where
 you left off.
 
+## Coverage
+
+U.S. radar comes from NOAA NEXRAD; European radar comes from EUMETNET
+OPERA. Coverage depends on radar range and the data available from each
+provider. Some areas have no radar data, even when their cities appear in
+search.
+
 ## What you are looking at
 
-NEXRAD is NOAA's network of weather radars. Each dish spins, sends a pulse,
-and measures how much bounced back. Omastorm shows **reflectivity** on the
-lowest tilt: the beam that stays closest to the ground.
+Omastorm currently uses two radar products. In the U.S., NOAA NEXRAD provides
+individual radar volumes: each dish spins, sends a pulse, and measures how
+much bounced back. In Europe, EUMETNET OPERA provides a mosaic
+combining the strongest radar returns at each location.
+
+For NEXRAD, Omastorm shows **reflectivity** on the lowest tilt: the beam that
+stays closest to the ground. OPERA combines multiple radars and elevations into one image.
 
 Color is **dBZ**, not a rain rate and not a warning. Stronger return, warmer
 color. The legend under the map is that scale.
 
-A bright blob is often rain or snow. The same beam also sees:
+A bright blob is often rain or snow. Radar can also detect:
 
 - insects, birds, and bats (especially on clear evenings)
 - dust, smoke, and sea spray
@@ -77,37 +88,43 @@ A bright blob is often rain or snow. The same beam also sees:
 Measured returns under 5 dBZ (the usual biological clutter and haze) are
 hidden by default; the legend says so. Press `w` to show them.
 
-This is not a forecast, and it is not the NWS warning stack. It is the sweep
-that dish published, with the scan time on the stamp.
+These are observations, not forecasts or weather warnings. Each frame shows
+its observation time on the stamp.
 
 ## The window
 
 Drag to pan, scroll to zoom. The map and the radar are independent: panning
-moves the camera; the dish is whichever station the map is following, unless
-you lock it.
+moves the camera; the active source is whichever covering radar Omastorm is
+following, unless you lock it.
 
-Click the station name for nearby dishes. The padlock pins that radar so
-panning will not hand off; it turns yellow when the camera sits outside that
-dish's rings. `n` picks the nearest radar and leaves the camera where it is.
+Click the source name for covering mosaics and nearby dishes. The padlock pins
+that source so panning will not hand off; it turns yellow when the camera sits
+outside the source's coverage. `n` resumes automatic selection for the current
+map centre and leaves the camera where it is.
 
 The number under the product line is how stale the frame on screen is. The
-stamp above the timeline is when that sweep was observed. **LIVE** is the
+stamp above the timeline is when that frame was observed. **LIVE** is the
 feed; the light beside it goes yellow when data is stale (ten minutes) and
-red when the station or the bucket is unreachable. Cached frames stay.
+red when the feed is unreachable. Cached frames stay.
 
 A scale bar on the map is ground distance, in kilometres or miles from your
 locale.
 
 ## Search
 
-`/` (or `s`) is one field. Type a city, a site id, or paste coordinates.
+`/` (or `s`) is one field. Type a city, a radar site or mosaic name, or paste coordinates.
 
-A **city** centres the map there, unlocks, and selects the nearest radar.
+A **city** centres the map there, unlocks, and selects a covering source. Type
+a region or country qualifier when needed, such as `London, UK`.
+Cities come from the bundled GeoNames database. A configured radar override
+still applies when choosing a place.
 
 ![Search a city](docs/media/readme/search-city.png)
 
 A **site** (`KTLX`, `tlx`) locks that dish and centres on it. Clicking the
-station title opens the same card on the nearest dishes.
+source title opens the same card on covering mosaics and nearby dishes.
+
+A **mosaic** (`opera`) locks that source and centres the map on its coverage.
 
 ![Search a radar site](docs/media/readme/search-site.png)
 
@@ -132,30 +149,32 @@ map. It is not a new row of chrome.
 
 ## The loop
 
-A station you arrive at fetches recent scans so there is something to play
-within a few seconds. The cache then grows toward **60 frames / two hours**.
-Older scans drop out. Space loops them; `[` `]` steps; Home and End jump.
+Selecting a radar loads its recent scans for playback. NEXRAD history grows
+toward **60 frames / two hours**;
+OPERA retains up to **12 mosaic frames**. Older scans drop out. Space loops
+what is available; `[` `]` steps; Home and End jump.
 
-NOAA publishes Level II via the [Open Data program on AWS](https://registry.opendata.aws/noaa-nexrad/).
+NOAA publishes NEXRAD Level II via the [Open Data program on AWS](https://registry.opendata.aws/noaa-nexrad/).
 A full volume takes about four to seven minutes (faster in severe weather,
 slower in clear air). While a volume is in progress the engine reads live
 chunks, so the sweep can paint as the antenna turns. If no new chunk arrives
-for 90 seconds it rediscovers the latest volume; cached frames stay.
+for 90 seconds it rediscovers the latest volume; cached frames stay. OPERA
+polls its public 24-hour cache and loads complete mosaic frames.
 
 ## Look
 
-Three treatments sample the same gate and palette. They only change how each
+Three treatments sample the same radar data and palette. They only change how each
 3 px cell is painted. Glyphs is the default; `1` `2` `3` switch.
 
 | Key | Treatment | Look |
 | --- | --- | --- |
-| `1` | Pixels | Solid blocks. The most literal picture of each gate. |
+| `1` | Pixels | Solid blocks. The most literal picture of each radar cell. |
 | `2` | Glyphs | A denser mark as the return strengthens. |
 | `3` | Stipple | Soft squares that grow with intensity; more map shows through. |
 
 ![Pixels, Glyphs, and Stipple](docs/media/readme/treatments.png)
 
-Chrome follows the Omarchy theme. Radar color comes only from the sweep.
+Chrome follows the Omarchy theme. Radar color comes from the measured reflectivity.
 
 <p align="center">
   <img src="docs/media/readme/themes.png" alt="Tokyo Night and Flexoki Light">
@@ -169,8 +188,8 @@ Chrome follows the Omarchy theme. Radar color comes only from the sweep.
 | `+` `-` | Zoom |
 | `0` | Reset to the configured or weather location |
 | `/` or `s` | Search |
-| `n` | Nearest radar (camera stays) |
-| `Shift+L` | Lock the station |
+| `n` | Follow the covering radar (camera stays) |
+| `Shift+L` | Lock the radar |
 | `m` | My location |
 | Space | Play / pause the loop |
 | `[` `]` | Step a frame |
@@ -253,7 +272,10 @@ Then delete the `o.bind` line if you added one.
 
 ## Data
 
-Radar: NOAA NEXRAD Level II via the NOAA Open Data program on AWS. Basemap: ©
+Radar: NOAA NEXRAD Level II via the NOAA Open Data program on AWS; Europe
+mosaic from [EUMETNET OPERA](https://www.eumetnet.eu/) COMP DBZH via the
+[Open Radar Data](https://eumetnet.github.io/openradardata-documentation/1-ORD-API-overview/)
+24-hour cache ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). Basemap: ©
 OpenStreetMap contributors, [ODbL](https://opendatacommons.org/licenses/odbl/1-0/),
 tiles by [OpenFreeMap](https://openfreemap.org); Natural Earth, public domain.
 Location search: [GeoNames](https://www.geonames.org/),

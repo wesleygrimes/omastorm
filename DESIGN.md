@@ -6,7 +6,9 @@ How a change, feature, or fix should behave.
 indexes the rest of this tree. [docs/protocol.md](docs/protocol.md) is the
 wire. [docs/configuration.md](docs/configuration.md) is the config contract.
 [docs/radar-fetch.md](docs/radar-fetch.md) is how to get live and archived
-Level II bytes. [CONTRIBUTING.md](CONTRIBUTING.md) is the contribution
+Level II bytes. [docs/grid-adapters.md](docs/grid-adapters.md) is how
+international grid mosaics join the live picture.
+[CONTRIBUTING.md](CONTRIBUTING.md) is the contribution
 workflow. Honor these; ask before violating them.
 
 ## Picture
@@ -33,9 +35,9 @@ the ids and comments in `ui/RadarWindow.qml`.
 | Name | What it is |
 |---|---|
 | **brand row** | Mark, OMASTORM, status light, LIVE / ARCHIVED |
-| **site row** | Station title, radar lock (yellow when the camera is outside that radar's rings) |
+| **site row** | Station title, radar lock (yellow when the camera is outside that source's coverage, not its rings) |
 | **product stack** | Right column: product line + meta line |
-| **product line** | Product name / tilt and NOAA NEXRAD |
+| **product line** | Product name / tilt and the active source's attribution |
 | **meta line** | Age, right-aligned under the product line |
 | **map stage** | Radar map frame |
 | **locate chip** | Map marker, top-left of the map; jump to the approximate location |
@@ -51,7 +53,8 @@ the ids and comments in `ui/RadarWindow.qml`.
 strip, with the strip stamp left-aligned and frame index right-aligned
 on one row above the ticks. Playback buttons align with the track at the bottom.
 
-**Product stack.** Compact product line (name, then NOAA NEXRAD). The meta
+**Product stack.** Compact product line (name, then the active source's
+attribution). The meta
 line is the age only, right-aligned under that row.
 
 **Time.** Age on the meta line is how stale the frame on screen is. The
@@ -59,11 +62,12 @@ strip stamp is the absolute observation time (date, time, zone). Locale
 picks date order and 12/24h only; dates stay numeric. Locale also picks
 kilometres or miles for the scale bar and picker distances. The tick strip is
 position in the loop, not a second clock. One tick per timeline entry,
-spread across the strip, at every width; no empty pads. The loop is the
+spread across the strip, at every width; no empty pads. NEXRAD retains the
 last two hours of completed scans, 60 at most; older frames leave the
 catalog, so a station watched yesterday and again tonight loops tonight
-only. The sweep in progress is an outlined tick after the complete frames
-and is included in the frame count. Each tick represents one frame, without
+only. Its sweep in progress is an outlined tick after the complete frames
+and is included in the frame count. Mosaic history follows the adapter
+limit; OPERA retains up to 12 complete frames. Each tick represents one frame, without
 extra gap ticks or a baseline.
 
 ## Location, onboarding, and map
@@ -91,12 +95,13 @@ manual selection remains available and takes priority over a late reply.
 Failures show a short error and allow an explicit retry. There is no IP
 configuration knob; a click is the opt-in. IP never enables GPS or tracking.
 `/` opens one search: a city, a site id, or pasted coordinates in the same
-field. There is no lat/lon form. Rows are tagged `place` or `site` (at most
-four). Places rank first unless the query is three or four letters (a site
-id or its prefix: `kfcx`, `tlx`). Enter on a place centres the map there,
-unlocks, and selects the nearest radar; Enter on a site locks that radar
+field. There is no lat/lon form. Rows are tagged `place`, `site`, or `source`
+(at most four). Places rank first unless the query is three or four letters
+(a site id or its prefix: `kfcx`, `tlx`) or matches a live mosaic id or name
+(`opera`, `eumetnet`). Enter on a place centres the map there, unlocks, and
+selects a covering source; Enter on a site or mosaic source locks that radar
 and centres on it. Clicking the station title opens the same card listing
-the nearest dishes. Coordinates are decimal degrees, latitude then
+covering mosaics and the nearest dishes. Coordinates are decimal degrees, latitude then
 longitude, separated by a comma or a space (`36.23708, -79.97948`); they
 commit as a place. Invalid range is named. Do not swap a lon,lat paste.
 Place names come from an engine `search_places` reply over GeoNames cities
@@ -107,7 +112,7 @@ chooses a view; it does not create a permanent config override or lock a
 radar. Choosing a location writes `state.json`, never `config.toml`.
 The locate chip (`m`) is not search: one bounded `curl` to wttr.in, the
 same fetch as onboarding. It centres on the estimate, unlocks, and selects
-the nearest radar, keeping the current zoom. Off until clicked; a successful
+a covering source, keeping the current zoom. Off until clicked; a successful
 onboarding estimate does not enable it. Failure leaves the camera and
 flashes a short overlay on the map. Archived sessions never locate.
 
@@ -117,19 +122,25 @@ user action handled through the engine. Approximate IP lookup is an explicit
 UI action via wttr.in (`format=j2`, smaller than Omarchy weather's `j1`); the
 launcher and engine perform no IP lookup. Do not use GeoClue. Archived views
 never locate, and checks require the same explicit action as users.
-Resolve the radar separately: an explicit `locked_radar` in config wins,
-otherwise restore a remembered radar lock, otherwise choose the station
-nearest the map center. A radar lock alone does not supply a map center or
-bypass location onboarding. Newly chosen locations start unlocked unless a
-configured radar override applies.
+Resolve radar separately: an explicit polar `locked_radar` in config wins,
+otherwise restore a remembered exact selection lock, otherwise choose a
+covering source from the map center. A radar lock alone does not supply a map
+center or bypass location onboarding. Newly chosen locations start unlocked
+unless a configured radar override applies.
 
 Remember center and zoom after movement settles, and remember changes to the
-UI radar lock. Unlocked radar selection follows the center using the protocol's
-nearest-station hysteresis; do not wait until the center leaves the radar's
-rings. Lock pins the source; `n` releases it and selects the nearest station
-without moving the camera. Choosing a station in search (or from the
-station title) locks it and centres the map on that site. Automatic hand-off and loading a frame never move the
-camera. Do not persist the automatically selected station.
+UI radar lock. Unlocked radar selection follows the center. Polar-to-polar
+selection uses the protocol's nearest-station hysteresis while the held dish
+covers the center; leaving its coverage bypasses hysteresis. Cross-family and
+grid selection follow [docs/grid-adapters.md](docs/grid-adapters.md). Lock pins
+one exact dish or mosaic; `n` releases it and selects from the center without
+moving the camera. Choosing a station in search (or from the station title)
+locks it and centres the map on that site. Live mosaic sources appear in that
+same radar list — covering mosaics on an empty browse, and by id or name when
+typed — and choosing one locks that mosaic and centres on its coverage. They
+are not fake dishes and there is no separate provider picker. Automatic
+hand-off and loading a frame never move the camera. Persist only an explicit
+lock, never an automatically selected source.
 
 Closing preserves the view. Reopening restores it, with explicit config
 values taking precedence. Expanding the popover preserves its center, zoom,
@@ -148,8 +159,15 @@ radar's coverage is outside the view. UI navigation
 and unlocking can change the active session; explicit config applies again
 on launch.
 
-A station with no frame yet is the map without radar. Show no loading animation.
-Display one radar station’s sweep at a time.
+A station with no frame yet is the map without radar. A static
+“Loading...” sits in the centre of the map until the first scan time
+arrives; brief loads do not flash the notice. No spinner, and no chrome
+that resizes the map. The timestamp and timeline reserve their space while
+empty. Present each sweep with its own decoded texture, azimuth lookup,
+palette, and geometry together; keep the previous ready frame of the same
+source while its replacement loads. A source change clears that frame, and
+the first ready sweep fades in briefly. Display one radar station’s sweep
+at a time.
 
 ## Split
 
@@ -169,7 +187,7 @@ file ownership and precedence. Do not write Omarchy, Hyprland, or system
 configuration.
 
 A product is a texture, legend, units, timestamp, and source from the engine.
-Level II is what is drawn.
+Polar Level II and compiled grid mosaics are what is drawn.
 
 Live join is [docs/radar-fetch.md](docs/radar-fetch.md): read the last
 archive volume header, then poll the slots after it in the chunk bucket.

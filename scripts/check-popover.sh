@@ -81,6 +81,7 @@ sql = []
 now_ms = (Time.now.to_f * 1000).to_i
 2.times do |i|
   f = Marshal.load(Marshal.dump(frame))
+  f.delete('kind')
   f['id'] = "popover-test-#{i}"
   f['scanTime'] = "2013-05-20T20:#{10+i*5}:00Z"
   f['sweepEnd'] = f['scanTime']

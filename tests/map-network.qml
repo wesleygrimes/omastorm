@@ -17,7 +17,7 @@ ShellRoot {
                 scan: engine.state ? engine.state.frame : null
                 texture: engine.texture; azimuthLut: engine.azimuthLut
                 sites: engine.sites
-                siteId: engine.state ? engine.state.site.id : ""
+                siteId: engine.selectedSiteId
                 tileRoot: "file://" + engine.runtime
                 onTilesNeeded: (z,x0,y0,x1,y1) => engine.send({type:"tiles_needed",z:z,x0:x0,y0:y0,x1:x1,y1:y1})
             }

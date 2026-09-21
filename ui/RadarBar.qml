@@ -10,7 +10,7 @@ BarWidget {
     property bool opened: false
     property bool popoutSwitchClosing: false
     readonly property var state: session.engine.state
-    readonly property bool live: state && state.source === "live" && state.connection.status === "ok"
+    readonly property bool live: state && state.mode === "live" && state.connection.status === "ok"
     readonly property bool down: !state || state.connection.status === "offline" || state.connection.status === "unavailable"
     function open() {
         popoutSwitchClosing = false;

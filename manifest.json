@@ -6,7 +6,7 @@
   "author": "Wes Grimes",
   "license": "MIT",
   "homepage": "https://omastorm.com",
-  "description": "Live NEXRAD radar for the Omarchy desktop",
+  "description": "Live weather radar for the Omarchy desktop",
   "kinds": [
     "bar-widget",
     "panel"
@@ -17,7 +17,7 @@
   },
   "barWidget": {
     "displayName": "Omastorm",
-    "description": "Home radar, scan age, playback, and expand",
+    "description": "Weather radar, scan age, playback, and expand",
     "category": "Weather",
     "allowMultiple": false,
     "defaultSection": "right"

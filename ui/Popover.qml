@@ -20,7 +20,7 @@ FocusScope {
         return result;
     }
     readonly property int currentSlot: scan ? slots.findIndex(s => s.id === scan.id) : -1
-    readonly property string condition: state ? state.source === "archived" ? "archived" : state.connection.status : "offline"
+    readonly property string condition: state ? state.mode === "archived" ? "archived" : state.connection.status : "offline"
     readonly property color statusColor: condition === "stale" ? theme.yellow
         : condition === "offline" || condition === "unavailable" ? theme.red : theme.accent
     readonly property string statusText: {
@@ -28,7 +28,7 @@ FocusScope {
         if (condition === "archived") return "ARCHIVED";
         var label = condition === "ok" ? "LIVE" : condition.toUpperCase();
         var complete = frames.filter(f => f.status === "complete");
-        if (!scan.scanTime || !complete.length) return label;
+        if (!scan || !scan.scanTime || !complete.length) return label;
         var age = Math.max(0, state.connection.ageSeconds +
             Math.round((Date.parse(complete[complete.length - 1].scanTime) - Date.parse(scan.scanTime)) / 1000));
         var minutes = Math.floor(age / 60);
@@ -100,8 +100,8 @@ FocusScope {
         RowLayout {
             Layout.fillWidth: true
             spacing: 6
-            Label { text: card.state ? card.state.site.id : "—"; font.bold: true; font.pixelSize: 14 }
-            Label { Layout.fillWidth: true; text: connection.site ? connection.site.name : ""; opacity: .65 }
+            Label { text: connection.selectedSiteId || (connection.source ? connection.source.id : "—"); font.bold: true; font.pixelSize: 14 }
+            Label { Layout.fillWidth: true; text: connection.site ? connection.site.name : (connection.source ? connection.source.name : ""); opacity: .65 }
             Rectangle { width: 5; height: 5; radius: 3; color: card.statusColor }
             Label { text: card.statusText; color: card.statusColor; font.pixelSize: 11 }
         }
@@ -117,8 +117,11 @@ FocusScope {
                 scan: card.scan
                 texture: connection.texture
                 azimuthLut: connection.azimuthLut
-                siteId: card.state ? card.state.site.id : ""
+                siteId: connection.selectedSiteId
+                sourceId: connection.source ? connection.source.id : ""
                 sites: connection.sites
+                coverage: connection.site && connection.site.coverage ? connection.site.coverage
+                    : (connection.source && connection.source.coverage ? connection.source.coverage : null)
                 tileRoot: "file://" + connection.runtime
                 theme: card.theme
                 treatment: card.session.treatment
@@ -149,7 +152,8 @@ FocusScope {
                     implicitWidth: product.implicitWidth + 10; implicitHeight: 20
                     color: Qt.alpha(card.theme.background, .92)
                     Label { id: product; anchors.centerIn: parent; font.pixelSize: 10; opacity: .8
-                        text: card.scan ? card.scan.productName.toUpperCase() + " " + card.scan.elevationDeg.toFixed(1) + "°" : "" }
+                        text: card.scan ? card.scan.productName.toUpperCase()
+                            + (card.scan.kind !== "mosaic" && card.scan.scanTime ? " " + card.scan.elevationDeg.toFixed(1) + "°" : "") : "" }
                 }
                 Item { Layout.fillWidth: true }
                 Rectangle {
@@ -178,6 +182,22 @@ FocusScope {
                 border.color: card.theme.accent
                 Label { id: updated; anchors.centerIn: parent; font.pixelSize: 10; color: card.theme.accent; text: card.session.updateNotice }
                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: card.session.restartShell() }
+            }
+            Rectangle {
+                anchors.centerIn: parent
+                visible: card.condition === "loading" && (!card.scan || !card.scan.scanTime) && !!card.state
+                implicitWidth: popLoad.implicitWidth + 20
+                implicitHeight: 24
+                color: Qt.alpha(card.theme.background, .88)
+                border.width: 1
+                border.color: Qt.alpha(card.theme.foreground, .22)
+                Label {
+                    id: popLoad
+                    anchors.centerIn: parent
+                    text: "Loading..."
+                    color: card.theme.accent
+                    font.pixelSize: 10
+                }
             }
             Label {
                 anchors.centerIn: parent; width: parent.width - 24; wrapMode: Text.Wrap
@@ -253,7 +273,8 @@ FocusScope {
             font.pixelSize: 8
             opacity: .5
             elide: Text.ElideRight
-            text: map.osmOnScreen ? "NOAA · © OpenStreetMap" : "NOAA · Natural Earth"
+            text: map.osmOnScreen ? (connection.source ? connection.source.attribution : "NOAA") + " · © OpenStreetMap"
+                : (connection.source ? connection.source.attribution : "NOAA") + " · Natural Earth"
         }
     }
 }

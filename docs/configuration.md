@@ -64,11 +64,12 @@ Neither route adds coordinate overrides to config. `/` opens that search
 after onboarding. `m` jumps to the approximate location without typing.
 
 Resolve the radar independently: configured `locked_radar`, then a remembered
-UI lock, then the nearest station to the resolved center. A configured radar
+UI lock, then a covering source from the resolved center. A configured radar
 alone does not resolve a location. Coordinates never imply a lock. Choosing a
-station in search locks it and centres the map on that site. Choosing a city
-or coordinates unlocks and selects the nearest radar. `n` selects the
-nearest radar without moving the camera. A configured override still applies.
+station or mosaic source in search locks it and centres the map on it. Choosing
+a city or coordinates unlocks and selects a covering source. `n` resumes
+automatic covering-source selection without moving the camera. A configured
+override still applies.
 
 Restore remembered zoom, or the default zoom when none is valid. Keep the
 camera at the resolved location when frames arrive. Close and reopen preserve
@@ -101,7 +102,8 @@ zoom_in = "+ ="
   bypass the location prompt. Panning still works and updates state; reopening
   returns to the configured center. Removing the pair resumes the remembered
   position. Zoom remains independent.
-- `locked_radar`: a station id from `hello.sites`. Report an invalid id in
+- `locked_radar`: a polar station id from `hello.sites`. It is not a mosaic
+  or provider setting. Report an invalid id in
   the status slot; do not silently substitute another locked station.
   A valid override wins over the remembered lock on launch. It never moves
   the map. Unlocking in the UI affects the session and remembered lock;
@@ -113,7 +115,7 @@ settings even when the sweep is outside the view. Show the selected station
 and lock, with "Use nearest radar" and "Go to selected radar" available when
 coverage is outside the view. Never relocate the camera or discard the lock
 silently. The lock control uses the theme yellow when the camera sits outside
-that radar's rings.
+that radar's coverage footprint, not its range rings.
 
 For agent-assisted installation, write coordinate overrides only when the
 user requests a fixed launch location. Ordinary installation leaves them
@@ -156,11 +158,20 @@ the machine's own state and weather files are not read unless
 
 `~/.local/state/omastorm/state.json` is written atomically (a temporary file
 renamed into place). It holds the last map centre, span in kilometres, and
-the UI radar lock when one is set:
+the UI radar lock when one is set. Protocol v2 stores that lock as the exact
+selection identity. A leftover string lock is read as a NEXRAD site for one
+migration release and rewritten in the object form:
 
 ```json
-{"lat":30.332,"lon":-81.656,"span":210,"lock":"KJAX","name":"Jacksonville"}
+{"lat":30.332,"lon":-81.656,"span":210,
+ "lock":{"sourceId":"nexrad","target":{"kind":"site","siteId":"KJAX"}},
+ "name":"Jacksonville"}
 ```
+
+A mosaic lock is `{"sourceId":"fixture-mosaic","target":{"kind":"mosaic"}}`.
+The previous `"lock":"KJAX"` string is accepted on read, then written back as
+the object above. `locked_radar` in config.toml stays a polar site string;
+there is no provider setting or mosaic picker.
 
 Invalid fields are dropped. A missing file is no remembered view.
 `OMASTORM_LOCATION` names another weather.json (`name`, `latitude`,

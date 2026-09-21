@@ -41,7 +41,7 @@ ColumnLayout {
     Action {
         objectName: "approximateLocation"
         text: prompt.session.locating ? "Finding your location…" : "Use approximate location"
-        visible: !!prompt.session.engine.state && prompt.session.engine.state.source === "live"
+        visible: !!prompt.session.engine.state && prompt.session.engine.state.mode === "live"
         enabled: !prompt.session.locationPending
         onClicked: prompt.session.requestIpLocation()
     }

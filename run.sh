@@ -18,7 +18,7 @@ if [[ ${1:-} == --ensure ]]; then
   engine=$(bash scripts/fetch-engine.sh --print-path)
   exec "$engine" ensure
 fi
-if [[ ! -f ui/shaders/radar.frag.qsb || ! -f ui/shaders/tile.frag.qsb ]]; then
+if [[ ! -f ui/shaders/radar.frag.qsb || ! -f ui/shaders/tile.frag.qsb || ! -f ui/shaders/grid.frag.qsb ]]; then
   echo 'Missing shader packages. Run bash scripts/build-shader.sh (see data/README.md).' >&2
   exit 1
 fi

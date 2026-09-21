@@ -20,6 +20,19 @@ function clampSpan(value) {
     return Math.max(MIN_SPAN, n);
 }
 
+// Ground kilometres per Mercator unit at `lat`, same 6371 km sphere as
+// RadarMap. A city jump keeps this scale on screen so London is not a
+// zoom relative to KFCX.
+function kmPerUnit(lat) {
+    return 2 * Math.PI * 6371 * Math.cos(lat * Math.PI / 180);
+}
+function scaleSpan(fromLat, toLat, spanKm) {
+    if (!validLat(fromLat) || !validLat(toLat)) return clampSpan(spanKm);
+    var from = kmPerUnit(fromLat);
+    if (!(from > 0)) return clampSpan(spanKm);
+    return clampSpan(spanKm * kmPerUnit(toLat) / from);
+}
+
 function parseLatitude(text) {
     var t = String(text).trim();
     if (!t) return { empty: true };
@@ -51,6 +64,127 @@ function distanceKm(lat1, lon1, lat2, lon2) {
     return 2 * 6371 * Math.asin(Math.sqrt(Math.max(0, Math.min(1, h))));
 }
 
+function containsCoverage(coverage, lat, lon, dishLat, dishLon) {
+    if (!coverage || !validPair(lat, lon)) return false;
+    if (coverage.kind === "circle") {
+        var clat = coverage.lat !== undefined && coverage.lat !== null ? coverage.lat : dishLat;
+        var clon = coverage.lon !== undefined && coverage.lon !== null ? coverage.lon : dishLon;
+        if (!validPair(clat, clon)) return false;
+        return distanceKm(lat, lon, clat, clon) <= (coverage.radiusKm || 0);
+    }
+    if (coverage.kind === "box") {
+        if (lat < coverage.south || lat > coverage.north) return false;
+        if (coverage.west <= coverage.east)
+            return lon >= coverage.west && lon <= coverage.east;
+        return lon >= coverage.west || lon <= coverage.east;
+    }
+    if (coverage.kind === "polygon" && coverage.vertices && coverage.vertices.length >= 3) {
+        var inside = false, verts = coverage.vertices, j = verts.length - 1;
+        for (var i = 0; i < verts.length; i++) {
+            var a = verts[i], b = verts[j];
+            var intersect = ((a.lat > lat) !== (b.lat > lat))
+                && (lon < (b.lon - a.lon) * (lat - a.lat) / (b.lat - a.lat) + a.lon);
+            if (intersect) inside = !inside;
+            j = i;
+        }
+        return inside;
+    }
+    return false;
+}
+
+function coverageCentroid(coverage) {
+    if (!coverage) return null;
+    if (coverage.kind === "box")
+        return { lat: (coverage.north + coverage.south) / 2, lon: (coverage.west + coverage.east) / 2 };
+    if (coverage.kind === "circle" && validPair(coverage.lat, coverage.lon))
+        return { lat: coverage.lat, lon: coverage.lon };
+    if (coverage.kind === "polygon" && coverage.vertices && coverage.vertices.length) {
+        var lat = 0, lon = 0, n = coverage.vertices.length;
+        for (var i = 0; i < n; i++) {
+            lat += coverage.vertices[i].lat;
+            lon += coverage.vertices[i].lon;
+        }
+        return { lat: lat / n, lon: lon / n };
+    }
+    return null;
+}
+
+function liveMosaics(sources) {
+    var out = [];
+    for (var s of sources || []) {
+        if (s && s.kind === "mosaic" && s.id && s.id !== "fixture-mosaic") out.push(s);
+    }
+    return out;
+}
+
+function hitRange(from, count) {
+    var out = [];
+    for (var i = 0; i < count; i++) out.push(from + i);
+    return out;
+}
+
+function matchSource(source, query) {
+    var q = String(query || "").trim().toLowerCase().replace(/\s+/g, " ");
+    var id = String(source.id || "").toLowerCase();
+    var name = String(source.name || "").toLowerCase();
+    if (!q) return { idHits: [], nameHits: [] };
+    var i;
+    if (id.indexOf(q) === 0) return { idHits: hitRange(0, q.length), nameHits: [] };
+    if (name.indexOf(q) === 0) return { idHits: [], nameHits: hitRange(0, q.length) };
+    if ((i = id.indexOf(q)) >= 0) return { idHits: hitRange(i, q.length), nameHits: [] };
+    if ((i = name.indexOf(q)) >= 0) return { idHits: [], nameHits: hitRange(i, q.length) };
+    return null;
+}
+
+function mosaicWhere(covering, lat, lon, clat, clon, metric) {
+    if (covering) return "covers";
+    var km = distanceKm(lat, lon, clat, clon);
+    var r = Math.PI / 180, dl = (clon - lon) * r;
+    var y = Math.sin(dl) * Math.cos(clat * r);
+    var x = Math.cos(lat * r) * Math.sin(clat * r) - Math.sin(lat * r) * Math.cos(clat * r) * Math.cos(dl);
+    var deg = (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+    var compass = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(deg / 45) % 8];
+    if (metric) return km < 1 ? "< 1 km" : Math.round(km) + " km " + compass;
+    var mi = km / 1.609344;
+    return mi < 1 ? "< 1 mi" : Math.round(mi) + " mi " + compass;
+}
+
+// Live GridFamily mosaics for the radar list. Empty browse keeps covering
+// (or already selected) mosaics; type to search by id or name. The fixture
+// mosaic is not a user-facing source.
+function rankMosaics(sources, query, lat, lon, browse, selectedId, limit, metric) {
+    var cap = typeof limit === "number" && limit > 0 ? limit : 4;
+    var q = String(query || "").trim();
+    if (!q && !browse) return [];
+    var rows = [];
+    for (var s of liveMosaics(sources)) {
+        var c = coverageCentroid(s.coverage);
+        if (!c) continue;
+        var covering = containsCoverage(s.coverage, lat, lon);
+        var selected = selectedId && s.id === selectedId;
+        if (!q && !covering && !selected) continue;
+        var m = matchSource(s, q);
+        if (q && !m) continue;
+        rows.push({
+            kind: "mosaic",
+            id: s.id,
+            name: s.id,
+            place: s.name || s.id,
+            label: s.name || s.id,
+            where: mosaicWhere(covering, lat, lon, c.lat, c.lon, metric),
+            lat: c.lat,
+            lon: c.lon,
+            covering: covering,
+            selected: selected,
+            km: distanceKm(lat, lon, c.lat, c.lon),
+            idHits: m ? m.idHits : [],
+            placeHits: m ? m.nameHits : []
+        });
+    }
+    rows.sort((a, b) => (b.covering - a.covering) || (b.selected - a.selected) || a.km - b.km || (a.id < b.id ? -1 : 1));
+    return rows.slice(0, cap);
+}
+
 function nearestSite(sites, lat, lon) {
     var best = null, bestKm = Infinity;
     if (!validPair(lat, lon) || !sites) return null;
@@ -75,6 +209,41 @@ function configCenter(values) {
     if (values.center_lat === undefined || values.center_lon === undefined) return null;
     return validPair(values.center_lat, values.center_lon)
         ? { lat: values.center_lat, lon: values.center_lon } : null;
+}
+
+function polarLock(siteId) {
+    var id = String(siteId || "").trim().toUpperCase();
+    return id ? { sourceId: "nexrad", target: { kind: "site", siteId: id } } : null;
+}
+function mosaicLock(sourceId) {
+    var id = String(sourceId || "").trim();
+    return id ? { sourceId: id, target: { kind: "mosaic" } } : null;
+}
+// Remembered lock: object form, with one-release migration of a NEXRAD site string.
+function parseLock(value) {
+    if (typeof value === "string") return polarLock(value);
+    if (!value || typeof value !== "object") return null;
+    if (typeof value.sourceId !== "string" || !value.target || typeof value.target !== "object") return null;
+    if (value.target.kind === "site") return polarLock(value.target.siteId);
+    if (value.target.kind === "mosaic") return mosaicLock(value.sourceId);
+    return null;
+}
+function lockEquals(a, b) {
+    a = parseLock(a); b = parseLock(b);
+    if (!a && !b) return true;
+    if (!a || !b) return false;
+    if (a.sourceId !== b.sourceId || a.target.kind !== b.target.kind) return false;
+    if (a.target.kind === "site") return a.target.siteId === b.target.siteId;
+    return true;
+}
+function lockSiteId(lock) {
+    var l = parseLock(lock);
+    return l && l.target.kind === "site" ? l.target.siteId : "";
+}
+function lockKey(lock) {
+    var l = parseLock(lock);
+    if (!l) return "";
+    return l.target.kind === "site" ? l.target.siteId : l.sourceId + ":mosaic";
 }
 
 function configLock(values) {
@@ -105,7 +274,7 @@ function configErrors(values) {
 
 // Remembered view from state.json. Invalid fields are dropped, not fatal.
 function parseState(raw) {
-    var empty = { lat: undefined, lon: undefined, span: undefined, lock: "", name: "" };
+    var empty = { lat: undefined, lon: undefined, span: undefined, lock: null, name: "" };
     if (raw === undefined || raw === null || raw === "") return empty;
     try {
         var json = typeof raw === "string" ? JSON.parse(raw) : raw;
@@ -115,7 +284,7 @@ function parseState(raw) {
             lat: validLat(lat) ? lat : undefined,
             lon: validLon(lon) ? lon : undefined,
             span: typeof span === "number" && isFinite(span) && span > 0 ? span : undefined,
-            lock: typeof json.lock === "string" ? json.lock.trim().toUpperCase() : "",
+            lock: parseLock(json.lock),
             name: typeof json.name === "string" ? json.name : ""
         };
     } catch (e) { return empty; }
@@ -125,7 +294,8 @@ function stateObject(viewLat, viewLon, span, lock, name) {
     var o = {};
     if (validPair(viewLat, viewLon)) { o.lat = viewLat; o.lon = viewLon; }
     if (typeof span === "number" && isFinite(span) && span > 0) o.span = span;
-    if (lock) o.lock = lock;
+    var parsed = parseLock(lock);
+    if (parsed) o.lock = parsed;
     if (name) o.name = name;
     return o;
 }
@@ -211,16 +381,26 @@ function coordRow(lat, lon) {
     };
 }
 
-// Mix site rows, place rows, and an optional coordinate row. Empty query
-// with browseSites lists the nearest dishes; otherwise type to search.
-// Places first unless the query looks like a site id.
-function mergeSearch(siteRows, placeRows, coord, query, browseSites, limit) {
+// Mix site rows, mosaic source rows, place rows, and an optional coordinate
+// row. Empty query with browseSites lists covering mosaics then the nearest
+// dishes; otherwise type to search. Places first unless the query looks like
+// a site id or a mosaic source.
+function mergeSearch(siteRows, placeRows, coord, query, browseSites, limit, mosaicRows) {
     var cap = typeof limit === "number" && limit > 0 ? limit : 4;
-    var sites = siteRows || [], places = placeRows || [];
+    var sites = siteRows || [], places = placeRows || [], mosaics = mosaicRows || [];
     var q = String(query || "").trim();
     var extra = coord && coord.lat !== undefined ? [coordRow(coord.lat, coord.lon)] : [];
     if (coord && coord.error) return extra.slice(0, cap);
-    if (!q) return browseSites ? sites.slice(0, cap) : extra.slice(0, cap);
-    var combined = looksLikeSiteId(q) ? sites.concat(extra, places) : extra.concat(places, sites);
+    if (!q) return browseSites ? mosaics.concat(sites).slice(0, cap) : extra.slice(0, cap);
+    var sourceFirst = false;
+    var needle = q.toLowerCase();
+    for (var i = 0; i < mosaics.length; i++) {
+        var id = String(mosaics[i].id || "").toLowerCase();
+        var name = String(mosaics[i].place || mosaics[i].label || "").toLowerCase();
+        if (id.indexOf(needle) === 0 || name.indexOf(needle) === 0) { sourceFirst = true; break; }
+    }
+    var combined = looksLikeSiteId(q) ? sites.concat(mosaics, extra, places)
+        : sourceFirst ? mosaics.concat(extra, places, sites)
+        : extra.concat(places, mosaics, sites);
     return combined.slice(0, cap);
 }

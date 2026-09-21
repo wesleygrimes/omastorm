@@ -12,14 +12,25 @@ import Quickshell
 Item {
     id: map
     clip: true
+    // Hidden sweep Image keeps the source pixmap size (OPERA is 3800×4400).
+    // That must not become this item's implicit size or ColumnLayout
+    // treats the map's preferred height as thousands of pixels and the
+    // tick strip is laid out below the window.
+    implicitWidth: 0
+    implicitHeight: 0
 
     // Inputs from the surface.
     property var scan: null          // socket state frame, or null
     property string texture: ""      // engine-written sweep texture (gates × rays)
     property string azimuthLut: ""   // engine-written azimuth lookup (3600 × 1)
     property string siteId: ""
+    property string sourceId: ""
     property var sites: []           // hello.sites; locations, not live availability
-    readonly property real coverageKm: 460 // nominal reflectivity footprint, not measured coverage
+    property var coverage: null      // hello site or source coverage; never a hardcoded radius
+    readonly property bool mosaic: !!(scan && scan.kind === "mosaic")
+    // Circle radius comes only from adapter-declared coverage; mosaics use
+    // box/polygon containment and leave this unused.
+    readonly property real coverageKm: coverage && coverage.kind === "circle" ? coverage.radiusKm : 0
     property string tileRoot: ""     // file URL of the runtime directory, for tile paths
     property var theme
     property string treatment: "GLYPHS"
@@ -60,12 +71,63 @@ Item {
     function longitude(mx) { return mx * 360 - 180; }
     function latitude(my) { return Math.atan(Math.sinh(Math.PI * (1 - 2 * my))) * 180 / Math.PI; }
     readonly property var site: scan ? scan.site : null
-    readonly property real siteLat: site ? site.lat : 0
-    readonly property real siteMx: site ? mercatorX(site.lon) : 0.5
-    readonly property real siteMy: site ? mercatorY(site.lat) : 0.5
-    // Ground kilometres per Mercator unit at the site's latitude, on the
-    // shader's 6371 km sphere; span and the range rings are measured there.
-    readonly property real kmPerUnit: 2 * Math.PI * 6371 * Math.cos(siteLat * Math.PI / 180)
+    // Hello row for the selected station, available as soon as siteId is set
+    // and before the first texture lands.
+    readonly property var scaleStation: {
+        if (!siteId || !sites || !sites.length) return null;
+        for (var i = 0; i < sites.length; i++)
+            if (sites[i].id === siteId) return sites[i];
+        return null;
+    }
+    // Overlay origin: polar dish, mosaic coverage centroid, or the camera
+    // centre. Never Null Island for a selected mosaic.
+    readonly property var overlayAnchor: {
+        if (site) return { lat: site.lat, lon: site.lon };
+        if (coverage) {
+            if (coverage.kind === "box")
+                return { lat: (coverage.north + coverage.south) / 2,
+                         lon: (coverage.west + coverage.east) / 2 };
+            if (coverage.kind === "circle" && coverage.lat !== undefined && coverage.lon !== undefined)
+                return { lat: coverage.lat, lon: coverage.lon };
+            if (coverage.kind === "polygon" && coverage.vertices && coverage.vertices.length) {
+                var lat = 0, lon = 0, n = coverage.vertices.length;
+                for (var i = 0; i < n; i++) {
+                    lat += coverage.vertices[i].lat;
+                    lon += coverage.vertices[i].lon;
+                }
+                return { lat: lat / n, lon: lon / n };
+            }
+        }
+        if (center) return { lat: center.y, lon: center.x };
+        return null;
+    }
+    // Ground-scale latitude is pinned to the camera on lookAt / pan-settle,
+    // not to the dish. A radar hand-off or the first sweep must not change
+    // kmPerUnit (that used to rescale span and look like a zoom). Until the
+    // camera pins one, fall back to hello station / frame / centre.
+    property real pinnedScaleLat: 0
+    property bool hasPinnedScale: false
+    function pinScaleLat(lat) {
+        if (!isFinite(lat)) return;
+        pinnedScaleLat = Number(lat);
+        hasPinnedScale = true;
+    }
+    readonly property real scaleLat: {
+        if (hasPinnedScale) return pinnedScaleLat;
+        // Camera before dish/frame. Mosaic selection clears siteId; falling
+        // through from the old dish to centre (or the equator) used to change
+        // kmPerUnit and look like a zoom jump — the same class of bug as PR #99.
+        if (center) return center.y;
+        if (scaleStation) return scaleStation.lat;
+        if (site) return site.lat;
+        return 0;
+    }
+    readonly property real siteLat: overlayAnchor ? overlayAnchor.lat : 0
+    readonly property real siteMx: overlayAnchor ? mercatorX(overlayAnchor.lon) : 0.5
+    readonly property real siteMy: overlayAnchor ? mercatorY(overlayAnchor.lat) : 0.5
+    // Ground kilometres per Mercator unit at scaleLat, on the shader's
+    // 6371 km sphere; span and the range rings are measured there.
+    readonly property real kmPerUnit: 2 * Math.PI * 6371 * Math.cos(scaleLat * Math.PI / 180)
 
     // Camera. `center` is a longitude/latitude point, or null for the home
     // view: the site offset by `home` kilometres east and north. `span` is
@@ -84,20 +146,30 @@ Item {
     readonly property real wantedY: center ? mercatorY(center.y) : siteMy - home.y / kmPerUnit
     readonly property real viewCenterX: Math.max(width/2*unitsPerPixel, Math.min(1-width/2*unitsPerPixel, wantedX))
     readonly property real viewCenterY: Math.max(height/2*unitsPerPixel, Math.min(1-height/2*unitsPerPixel, wantedY))
-    function reset() { center = null; span = Math.min(210, maxSpan); }
+    function reset() {
+        center = null;
+        hasPinnedScale = false;
+        span = Math.min(210, maxSpan);
+    }
     signal navigated(real lat, real lon, real spanKm)
     function zoom(value, notify) {
         if (!interactive) return;
         span = Math.max(25, Math.min(maxSpan, value));
         if (notify !== false) navigated(centerLat, centerLon, span);
     }
-    function look(mx, my) { center = Qt.point(longitude(mx), latitude(my)); }
+    function look(mx, my) {
+        // Freeze scale on the first pan so an unpinned camera does not
+        // live-zoom while centre tracks the pointer (mosaic has no dish).
+        if (!hasPinnedScale) pinScaleLat(scaleLat);
+        center = Qt.point(longitude(mx), latitude(my));
+    }
     // Centre exactly on a place. Loading frames and radar hand-offs must
     // not call this; the camera is the user's (DESIGN.md, location).
     function lookAt(lat, lon) {
         // A fresh object: assigning Qt.point onto `var` can no-op when Qt
         // treats the previous point as equal, so the camera never moves.
         center = { x: Number(lon), y: Number(lat) };
+        pinScaleLat(lat);
     }
     signal resetRequested()
     // The keyboard pan (DESIGN.md, keyboard map): one step is an eighth of
@@ -115,16 +187,19 @@ Item {
     function jumpTo(lat, lon) {
         var k = 2 * Math.PI * 6371 * Math.cos(lat * Math.PI / 180);
         center = Qt.point(longitude(mercatorX(lon) + home.x / k), latitude(mercatorY(lat) - home.y / k));
+        pinScaleLat(lat);
     }
-    // A hand-off changes the site under a camera the user placed. The span
-    // is measured at the site's latitude, so it is rescaled to keep the
-    // ground scale on screen exactly where it was.
+    // Span is measured at the pinned camera latitude. When that pin moves
+    // (lookAt / pan settle), rescale so Mercator scale on screen stays put.
+    // Dish hand-offs and the first sweep do not change the pin, so they no
+    // longer nudge the zoom.
     property real heldKmPerUnit: 0
-    // Restoring a remembered view sets span itself; a site change under that
+    // Restoring a remembered view sets span itself; a pin change under that
     // restore must not rescale it.
     property bool holdSpan: false
     onKmPerUnitChanged: {
-        if (center && heldKmPerUnit > 0 && !holdSpan) span *= kmPerUnit / heldKmPerUnit;
+        if (hasPinnedScale && center && heldKmPerUnit > 0 && !holdSpan)
+            span *= kmPerUnit / heldKmPerUnit;
         heldKmPerUnit = kmPerUnit;
     }
     function distanceKm(lat1, lon1, lat2, lon2) {
@@ -161,7 +236,15 @@ Item {
     onUnitsPerPixelChanged: settle.restart()
     // A state change re-asks even for an unchanged rectangle: a restarted
     // engine publishes under a new generation.
-    onScanChanged: { scheduleLayout(); if (scan) { settle.reask = true; settle.restart(); } else { reportedLat = NaN; reportedSpan = NaN; } }
+    // Re-ask tiles when a frame appears after none (engine reconnect).
+    // Live sweeps and mosaic backfill replace `scan` every publish; those
+    // must not re-report the camera or the map zooms on every COMP.
+    property bool hadScan: false
+    onScanChanged: {
+        Qt.callLater(stageSweep);
+        if (scan && !hadScan) { settle.reask = true; settle.restart(); }
+        hadScan = !!scan;
+    }
     Timer { id: settle; interval: 120; property bool reask: true; onTriggered: { map.requestTiles(); map.reportCenter(); } }
     // Forgotten when the engine goes away, so a reconnect reports the centre
     // the camera is at rather than the one the old daemon knew.
@@ -169,8 +252,11 @@ Item {
     property real reportedLon: NaN
     property real reportedSpan: NaN
     function reportCenter() {
-        if (!scan || (centerLat === reportedLat && centerLon === reportedLon && span === reportedSpan)) return;
+        if (centerLat === reportedLat && centerLon === reportedLon && span === reportedSpan) return;
         reportedLat = centerLat; reportedLon = centerLon; reportedSpan = span;
+        // Pin scale at the settled camera so a long pan does not live-zoom,
+        // and a later dish hand-off still leaves kmPerUnit alone.
+        if (center) pinScaleLat(center.y);
         viewSettled(centerLat, centerLon);
     }
     function tileRect(z) {
@@ -181,7 +267,7 @@ Item {
                  x1: tile(viewCenterX + width / 2 * unitsPerPixel), y1: tile(viewCenterY + height / 2 * unitsPerPixel) };
     }
     function requestTiles() {
-        if (!scan || width <= 0 || height <= 0) return;
+        if (width <= 0 || height <= 0) return;
         // At most 64 tiles per request (docs/protocol.md): a huge viewport
         // steps out a level rather than asking for a rectangle it cannot have.
         var rect = tileRect(tileZoom);
@@ -304,14 +390,35 @@ Item {
     property var siteLabels: []
     onSitesChanged: scheduleLayout()
     onSiteIdChanged: scheduleLayout()
+    onCoverageChanged: scheduleLayout()
+    // Same turn as the parent jump: a callLater left labels at the old
+    // dish for a frame and the scene bounced on every radar hand-off.
+    property bool overlayLive: false
+    onSiteMxChanged: overlayLive ? rebuildLabels() : scheduleLayout()
+    onSiteMyChanged: overlayLive ? rebuildLabels() : scheduleLayout()
     onWidthChanged: { scheduleLayout(); settle.restart(); }
     onHeightChanged: { scheduleLayout(); settle.restart(); }
-    onWorldPixelsChanged: { scheduleLayout(); Qt.callLater(refreshOverlay); }
+    onWorldPixelsChanged: { scheduleScaleLayout(); Qt.callLater(refreshOverlay); }
     onLabelSizeChanged: scheduleLayout()
     onPlacesChanged: scheduleLayout()
     onThemeChanged: scheduleLayout()
-    Component.onCompleted: scheduleLayout()
+    Component.onCompleted: { overlayLive = true; rebuildLabels(); }
     function scheduleLayout() { Qt.callLater(rebuildLabels); }
+    // A settled pan changes kmPerUnit and compensates span in the same turn.
+    // Check after bindings settle so that transient worldPixels values do not
+    // trigger an otherwise identical label layout.
+    property real laidOutWorldPixels: NaN
+    function scheduleScaleLayout() {
+        Qt.callLater(function() {
+            // Re-layout only when the scale change can move an overlay point
+            // by at least a quarter pixel across the viewport.
+            var tolerance = Math.max(1, map.laidOutWorldPixels)
+                * 0.25 / Math.max(1, map.width, map.height);
+            if (!isFinite(map.laidOutWorldPixels)
+                || Math.abs(map.worldPixels - map.laidOutWorldPixels) > tolerance)
+                map.rebuildLabels();
+        });
+    }
     // A padded viewport bounds text and dashed-path work at every zoom.
     // Small pans only translate the scene; replenish before the padding runs
     // out. Keep the anchor fixed between replenishments.
@@ -327,7 +434,7 @@ Item {
             || (width/2+128)*unitsPerPixel > overlayHalfX
             || (height/2+128)*unitsPerPixel > overlayHalfY) {
             overlayX = viewCenterX; overlayY = viewCenterY; overlayScale = worldPixels;
-            scheduleLayout();
+            rebuildLabels();
         }
     }
     TextMetrics {
@@ -337,10 +444,12 @@ Item {
     }
     function rebuildLabels() {
         var started = Date.now();
-        if (!scan) { labels = []; siteLabels = []; return; }
-        labelMetrics.text = siteId;
-        var occupied = [{x:-7, y:-7, w:14, h:14},
-                        {x:7, y:4, w:labelMetrics.advanceWidth+6, h:16}], result = [], stations = [];
+        // Idle / lean start still lays out station markers and place labels;
+        // only radar-specific rings and tags wait for a selection.
+        labelMetrics.text = siteId || "";
+        var occupied = siteId
+            ? [{x:-7, y:-7, w:14, h:14}, {x:7, y:4, w:labelMetrics.advanceWidth+6, h:16}]
+            : [], result = [], stations = [];
         // Station IDs take priority over place names. Reserve every marker
         // first; co-located archived/test stations must not cover each other.
         var candidates = sites.filter(s => s.id !== siteId
@@ -365,7 +474,7 @@ Item {
             occupied.push({x:chosen.x,y:chosen.y,w:tw+6,h:16});
             stations.push({name:s.id, x:chosen.x, y:chosen.y, width:tw+6});
         }
-        siteLabels = stations;
+        if (JSON.stringify(siteLabels) !== JSON.stringify(stations)) siteLabels = stations;
         for (var p of places) {
             labelMetrics.text = p.name;
             var tx = (mercatorX(p.lon) - siteMx) * worldPixels, ty = (mercatorY(p.lat) - siteMy) * worldPixels;
@@ -382,7 +491,8 @@ Item {
             result.push({name:p.name, x:chosen.x, y:chosen.y,
                          width:tw+6, markerX:tx, markerY:ty});
         }
-        labels = result;
+        if (JSON.stringify(labels) !== JSON.stringify(result)) labels = result;
+        laidOutWorldPixels = worldPixels;
         if (Quickshell.env("OMASTORM_PROFILE")) console.log("OVERLAY_MS", Date.now()-started);
     }
 
@@ -390,9 +500,47 @@ Item {
     // Mercator. A screen-space ellipse is wrong at high latitudes. Geometry
     // stays fixed inside the padded region; zoom scales points and pan
     // translates the parent. Unwrap longitude about each station.
+    function coverageRadiusKm(s) {
+        if (s && s.radiusKm !== undefined && s.radiusKm !== null) return s.radiusKm;
+        return coverageKm;
+    }
+    function mercatorOffset(lat, lon) {
+        return Qt.point(mercatorX(lon) - siteMx, mercatorY(lat) - siteMy);
+    }
+    function densifyEdge(lat0, lon0, lat1, lon1, steps, points) {
+        for (var i = 0; i < steps; i++) {
+            var t = i / steps;
+            points.push(mercatorOffset(lat0 + (lat1 - lat0) * t, lon0 + (lon1 - lon0) * t));
+        }
+    }
+    function coverageOutline(cov) {
+        if (!cov) return [];
+        if (cov.kind === "circle") {
+            return coveragePoints({lat: cov.lat, lon: cov.lon, radiusKm: cov.radiusKm});
+        }
+        var points = [];
+        if (cov.kind === "box") {
+            densifyEdge(cov.north, cov.west, cov.north, cov.east, 32, points);
+            densifyEdge(cov.north, cov.east, cov.south, cov.east, 32, points);
+            densifyEdge(cov.south, cov.east, cov.south, cov.west, 32, points);
+            densifyEdge(cov.south, cov.west, cov.north, cov.west, 32, points);
+            points.push(mercatorOffset(cov.north, cov.west));
+            return points;
+        }
+        if (cov.kind === "polygon" && cov.vertices && cov.vertices.length >= 3) {
+            var verts = cov.vertices;
+            for (var i = 0; i < verts.length; i++) {
+                var a = verts[i], b = verts[(i + 1) % verts.length];
+                densifyEdge(a.lat, a.lon, b.lat, b.lon, 16, points);
+            }
+            points.push(mercatorOffset(verts[0].lat, verts[0].lon));
+        }
+        return points;
+    }
     function coveragePoints(s) {
+        if (s && s.coverage) return coverageOutline(s.coverage);
         var phi = s.lat * Math.PI / 180, lambda = s.lon * Math.PI / 180;
-        var d = coverageKm / 6371, points = [];
+        var d = coverageRadiusKm(s) / 6371, points = [];
         for (var i = 0; i <= 360; i++) {
             var bearing = (i % 360) * Math.PI / 180;
             var lat = Math.asin(Math.sin(phi)*Math.cos(d) + Math.cos(phi)*Math.sin(d)*Math.cos(bearing));
@@ -402,11 +550,12 @@ Item {
         return points;
     }
     function coverageInReach(s) {
+        if (s && s.coverage && s.coverage.kind !== "circle") return true;
         var distance = distanceKm(latitude(overlayY), longitude(overlayX), s.lat, s.lon);
         // Mercator ground scale never exceeds its equatorial scale. This
         // conservative padded-view radius cannot cull an arc crossing the view.
         var radius = Math.hypot(overlayHalfX, overlayHalfY)*2*Math.PI*6371;
-        return Math.abs(distance-coverageKm) <= radius;
+        return Math.abs(distance - coverageRadiusKm(s)) <= radius;
     }
     // Clip before Qt tessellates dashes, including circles whose centres are
     // outside the view. Coordinates remain relative to the active-site copy.
@@ -436,29 +585,105 @@ Item {
         return lines;
     }
     readonly property var coverageSites: {
+        if (mosaic && coverage)
+            return [{id: sourceId || "mosaic", coverage: coverage, mosaic: true}];
         if (!drawable || !site) return [];
         // Only the active radar gets a footprint; overlapping network circles
         // obscure geography at continental zoom. Use the measured scan site.
-        return [{id:siteId, lat:site.lat, lon:site.lon}];
+        return [{id:siteId, lat:site.lat, lon:site.lon, radiusKm: coverageKm}];
     }
+    function crsKindCode(crs) {
+        if (!crs) return 0;
+        if (crs.kind === "geographic") return 0;
+        if (crs.kind === "mercator") return 1;
+        if (crs.kind === "transverseMercator") return 2;
+        if (crs.kind === "polarStereographic") return 3;
+        if (crs.kind === "lambertConformalConic") return 4;
+        if (crs.kind === "lambertAzimuthalEqualArea") return 5;
+        return -1;
+    }
+    readonly property var gridCrs: renderMosaic ? renderScan.crs : null
+    readonly property var gridEllipsoid: gridCrs && gridCrs.ellipsoid ? gridCrs.ellipsoid : null
+    readonly property var gridHelmert: gridCrs && gridCrs.datumTransform && gridCrs.datumTransform.kind === "helmert7"
+        ? gridCrs.datumTransform : null
+    readonly property var gridAffine: renderMosaic ? renderScan.geotransform : null
 
-    // Upload the immutable sweep and its azimuth lookup once. Pan/zoom updates
-    // shader uniforms; the polar-to-screen lookup runs in the shader and no
-    // JavaScript visits radar cells.
-    Image {
-        id: sweepTexture
-        source: map.texture
-        visible: false
-        smooth: false
-        mipmap: false
+    // Keep geometry, palette, sweep, and azimuth lookup together. A new
+    // texture decodes off-thread into the back buffer; the visible buffer
+    // changes only when both images are ready. Never retain another source.
+    readonly property string sweepKey: sourceId + "/" + siteId + "/"
+        + (scan && scan.site ? scan.site.id : "") + "/" + (mosaic ? "mosaic" : "polar")
+    property var frontBuffer: null
+    property var loadingBuffer: null
+    readonly property bool radarReady: drawable && !!frontBuffer
+        && !!frontBuffer.snapshot && frontBuffer.snapshot.key === sweepKey
+    readonly property var renderScan: radarReady ? frontBuffer.snapshot.scan : null
+    readonly property bool renderMosaic: !!renderScan && renderScan.kind === "mosaic"
+    readonly property int renderBands: renderScan ? renderScan.palette.length : 0
+    readonly property int renderWeakBelow: renderScan && weakFloor !== null && renderScan.scale > 0
+        ? Math.max(0, Math.min(256, Math.ceil(weakFloor * renderScan.scale + renderScan.offset))) : 0
+    property real sweepOpacity: radarReady ? radarOpacity : 0
+    Behavior on sweepOpacity { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
+    onTextureChanged: Qt.callLater(stageSweep)
+    onAzimuthLutChanged: Qt.callLater(stageSweep)
+    onSweepKeyChanged: Qt.callLater(stageSweep)
+    function stageSweep() {
+        if (!drawable || !texture) {
+            frontBuffer = null;
+            loadingBuffer = null;
+            sweepA.snapshot = null;
+            sweepB.snapshot = null;
+            return;
+        }
+        if (frontBuffer && frontBuffer.snapshot.key !== sweepKey) {
+            frontBuffer = null;
+        }
+        function matches(buffer) {
+            return buffer && buffer.snapshot && buffer.snapshot.key === sweepKey
+                && buffer.snapshot.texture === texture && buffer.snapshot.lut === azimuthLut;
+        }
+        if (matches(frontBuffer)) return;
+        if (matches(loadingBuffer)) { presentSweep(); return; }
+        loadingBuffer = frontBuffer === sweepA ? sweepB : sweepA;
+        loadingBuffer.snapshot = { key: sweepKey, scan: scan, texture: texture, lut: azimuthLut };
+        Qt.callLater(presentSweep);
     }
-    Image {
-        id: azimuthTexture
-        source: map.azimuthLut
-        visible: false
-        smooth: false
-        mipmap: false
+    function presentSweep() {
+        var buffer = loadingBuffer;
+        if (!buffer || !buffer.snapshot || !drawable
+            || buffer.snapshot.key !== sweepKey || buffer.snapshot.texture !== texture
+            || buffer.snapshot.lut !== azimuthLut || !buffer.ready) return;
+        frontBuffer = buffer;
+        loadingBuffer = null;
     }
+    component SweepBuffer: Item {
+        property var snapshot: null
+        property alias sweep: pixels
+        property alias lut: azimuth
+        readonly property bool ready: pixels.status === Image.Ready
+            && (snapshot && snapshot.scan.kind === "mosaic" || azimuth.status === Image.Ready)
+        onReadyChanged: Qt.callLater(map.presentSweep)
+        Image {
+            id: pixels
+            source: parent.snapshot ? parent.snapshot.texture : ""
+            visible: false
+            smooth: false
+            mipmap: false
+            asynchronous: true
+            cache: true
+        }
+        Image {
+            id: azimuth
+            source: parent.snapshot ? parent.snapshot.lut : ""
+            visible: false
+            smooth: false
+            mipmap: false
+            asynchronous: true
+            cache: true
+        }
+    }
+    SweepBuffer { id: sweepA }
+    SweepBuffer { id: sweepB }
     // The frame's palette as a bands x 1 strip; the shader samples
     // texel centers, so radar and legend share the socket palette.
     // The strip stays visible so its children get scene-graph nodes
@@ -466,9 +691,9 @@ Item {
     // source hides it on screen while rendering it into the texture.
     Item {
         id: paletteStrip
-        width: Math.max(1, map.bands); height: 1
+        width: Math.max(1, map.renderBands); height: 1
         Repeater {
-            model: map.scan ? map.scan.palette : []
+            model: map.renderScan ? map.renderScan.palette : []
             Rectangle {
                 required property string modelData
                 required property int index
@@ -486,38 +711,84 @@ Item {
     }
     ShaderEffect {
         id: radarEffect
-        visible: map.drawable
+        visible: map.radarReady && !map.renderMosaic
         // The radar alone, not the basemap: .6 under UNAVAILABLE.
-        opacity: map.radarOpacity
+        opacity: map.sweepOpacity
         anchors.fill: parent
         onStatusChanged: if (status === ShaderEffect.Error) map.error = "Radar GPU shader failed: " + log
         Component.onCompleted: if (GraphicsInfo.api === GraphicsInfo.Software) map.error = "Radar requires GPU rendering (OpenGL/Vulkan)."
-        property var sweep: sweepTexture
-        property var azimuthLut: azimuthTexture
+        property var sweep: map.frontBuffer ? map.frontBuffer.sweep : sweepA.sweep
+        property var azimuthLut: map.frontBuffer ? map.frontBuffer.lut : sweepA.lut
         property var swatches: paletteTexture
-        property int bands: map.bands
+        property int bands: map.renderBands
         // Sweep geometry travels as uniforms; the frame's numbers are the
         // only radar values QML ever touches, and they are geometry, not data.
-        property int rays: map.scan ? map.scan.rays : 0
-        property int gates: map.scan ? map.scan.gates : 0
-        property real firstGateM: map.scan ? map.scan.firstGateM : 0
-        property real gateSpacingM: map.scan ? map.scan.gateSpacingM : 1
-        property real elevationDeg: map.scan ? map.scan.elevationDeg : 0
-        property int weakBelow: map.weakBelow
+        // Mosaic frames omit polar fields — do not read them while a mosaic
+        // is selected or ShaderEffect warns on undefined→int/real.
+        property int rays: map.renderMosaic || !map.renderScan || map.renderScan.rays === undefined ? 0 : map.renderScan.rays
+        property int gates: map.renderMosaic || !map.renderScan || map.renderScan.gates === undefined ? 0 : map.renderScan.gates
+        property real firstGateM: map.renderMosaic || !map.renderScan || map.renderScan.firstGateM === undefined ? 0 : map.renderScan.firstGateM
+        property real gateSpacingM: map.renderMosaic || !map.renderScan || map.renderScan.gateSpacingM === undefined ? 1 : map.renderScan.gateSpacingM
+        property real elevationDeg: map.renderMosaic || !map.renderScan || map.renderScan.elevationDeg === undefined ? 0 : map.renderScan.elevationDeg
+        property int weakBelow: map.renderWeakBelow
         property vector2d viewport: Qt.vector2d(width, height)
         // The camera as the shader wants it: the view centre relative to the
         // site in Mercator units, the scale, and the site's latitude.
-        property vector2d centerOffset: Qt.vector2d(map.viewCenterX - map.siteMx, map.viewCenterY - map.siteMy)
+        property vector2d centerOffset: Qt.vector2d(map.viewCenterX - map.mercatorX(map.renderScan && map.renderScan.site ? map.renderScan.site.lon : 0), map.viewCenterY - map.mercatorY(map.renderScan && map.renderScan.site ? map.renderScan.site.lat : 0))
         property real unitsPerPixel: map.unitsPerPixel
-        property real siteLatDeg: map.siteLat
+        property real siteLatDeg: map.renderScan && map.renderScan.site ? map.renderScan.site.lat : 0
         property int treatment: map.treatment === "PIXELS" ? 0 : map.treatment === "GLYPHS" ? 1 : 2
         fragmentShader: "shaders/radar.frag.qsb"
+    }
+    ShaderEffect {
+        id: gridEffect
+        visible: map.radarReady && map.renderMosaic
+        opacity: map.sweepOpacity
+        anchors.fill: parent
+        onStatusChanged: if (status === ShaderEffect.Error) map.error = "Grid GPU shader failed: " + log
+        property var sweep: map.frontBuffer ? map.frontBuffer.sweep : sweepA.sweep
+        property var swatches: paletteTexture
+        property int bands: map.renderBands
+        property int treatment: map.treatment === "PIXELS" ? 0 : map.treatment === "GLYPHS" ? 1 : 2
+        property int weakBelow: 0
+        property vector2d viewport: Qt.vector2d(width, height)
+        property vector2d viewCenter: Qt.vector2d(map.viewCenterX, map.viewCenterY)
+        property real unitsPerPixel: map.unitsPerPixel
+        property int crsKind: map.crsKindCode(map.gridCrs)
+        property int gridWidth: map.renderScan && map.renderScan.width ? map.renderScan.width : 0
+        property int gridHeight: map.renderScan && map.renderScan.height ? map.renderScan.height : 0
+        property int hasDatum: map.gridHelmert ? 1 : 0
+        property real semiMajorM: map.gridEllipsoid ? map.gridEllipsoid.semiMajorM : 6378137
+        property real invFlattening: map.gridEllipsoid ? map.gridEllipsoid.inverseFlattening : 298.257223563
+        property real lon0Deg: map.gridCrs && map.gridCrs.lon0Deg !== undefined ? map.gridCrs.lon0Deg : 0
+        property real lat0Deg: map.gridCrs && map.gridCrs.lat0Deg !== undefined ? map.gridCrs.lat0Deg : 0
+        property real stdParallel1Deg: map.gridCrs && map.gridCrs.standardParallel1Deg !== undefined ? map.gridCrs.standardParallel1Deg : 0
+        property real stdParallel2Deg: map.gridCrs && map.gridCrs.standardParallel2Deg !== undefined ? map.gridCrs.standardParallel2Deg : 0
+        property real projScale: map.gridCrs && map.gridCrs.scale !== undefined ? map.gridCrs.scale : 1
+        property real falseEastingM: map.gridCrs && map.gridCrs.falseEastingM !== undefined ? map.gridCrs.falseEastingM : 0
+        property real falseNorthingM: map.gridCrs && map.gridCrs.falseNorthingM !== undefined ? map.gridCrs.falseNorthingM : 0
+        property real helmertS: map.gridHelmert ? map.gridHelmert.scalePpm : 0
+        property vector3d helmertT: map.gridHelmert
+            ? Qt.vector3d(map.gridHelmert.translationM[0], map.gridHelmert.translationM[1], map.gridHelmert.translationM[2])
+            : Qt.vector3d(0, 0, 0)
+        property vector3d helmertR: map.gridHelmert
+            ? Qt.vector3d(map.gridHelmert.rotationArcSeconds[0], map.gridHelmert.rotationArcSeconds[1], map.gridHelmert.rotationArcSeconds[2])
+            : Qt.vector3d(0, 0, 0)
+        property vector3d geoA: map.gridAffine
+            ? Qt.vector3d(map.gridAffine[0], map.gridAffine[1], map.gridAffine[2])
+            : Qt.vector3d(0, 1, 0)
+        property vector3d geoB: map.gridAffine
+            ? Qt.vector3d(map.gridAffine[3], map.gridAffine[4], map.gridAffine[5])
+            : Qt.vector3d(0, 0, -1)
+        fragmentShader: "shaders/grid.frag.qsb"
     }
     Item {
         id: overlayCamera
         x: map.sx(map.siteMx)
         y: map.sy(map.siteMy)
-        visible: !!map.scan
+        // Always on: idle and lean-start still show the network and places.
+        // Radar rings, crosshair, and the selection tag gate on siteId/mosaic.
+        visible: true
         Repeater {
             id: coverageRepeater
             model: map.coverageSites
@@ -551,8 +822,9 @@ Item {
             model: [50, 100, 150, 200]
             Rectangle {
                 required property int modelData
-                visible: map.siteId !== ""
-                width: 2 * modelData * map.pixelsPerKm
+                visible: map.siteId !== "" && !map.mosaic
+                width: 2 * modelData * map.worldPixels
+                    / (2 * Math.PI * 6371 * Math.cos(map.siteLat * Math.PI / 180))
                 height: width
                 x: -width / 2; y: -height / 2
                 radius: width / 2
@@ -614,22 +886,24 @@ Item {
                 }
             }
         }
-        Rectangle { x: -7; y: -.5; width: 14; height: 1; color: map.theme.foreground; visible: map.siteId !== "" }
-        Rectangle { x: -.5; y: -7; width: 1; height: 14; color: map.theme.foreground; visible: map.siteId !== "" }
+        Rectangle { x: -7; y: -.5; width: 14; height: 1; color: map.theme.foreground; visible: map.siteId !== "" && !map.mosaic }
+        Rectangle { x: -.5; y: -7; width: 1; height: 14; color: map.theme.foreground; visible: map.siteId !== "" && !map.mosaic }
         // The lock: an accent 1 px frame on the marker and the tag.
+        // Mosaics have no dish marker; the frame sits on the coverage centroid.
         Rectangle {
             x: -6; y: -6; width: 12; height: 12; color: "transparent"
-            visible: map.locked
+            visible: map.locked && (map.siteId !== "" || map.mosaic)
             border.width: 1; border.color: map.theme.accent
         }
         Rectangle {
             x: 7; y: 4; width: Math.floor(siteTag.implicitWidth) + 6; height: 16; color: map.theme.background
-            visible: map.siteId !== ""
+            visible: map.siteId !== "" || (map.mosaic && map.sourceId !== "")
             border.width: map.locked ? 1 : 0; border.color: map.theme.accent
             Text {
                 id: siteTag
                 x: 3; anchors.verticalCenter: parent.verticalCenter
-                text: map.siteId; color: map.theme.foreground
+                text: map.siteId || (map.mosaic ? map.sourceId : "")
+                color: map.theme.foreground
                 font.family: map.theme.font; font.pixelSize: map.labelSize
             }
         }

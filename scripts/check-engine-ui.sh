@@ -47,7 +47,7 @@ ShellRoot {
             check(!!engine.state && engine.error === "", "Fixture state did not recover after renamed textures");
             // A rejection is this client's own: it sits beside state, survives
             // a state broadcast, and clears when this client sends again.
-            engine.receive('{"type":"error","v":1,"command":"select_site","message":"Not here"}');
+            engine.receive('{"type":"error","v":2,"command":"select_site","message":"Not here"}');
             check(!!engine.state && engine.rejection === "Not here" && engine.error === "", "Rejection did not sit beside state");
             engine.receive(good);
             check(!!engine.state && engine.rejection === "Not here", "A state broadcast cleared this client's rejection");
@@ -55,16 +55,16 @@ ShellRoot {
             check(engine.rejection === "", "Sending a command did not clear the previous rejection");
             // The tile path rule: a parent segment or a fifth level is transport
             // trouble like a bad texture path; a well-formed reply reaches the map.
-            engine.receive('{"type":"tile_ready","v":1,"set":"ne","z":5,"x":7,"y":12,"path":"tiles/ne/5/../12-a.png","labels":[]}');
+            engine.receive('{"type":"tile_ready","v":2,"set":"ne","z":5,"x":7,"y":12,"path":"tiles/ne/5/../12-a.png","labels":[]}');
             check(engine.state === null && engine.error.indexOf("Invalid engine message") === 0 && tiles.length === 0, "Parent segment in tile path was accepted");
             engine.receive(good);
-            engine.receive('{"type":"tile_ready","v":1,"set":"ne","z":5,"x":7,"y":12,"path":"tiles/ne/5/7/12/a.png","labels":[]}');
+            engine.receive('{"type":"tile_ready","v":2,"set":"ne","z":5,"x":7,"y":12,"path":"tiles/ne/5/7/12/a.png","labels":[]}');
             check(engine.state === null && tiles.length === 0, "Extra segment in tile path was accepted");
             engine.receive(good);
-            engine.receive('{"type":"tile_ready","v":1,"set":"foo","z":5,"x":7,"y":12,"path":"tiles/foo/5/7/12-a.png","labels":[]}');
+            engine.receive('{"type":"tile_ready","v":2,"set":"foo","z":5,"x":7,"y":12,"path":"tiles/foo/5/7/12-a.png","labels":[]}');
             check(engine.state === null && tiles.length === 0, "Unknown tile set was accepted");
             engine.receive(good);
-            engine.receive('{"type":"tile_ready","v":1,"set":"osm","z":11,"x":470,"y":808,"path":"tiles/osm/11/470/808-3f9a1c2e.png","labels":[]}');
+            engine.receive('{"type":"tile_ready","v":2,"set":"osm","z":11,"x":470,"y":808,"path":"tiles/osm/11/470/808-3f9a1c2e.png","labels":[]}');
             check(!!engine.state && engine.error === "" && tiles.length === 1 && tiles[0].path === "tiles/osm/11/470/808-3f9a1c2e.png", "Valid tile_ready did not reach the map");
             // Round trips through the real daemon: a station outside the
             // table is rejected (a table station would go live and reach the
@@ -76,7 +76,7 @@ ShellRoot {
     Timer {
         interval: 2000; running: true
         onTriggered: {
-            check(!!engine.state && engine.state.site.id === "KTLX", "Rejected select_site changed state");
+            check(!!engine.state && engine.selectedSiteId === "KTLX", "Rejected select_site changed state");
             check(engine.rejection.indexOf("XXXX") >= 0, "Daemon did not answer the rejected command to this client: " + JSON.stringify(engine.rejection));
             var served = tiles.filter(t => t.set === "ne" && t.z === 5 && t.path.indexOf("tiles/ne/5/") === 0);
             check(served.length === 4, "Daemon did not answer tiles_needed with four ne tiles: " + tiles.length);

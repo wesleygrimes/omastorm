@@ -28,14 +28,14 @@ cat > "$tmp" <<EOF
 Type=Application
 Name=Omastorm
 GenericName=Weather radar
-Comment=Live NEXRAD radar for the Omarchy desktop
+Comment=Live weather radar for the Omarchy desktop
 Exec=omarchy shell shell toggle com.omastorm.radar "{}"
 TryExec=omarchy
 Icon=$mark
 Terminal=false
 StartupNotify=false
 Categories=Science;
-Keywords=radar;NEXRAD;weather;
+Keywords=radar;NEXRAD;OPERA;weather;
 EOF
 chmod 644 -- "$tmp"
 mv -f -- "$tmp" "$desktop"

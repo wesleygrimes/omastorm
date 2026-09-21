@@ -3,15 +3,18 @@ import QtQuick.Layouts
 import "Location.js" as Location
 import "Sites.js" as Sites
 
-// `/` search (DESIGN.md): one field for a city, a site id, or pasted
-// coordinates. Enter on a place centres and unlocks; Enter on a site locks
-// and centres. The station title opens the same card on the nearest dishes.
+// `/` search (DESIGN.md): one field for a city, a radar (site or mosaic
+// source), or pasted coordinates. Enter on a place centres and unlocks;
+// Enter on a site or mosaic locks and centres. The station title opens the
+// same card on covering mosaics and the nearest dishes.
 Item {
     id: picker
     property var theme
     property var engine
     property var session: null
     property var sites: []
+    property var sources: []
+    property string selectedSourceId: ""
     property bool onboarding: false
     property bool browseSites: false
     property bool manual: true
@@ -73,9 +76,14 @@ Item {
         }
         return out;
     }
+    readonly property var mosaicRows: {
+        if (!open) return [];
+        return Location.rankMosaics(sources, settledQuery, centerLat, centerLon,
+            browseSites, selectedSourceId, picker.limit, picker.metric);
+    }
     readonly property var rows: {
         if (!open || (onboarding && !manual)) return [];
-        return Location.mergeSearch(siteRows, placeRows, coordEntry, settledQuery, browseSites, picker.limit);
+        return Location.mergeSearch(siteRows, placeRows, coordEntry, settledQuery, browseSites, picker.limit, mosaicRows);
     }
     visible: open
     function show(text, offerLocation) {
@@ -241,7 +249,7 @@ Item {
                                 opacity: .9
                             }
                         }
-                        Word { text: "city · site · coordinates"; font.pixelSize: 10; opacity: .45; visible: !picker.compact }
+                        Word { text: "city · radar · coordinates"; font.pixelSize: 10; opacity: .45; visible: !picker.compact }
                     }
                 }
                 ColumnLayout {
@@ -255,6 +263,8 @@ Item {
                             required property int index
                             readonly property bool current: index === picker.selected
                             readonly property bool isSite: !!(modelData && modelData.kind === "site")
+                            readonly property bool isMosaic: !!(modelData && modelData.kind === "mosaic")
+                            readonly property bool isRadar: isSite || isMosaic
                             readonly property color ink: current ? picker.theme.accent : picker.theme.foreground
                             Layout.fillWidth: true
                             implicitHeight: 28
@@ -265,21 +275,21 @@ Item {
                                 anchors.rightMargin: 12
                                 spacing: 12
                                 Word {
-                                    visible: row.isSite
-                                    text: row.isSite ? Sites.mark(row.modelData.name, row.modelData.idHits || [], picker.theme.accent) : ""
+                                    visible: row.isRadar
+                                    text: row.isRadar ? Sites.mark(row.modelData.name, row.modelData.idHits || [], picker.theme.accent) : ""
                                     textFormat: Text.StyledText
                                     font.bold: true
                                     color: row.ink
                                     Layout.preferredWidth: 52
                                 }
                                 Word {
-                                    text: row.isSite
+                                    text: row.isRadar
                                         ? Sites.mark(row.modelData.place || "", row.modelData.placeHits || [], picker.theme.accent)
                                         : (row.modelData.label || row.modelData.name || "")
-                                    textFormat: row.isSite ? Text.StyledText : Text.PlainText
-                                    font.bold: !row.isSite
+                                    textFormat: row.isRadar ? Text.StyledText : Text.PlainText
+                                    font.bold: !row.isRadar
                                     color: row.ink
-                                    opacity: row.isSite ? .9 : 1
+                                    opacity: row.isRadar ? .9 : 1
                                     Layout.fillWidth: true
                                 }
                                 Word {
@@ -289,7 +299,7 @@ Item {
                                     opacity: .6
                                 }
                                 Word {
-                                    text: row.isSite ? "site" : "place"
+                                    text: row.isSite ? "site" : row.isMosaic ? "source" : "place"
                                     font.pixelSize: 10
                                     color: row.ink
                                     opacity: .45
@@ -310,7 +320,7 @@ Item {
                         Layout.preferredHeight: 28
                         visible: !picker.rows.length
                         text: picker.coordError ? picker.coordError.toUpperCase()
-                            : picker.settledQuery.trim() ? "NO MATCHES" : "CITY, SITE ID, OR LAT, LON"
+                            : picker.settledQuery.trim() ? "NO MATCHES" : "CITY, RADAR, OR LAT, LON"
                         color: picker.coordError ? picker.theme.accent : picker.theme.foreground
                         opacity: picker.coordError ? 1 : .55
                         font.letterSpacing: 1

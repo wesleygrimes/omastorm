@@ -38,7 +38,11 @@ until_field() { # name, wanted
   for _ in {1..150}; do [[ $(field "$1" 2>/dev/null) == "$2" ]] && return; sleep .1; done
   fail "$1 never became $2: $(call status)"
 }
-lock_in_file() { jq -r '.lock // ""' "$OMASTORM_STATE"; }
+lock_in_file() {
+  jq -r 'if (.lock | type) == "string" then .lock
+         elif .lock.target.kind == "site" then .lock.target.siteId
+         else "" end' "$OMASTORM_STATE"
+}
 for _ in {1..100}; do call status > /dev/null 2>&1 && break; sleep .1; done
 call status > /dev/null || fail "The window's keys IPC never answered"
 until_field site KFCX
