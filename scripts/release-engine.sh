@@ -5,7 +5,7 @@
 # currently at origin's main, and unless engine/Cargo.toml names a version
 # with no tag or release yet.
 # Builds the candidate, requires it to answer hello with that version and the
-# protocol ui/Engine.qml accepts, creates the GitHub Release as a draft with
+# protocol engine/src/protocol.rs defines, creates the GitHub Release as a draft with
 # both native binaries and SHA256SUMS, asks, and publishes. Releases are immutable, so
 # publishing is the point of no return. It then fetches the published asset
 # back, requires it to hash to the candidate, and writes engine/release.pin.

@@ -41,8 +41,14 @@ open until the engine binary is published, then land the pin and the UI in
 the same push so an update never puts the UI ahead of the binary.
 
 Split PRs: merge the engine PR first; the plugin on `main` must still speak
-the current pin. Publish the engine and land the pin. Then merge the UI PR.
-Never merge the UI first.
+the current pin. Publish the engine before merging the UI PR. For a breaking
+protocol change,
+land the verified pin and compatible UI together in the second PR; advancing
+the pin alone would break the old UI. Never merge the UI first.
+
+During this split, `mise check` tests the candidate engine independently and
+runs UI checks against the verified published pin in a disposable tree.
+Candidate GPU checks require the matching UI and run in the UI PR.
 
 ## Engine
 
@@ -54,7 +60,8 @@ the public bytes before writing the pin.
 The workflow runs the mise toolchain's lint, Rust tests, engine pin checks,
 and release checks on native `ubuntu-24.04` x86_64 and `ubuntu-24.04-arm`
 aarch64 runners. Every native candidate must answer hello with the engine
-version and UI protocol. GPU/QML checks still require an Omarchy desktop.
+version and its source protocol version. GPU/QML checks still require an
+Omarchy desktop.
 PRs, branch pushes, and manual runs produce workflow artifacts. Pushing
 `engine-<version>` (the tag must match Cargo.toml) combines both candidates
 and creates a draft GitHub Release; it refuses to overwrite an existing
@@ -81,8 +88,8 @@ the build machine's newer Arch glibc.
    artifact into `target/dist/`. Run `mise engine-verify` to require every
    public binary to match the candidate checksums. It writes nothing.
 6. Run `mise engine-pin` to write `engine/release.pin`. Run `mise check`,
-   then commit the pin separately and push. Users receive it on their next
-   plugin update.
+   then commit the pin (with the compatible UI for a breaking protocol change)
+   and push. Users receive it on their next plugin update.
 
 `mise engine-verify` and `mise engine-pin` call
 [scripts/pin-engine-release.sh](../scripts/pin-engine-release.sh). Neither
@@ -104,8 +111,8 @@ authentication and release access:
 
 1. After the version bump is on `main`, run `mise release --dry-run`. It
    builds the native stripped candidate, verifies both binaries' source
-   commit/version/checksums, checks the native candidate's reported version
-   and UI protocol compatibility, and prints the tag, sha256, and release
+   commit/version/checksums, checks the native candidate's reported engine
+   and protocol versions, and prints the tag, sha256, and release
    notes. Review these before publishing.
 2. Run `mise release` and confirm publication. It creates `engine-<version>`,
    publishes, verifies every published binary, and writes `engine/release.pin`.

@@ -10,6 +10,7 @@ use. Nothing in this directory is required to run Omastorm.
 | [configuration.md](configuration.md) | Complete `config.toml` / `state.json` contract. |
 | [protocol.md](protocol.md) | Engine ↔ UI socket. |
 | [radar-fetch.md](radar-fetch.md) | How live and archived Level II bytes are fetched. |
+| [grid-adapters.md](grid-adapters.md) | Grid mosaic adapters for international sources. |
 | [RELEASING.md](RELEASING.md) | Maintainer release sequence. |
 | [media/README.md](media/README.md) | How README stills and the demo take are captured. |
 

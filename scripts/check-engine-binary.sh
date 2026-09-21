@@ -4,7 +4,8 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 binary=$(realpath "${1:?Usage: check-engine-binary.sh binary [version]}")
 version=${2:-$(awk -F'"' '/^version = /{print $2; exit}' engine/Cargo.toml)}
-protocol=$(rg -o 'message\.v !== ([0-9]+)' -r '$1' ui/Engine.qml)
+protocol=$(sed -n 's/^pub const VERSION: u32 = \([0-9][0-9]*\);$/\1/p' engine/src/protocol.rs)
+[[ -n $protocol ]] || { echo 'Could not read engine protocol version' >&2; exit 1; }
 scratch=$(mktemp -d /tmp/omastorm-binary-check.XXXXXX)
 export XDG_RUNTIME_DIR=$scratch/runtime XDG_CACHE_HOME=$scratch/cache XDG_DATA_HOME=$scratch/data
 unset OMASTORM_ARCHIVE

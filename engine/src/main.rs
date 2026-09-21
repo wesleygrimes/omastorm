@@ -1,17 +1,23 @@
 mod catalog;
+mod cog;
+mod envelope;
+mod grid_fixture;
 mod live;
 mod live_index;
+mod opera;
 mod osm;
 mod protocol;
+mod source;
 mod sweep;
 mod tiles;
 
 use catalog::Entry;
 use chrono::{DateTime, Utc};
 use protocol::{
-    Basemap, Command, Connection, ConnectionStatus, Frame, FrameStatus, Geometry, Handshake, Hello,
-    Message, NaturalEarth, Places, Rejection, SiteSelection, SiteTable, Source, State, Station,
-    TileReady, TimelineEntry, VERSION, is_texture_path,
+    AdapterTarget, Basemap, Command, Connection, ConnectionStatus, Frame, FrameStatus, FrameWire,
+    Geometry, Handshake, Hello, Message, Mode, MosaicFrame, NaturalEarth, Navigation, Places,
+    Rejection, Selection, SiteTable, State, Station, TileReady, TimelineEntry, VERSION,
+    is_texture_path,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -65,13 +71,6 @@ const UNAVAILABLE_AFTER: Duration = Duration::from_secs(1800);
 const PLAY_LOOP: Duration = Duration::from_secs(10);
 const PLAY_STEP_MIN: Duration = Duration::from_millis(250);
 const PLAY_STEP_MAX: Duration = Duration::from_millis(1000);
-/// Following hands off when a pan settles with another station closer than
-/// this fraction of the current one's distance to the view centre, and
-/// closer by at least `HANDOFF_MARGIN_KM` (DESIGN.md, site navigation).
-/// Relative, so the dead band scales with the spacing: about a twentieth
-/// of the distance between two stations on either side of their midpoint.
-const HANDOFF_RATIO: f64 = 0.8;
-const HANDOFF_MARGIN_KM: f64 = 1.0;
 
 /// Fingerprint of the running executable, set once in `main`.
 static BUILD: OnceLock<String> = OnceLock::new();
@@ -95,14 +94,15 @@ fn build_id() -> &'static str {
 fn site_table() -> SiteTable {
     serde_json::from_str(include_str!("../data/sites.json")).unwrap()
 }
-fn hello() -> Hello {
+fn hello_from(registry: &source::SourceRegistry) -> Hello {
     let table = site_table();
     Hello {
         v: VERSION,
         engine: env!("CARGO_PKG_VERSION"),
         pid: std::process::id(),
         build: build_id().to_owned(),
-        sites: table.sites,
+        sites: registry.hello_sites(),
+        sources: registry.hello_sources(),
         sites_source: table.source,
         sites_retrieved: table.retrieved,
         sites_notes: table.notes,
@@ -301,7 +301,8 @@ struct Arrival {
 /// condition.
 fn feed_condition(current: ConnectionStatus, evidence_age: Option<u64>) -> ConnectionStatus {
     match (current, evidence_age) {
-        (ConnectionStatus::Loading | ConnectionStatus::Offline, _) | (_, None) => current,
+        (ConnectionStatus::Loading | ConnectionStatus::Offline | ConnectionStatus::Idle, _)
+        | (_, None) => current,
         (_, Some(age)) if age >= UNAVAILABLE_AFTER.as_secs() => ConnectionStatus::Unavailable,
         (_, Some(age)) if age >= STALE_AFTER.as_secs() => ConnectionStatus::Stale,
         _ => ConnectionStatus::Ok,
@@ -392,21 +393,6 @@ fn empty_frame(template: &Frame, station: &Station) -> Frame {
         bounds: template.bounds.clone(),
     }
 }
-/// The frame a lean daemon starts on before any `select_site`: the loading
-/// placeholder for no station at all, sited at the middle of the contiguous
-/// network so the map shows the whole set of markers until a station is
-/// chosen. `site.id` is empty, so any home the UI names differs from it.
-fn startup_frame(template: &Frame) -> Frame {
-    let nowhere = Station {
-        id: String::new(),
-        name: String::new(),
-        state: String::new(),
-        lat: 39.8,
-        lon: -98.6,
-        alt_m: 0.0,
-    };
-    empty_frame(template, &nowhere)
-}
 /// The textures behind a loading placeholder: one blank gate, so the
 /// shader draws nothing, and an azimuth lookup for it.
 fn blank_textures(frame: &Frame) -> io::Result<(Vec<u8>, Vec<u8>)> {
@@ -424,59 +410,25 @@ fn blank_textures(frame: &Frame) -> io::Result<(Vec<u8>, Vec<u8>)> {
     let lut = sweep::png(3600, 1, &sweep.azimuth_lut())?;
     Ok((texture, lut))
 }
-/// Great-circle distance in kilometres on the radar's 6371 km sphere.
-fn great_circle_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
-    let (p1, p2) = (lat1.to_radians(), lat2.to_radians());
-    let (dp, dl) = ((lat2 - lat1).to_radians(), (lon2 - lon1).to_radians());
-    let h = (dp / 2.0).sin().powi(2) + p1.cos() * p2.cos() * (dl / 2.0).sin().powi(2);
-    2.0 * 6371.0 * h.clamp(0.0, 1.0).sqrt().asin()
-}
-/// The station following should hand off to when the view centre settles
-/// at `lat`, `lon`: the nearest table station, when it is not `current` and
-/// beats it by the hysteresis rule. `None` keeps the current station, so a
-/// centre between two stations does not flap. Nothing about the camera is
-/// decided here: the centre is the user's.
-fn handoff<'a>(sites: &'a [Station], current: &str, lat: f64, lon: f64) -> Option<&'a Station> {
-    let distance = |s: &Station| great_circle_km(lat, lon, s.lat, s.lon);
-    let nearest = sites
-        .iter()
-        .min_by(|a, b| distance(a).total_cmp(&distance(b)))?;
-    if nearest.id == current {
-        return None;
-    }
-    match sites.iter().find(|s| s.id == current) {
-        Some(held)
-            if distance(nearest) >= HANDOFF_RATIO * distance(held)
-                || distance(held) - distance(nearest) < HANDOFF_MARGIN_KM =>
-        {
-            None
-        }
-        _ => Some(nearest),
-    }
-}
 fn initial_state(
-    frame: Frame,
+    frame: Option<FrameWire>,
     osm: protocol::Osm,
-    source: Source,
+    mode: Mode,
     status: ConnectionStatus,
+    selection: Option<Selection>,
 ) -> State {
-    // Archived, the station is the one the frame names; lean, none yet.
-    let site = match source {
-        Source::Archived => frame.id.split('-').next().unwrap_or_default().to_owned(),
-        Source::Live => String::new(),
-    };
     State {
         v: VERSION,
-        source,
+        mode,
         connection: Connection {
             status,
             age_seconds: 0,
         },
-        site: SiteSelection {
-            id: site,
+        navigation: Navigation {
             follow: true,
             locked: false,
         },
+        selection,
         // Filled from the `Timeline` at every snapshot.
         timeline: Vec::new(),
         frame,
@@ -516,17 +468,24 @@ struct Shared {
     template: Frame,
     /// The station table from `hello`.
     sites: Vec<Station>,
+    registry: source::SourceRegistry,
+    /// Last settled map centre, so unlock can reselect without a new pan.
+    last_center: Option<(f64, f64)>,
+    /// In-memory mosaic frames (fixture or live grid adapters). Each entry's
+    /// `texture` path is published once on insert; playback only swaps paths.
+    mosaic: Vec<MosaicFrame>,
     /// The runtime directory textures are published to.
     dir: PathBuf,
     catalog: Arc<catalog::Catalog>,
-    /// The poller for the selected station in live mode (`live.rs`);
-    /// aborted and replaced by a site switch or a quiet-feed restart.
+    /// The poller for the selected polar site or live grid source;
+    /// aborted and replaced by a switch or a quiet-feed restart.
     live: Option<JoinHandle<()>>,
     /// When the poller was last spawned, so an UNAVAILABLE feed is
     /// rediscovered at most once per `UNAVAILABLE_AFTER` rather than every
     /// cleanup tick.
     last_live_restart: Instant,
     events: Sender<live::Event>,
+    grid_events: Sender<source::GridEvent>,
     /// `scanTime` of the newest complete frame, milliseconds since the
     /// epoch, for `connection.ageSeconds`; `None` while there is none.
     frame_ms: Option<i64>,
@@ -541,27 +500,63 @@ struct Shared {
     last_broadcast: String,
 }
 impl Shared {
+    fn polar_site_id(&self) -> Option<&str> {
+        match &self.state.selection {
+            Some(Selection {
+                target: AdapterTarget::Site { site_id },
+                ..
+            }) => Some(site_id.as_str()),
+            _ => None,
+        }
+    }
+    fn mosaic_source_id(&self) -> Option<&str> {
+        match &self.state.selection {
+            Some(Selection {
+                source_id,
+                target: AdapterTarget::Mosaic,
+            }) => Some(source_id.as_str()),
+            _ => None,
+        }
+    }
     fn snapshot(&mut self) -> String {
         let age = self
             .frame_ms
             .map_or(0, |ms| now_ms().saturating_sub(ms).max(0) as u64 / 1000);
         self.state.connection.age_seconds = age;
         self.state.timeline = self.timeline.entries();
-        // Live, the condition follows the newest radial received: the sweep
-        // in progress while one paints, else the newest complete frame. A
-        // half-finished cut from a station that then fell silent ages like
-        // any other evidence.
-        if self.state.source == Source::Live {
+        // Live selections follow the newest complete frame's age (polar: the
+        // sweep in progress while one paints). Idle has no selection to judge.
+        if self.state.mode == Mode::Live && self.state.selection.is_some() {
             self.state.connection.status =
                 feed_condition(self.state.connection.status, self.evidence_age_secs());
         }
         line(&Message::State(&self.state))
     }
-    /// Show `frame` with its textures published under `tex/`.
+    /// Show a polar `frame` with its textures published under `tex/`.
     fn show(&mut self, mut frame: Frame, texture: &[u8], lut: &[u8]) -> io::Result<()> {
         publish_frame(&self.dir, &mut frame, texture, lut)?;
-        self.state.frame = frame;
+        self.state.frame = Some(FrameWire::Polar(frame));
         Ok(())
+    }
+    /// Show a mosaic whose `texture` path is already published under `tex/`.
+    fn show_mosaic(&mut self, frame: MosaicFrame) -> io::Result<()> {
+        if frame.texture.is_empty() {
+            return Err(io::Error::other(format!(
+                "mosaic {} has no published texture",
+                frame.id
+            )));
+        }
+        self.state.frame = Some(FrameWire::Mosaic(frame));
+        Ok(())
+    }
+    /// Publish mosaic PNG bytes once and keep the frame with its path.
+    fn store_mosaic(&mut self, mut frame: MosaicFrame, texture: &[u8]) -> io::Result<MosaicFrame> {
+        if frame.texture.is_empty() || !self.dir.join(&frame.texture).is_file() {
+            frame.texture = publish(&self.dir, "mosaic", &frame.id, texture)?;
+        }
+        self.mosaic.retain(|f| f.id != frame.id);
+        self.mosaic.push(frame.clone());
+        Ok(frame)
     }
     /// Show the timeline's frame at `index`: the sweep in progress from
     /// memory, a stored frame read back from the catalog. Either way the
@@ -575,7 +570,7 @@ impl Shared {
                 .ok_or_else(|| io::Error::other("the sweep in progress has no texture"))?;
             let mut frame = pending.frame.clone();
             publish_frame(&self.dir, &mut frame, &pending.texture, &pending.lut)?;
-            self.state.frame = frame;
+            self.state.frame = Some(FrameWire::Polar(frame));
             return Ok(());
         }
         let id = self
@@ -583,6 +578,9 @@ impl Shared {
             .id_at(index)
             .ok_or_else(|| io::Error::other(format!("no frame at {index}")))?
             .to_owned();
+        if let Some(frame) = self.mosaic.iter().find(|f| f.id == id).cloned() {
+            return self.show_mosaic(frame);
+        }
         let stored = self
             .catalog
             .load(&id)?
@@ -602,26 +600,80 @@ impl Shared {
         Some(now_ms().saturating_sub(newest_ms).max(0) as u64 / 1000)
     }
     /// Abort the current poller, if any, and start another on the selected
-    /// station. Timeline and the frame on screen stay; the next *new* sweep
-    /// clears `unavailable` / `offline`. `skip_known` is true on a respawn
-    /// so a catalogued replay is not published again.
+    /// polar site or live grid source. Timeline and the frame on screen stay.
+    /// `skip_known` is true on a polar respawn so a catalogued replay is not
+    /// published again.
     fn restart_live(&mut self, why: &str, skip_known: bool) {
-        let site = self.state.site.id.clone();
-        if site.is_empty() || self.state.source != Source::Live {
+        if self.state.mode != Mode::Live {
             return;
         }
-        eprintln!("{} Live {site}: {why}", iso(now_ms()));
+        if let Some(site) = self.polar_site_id().map(str::to_owned) {
+            eprintln!("{} Live {site}: {why}", iso(now_ms()));
+            if let Some(task) = self.live.take() {
+                task.abort();
+            }
+            let cached: Vec<i64> = self.timeline.stored.iter().map(|e| e.start_ms).collect();
+            self.live = self.registry.nexrad.poll(
+                &AdapterTarget::Site {
+                    site_id: site.clone(),
+                },
+                self.events.clone(),
+                cached,
+                skip_known,
+            );
+            self.last_live_restart = Instant::now();
+            return;
+        }
+        if let Some(id) = self.mosaic_source_id().map(str::to_owned)
+            && let Some(task) =
+                self.registry
+                    .poll_mosaic(&id, self.grid_events.clone(), HashSet::new())
+        {
+            eprintln!("{} Live {}: {why}", iso(now_ms()), id);
+            if let Some(old) = self.live.take() {
+                old.abort();
+            }
+            self.live = Some(task);
+            self.last_live_restart = Instant::now();
+        }
+    }
+    fn abort_live(&mut self) {
         if let Some(task) = self.live.take() {
             task.abort();
         }
-        let cached: Vec<i64> = self.timeline.stored.iter().map(|e| e.start_ms).collect();
-        self.live = Some(tokio::spawn(live::poll(
-            site,
-            self.events.clone(),
-            cached,
-            skip_known,
-        )));
-        self.last_live_restart = Instant::now();
+    }
+    fn clear_selection(&mut self) {
+        self.abort_live();
+        self.state.selection = None;
+        self.state.connection.status = ConnectionStatus::Idle;
+        self.state.connection.age_seconds = 0;
+        self.state.frame = None;
+        self.timeline = Timeline::default();
+        self.pending = None;
+        self.frame_ms = None;
+        self.state.playing = false;
+        self.mosaic.clear();
+    }
+    /// Apply a covering-source result: polar `select_site`, mosaic
+    /// `select_source`, or clear when nothing covers.
+    fn apply_covering(&mut self, wanted: Option<Selection>) -> (bool, Option<String>) {
+        match wanted {
+            None => {
+                if self.state.selection.is_none()
+                    && self.state.connection.status == ConnectionStatus::Idle
+                    && self.state.frame.is_none()
+                {
+                    return (false, None);
+                }
+                self.clear_selection();
+                (true, None)
+            }
+            Some(sel) if self.state.selection.as_ref() == Some(&sel) => (false, None),
+            Some(sel) => match sel.target {
+                AdapterTarget::Site { site_id } => self.select_site(&site_id),
+                AdapterTarget::Mosaic => self.select_source(&sel.source_id),
+            },
+        }
     }
     /// Go live on a station: the newest cached frame (or an empty one)
     /// shows at once under `loading`, the timeline is the station's
@@ -630,7 +682,7 @@ impl Shared {
     /// a finished poller is started again so opening the popover recovers
     /// a wedged feed.
     fn select_site(&mut self, id: &str) -> (bool, Option<String>) {
-        if id == self.state.site.id && self.state.source == Source::Live {
+        if self.polar_site_id() == Some(id) && self.state.mode == Mode::Live {
             if self.live.as_ref().is_none_or(JoinHandle::is_finished) {
                 self.restart_live("poller ended; restarting on reselect", true);
             }
@@ -642,6 +694,7 @@ impl Shared {
                 Some(format!("Unknown site {id}; stations are listed in hello.")),
             );
         };
+        self.mosaic.clear();
         // Frames from an earlier session, hours or days old, leave before
         // the timeline is built, so the loop never spans that gap.
         if let Err(e) = self
@@ -688,17 +741,124 @@ impl Shared {
         self.timeline = Timeline::new(listed);
         self.pending = None;
         self.state.playing = false;
-        self.state.site.id = station.id;
-        self.state.source = Source::Live;
+        self.state.selection = Some(Selection {
+            source_id: "nexrad".into(),
+            target: AdapterTarget::Site {
+                site_id: station.id,
+            },
+        });
+        self.state.mode = Mode::Live;
         self.state.connection.status = ConnectionStatus::Loading;
         self.restart_live("polling", false);
         (true, None)
     }
+    fn select_source(&mut self, id: &str) -> (bool, Option<String>) {
+        match self.registry.mosaic_start(id) {
+            Err(source::MosaicStartError::Polar) => (
+                false,
+                Some(format!(
+                    "{id} is a polar source; use select_site to name a station."
+                )),
+            ),
+            Err(source::MosaicStartError::Unknown) => (
+                false,
+                Some(format!("Unknown source {id}; sources are listed in hello.")),
+            ),
+            Ok(source::MosaicStart::Static { frames }) => self.show_static_mosaic(id, frames),
+            Ok(source::MosaicStart::Live { placeholder }) => {
+                self.show_live_mosaic(id, placeholder.map(|p| *p))
+            }
+        }
+    }
+    fn show_static_mosaic(
+        &mut self,
+        id: &str,
+        frames: Vec<(MosaicFrame, Vec<u8>, i64)>,
+    ) -> (bool, Option<String>) {
+        if self.state.selection.as_ref()
+            == Some(&Selection {
+                source_id: id.into(),
+                target: AdapterTarget::Mosaic,
+            })
+        {
+            return (false, None);
+        }
+        if frames.is_empty() {
+            return (false, Some(format!("{id} has no frames.")));
+        }
+        self.abort_live();
+        let mut listed = Vec::new();
+        self.mosaic.clear();
+        for (frame, texture, start_ms) in frames {
+            listed.push(Entry {
+                id: frame.id.clone(),
+                scan_time: frame.scan_time.clone(),
+                start_ms,
+            });
+            if let Err(e) = self.store_mosaic(frame, &texture) {
+                eprintln!("Publishing mosaic {id}: {e}");
+                return (false, Some(format!("Could not publish {id}.")));
+            }
+        }
+        let frame = self.mosaic.last().cloned().unwrap();
+        if let Err(e) = self.show_mosaic(frame) {
+            eprintln!("Publishing mosaic {id}: {e}");
+            return (false, Some(format!("Could not publish {id}.")));
+        }
+        self.frame_ms = listed.last().map(|e| e.start_ms);
+        self.timeline = Timeline::new(listed);
+        self.pending = None;
+        self.state.playing = false;
+        self.state.selection = Some(Selection {
+            source_id: id.into(),
+            target: AdapterTarget::Mosaic,
+        });
+        self.state.mode = Mode::Live;
+        self.state.connection.status = ConnectionStatus::Ok;
+        (true, None)
+    }
+    fn show_live_mosaic(
+        &mut self,
+        id: &str,
+        placeholder: Option<(MosaicFrame, Vec<u8>)>,
+    ) -> (bool, Option<String>) {
+        if self.mosaic_source_id() == Some(id) && self.state.mode == Mode::Live {
+            if self.live.as_ref().is_none_or(JoinHandle::is_finished) {
+                self.restart_live("poller ended; restarting on reselect", false);
+            }
+            return (false, None);
+        }
+        self.abort_live();
+        self.mosaic.clear();
+        self.timeline = Timeline::default();
+        self.pending = None;
+        self.frame_ms = None;
+        self.state.playing = false;
+        self.state.selection = Some(Selection {
+            source_id: id.into(),
+            target: AdapterTarget::Mosaic,
+        });
+        self.state.mode = Mode::Live;
+        self.state.connection.status = ConnectionStatus::Loading;
+        if let Some((placeholder, texture)) = placeholder {
+            if let Err(e) = self
+                .store_mosaic(placeholder, &texture)
+                .and_then(|frame| self.show_mosaic(frame))
+            {
+                eprintln!("Publishing the {id} placeholder: {e}");
+                self.state.frame = None;
+            }
+        } else {
+            self.state.frame = None;
+        }
+        self.restart_live("polling", false);
+        (true, None)
+    }
     /// A pan settled with the map centred at `lat`, `lon`. While following and
-    /// not locked, the nearest station takes over when it beats the current
-    /// one by the hysteresis rule (`handoff`); the switch is a `select_site`,
-    /// so an uncached station opens on the loading view. Locked, or with
-    /// following off, the centre is noted for nothing.
+    /// not locked, covering-source selection runs (`docs/grid-adapters.md`);
+    /// a polar switch is a `select_site`, a mosaic is `select_source`, and
+    /// nothing covering clears the selection. Locked, or with following off,
+    /// the centre is stored for a later unlock.
     fn view_center(&mut self, lat: f64, lon: f64) -> (bool, Option<String>) {
         if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
             return (
@@ -706,16 +866,37 @@ impl Shared {
                 Some("view_center needs lat in [-90, 90] and lon in [-180, 180].".into()),
             );
         }
-        if !self.state.site.follow || self.state.site.locked {
+        self.last_center = Some((lat, lon));
+        if !self.state.navigation.follow || self.state.navigation.locked {
             return (false, None);
         }
-        match handoff(&self.sites, &self.state.site.id, lat, lon) {
-            Some(station) => {
-                let id = station.id.clone();
-                self.select_site(&id)
-            }
-            None => (false, None),
+        let wanted = self.registry.covering_selection(
+            protocol::GeoPoint { lat, lon },
+            self.state.selection.as_ref(),
+        );
+        self.apply_covering(wanted)
+    }
+    fn set_lock(&mut self, enabled: bool) -> (bool, Option<String>) {
+        if enabled && self.state.selection.is_none() {
+            return (false, Some("lock requires a selection.".into()));
         }
+        let changed = set(&mut self.state.navigation.locked, enabled);
+        // Unlock returns to covering-source selection from the last settled
+        // centre (`docs/grid-adapters.md`); without a centre, wait for the
+        // next view_center.
+        if changed
+            && !enabled
+            && self.state.navigation.follow
+            && let Some((lat, lon)) = self.last_center
+        {
+            let wanted = self.registry.covering_selection(
+                protocol::GeoPoint { lat, lon },
+                self.state.selection.as_ref(),
+            );
+            let (switched, err) = self.apply_covering(wanted);
+            return (changed || switched, err);
+        }
+        (changed, None)
     }
     /// A live sweep for the selected station grew or completed: it joins the
     /// timeline (a complete frame in time order, a growing one as the newest
@@ -751,7 +932,9 @@ impl Shared {
             // still has room: evict them from the catalog and the timeline
             // together, on one cutoff, so no listed frame is missing on disk.
             let cutoff = now_ms() - catalog::TTL_MS;
-            if let Err(e) = self.catalog.evict_before(&self.state.site.id, cutoff) {
+            if let Some(site) = self.polar_site_id()
+                && let Err(e) = self.catalog.evict_before(site, cutoff)
+            {
                 eprintln!("Frame catalog: {e}");
             }
             dropped |= self.timeline.expire(cutoff);
@@ -775,6 +958,103 @@ impl Shared {
             } else {
                 Ok(())
             }
+        };
+        self.broadcast();
+        shown
+    }
+    /// A live mosaic frame arrived: store it in the mosaic ring and show
+    /// it while following the newest.
+    fn mosaic_arrived(
+        &mut self,
+        frame: MosaicFrame,
+        texture: Vec<u8>,
+        start_ms: i64,
+    ) -> io::Result<()> {
+        if self.mosaic_source_id().is_none() {
+            return Ok(());
+        }
+        if self.mosaic.iter().any(|f| f.id == frame.id) {
+            if known_sweep_clears_loading(self.state.connection.status) {
+                self.state.connection.status = ConnectionStatus::Ok;
+                self.broadcast();
+            }
+            return Ok(());
+        }
+        let following = self.timeline.following();
+        self.state.connection.status = ConnectionStatus::Ok;
+        self.frame_ms = Some(start_ms);
+        let entry = Entry {
+            id: frame.id.clone(),
+            scan_time: frame.scan_time.clone(),
+            start_ms,
+        };
+        let mut dropped = self.timeline.complete(entry);
+        if let Some(max) = self
+            .mosaic_source_id()
+            .and_then(|id| self.registry.history_max(id))
+        {
+            while self.timeline.stored.len() > max {
+                let old_id = self.timeline.stored[0].id.clone();
+                self.timeline.stored.remove(0);
+                self.mosaic.retain(|f| f.id != old_id);
+                dropped = true;
+            }
+        }
+        let frame = self.store_mosaic(frame, &texture)?;
+        self.mosaic
+            .retain(|f| self.timeline.stored.iter().any(|e| e.id == f.id) || f.id == frame.id);
+        let shown = if following {
+            self.show_mosaic(frame)
+        } else if dropped {
+            self.show_position(0)
+        } else {
+            Ok(())
+        };
+        self.broadcast();
+        shown
+    }
+    /// An earlier mosaic frame joined the ring: timeline only, like NEXRAD
+    /// backfill — the frame on screen stays put unless its pin fell off
+    /// the ring. Bytes are published once here so playback only swaps paths.
+    fn mosaic_backfilled(
+        &mut self,
+        frame: MosaicFrame,
+        texture: Vec<u8>,
+        start_ms: i64,
+    ) -> io::Result<()> {
+        if self.mosaic_source_id().is_none() {
+            return Ok(());
+        }
+        if self.mosaic.iter().any(|f| f.id == frame.id) {
+            return Ok(());
+        }
+        if self.frame_ms.is_none_or(|ms| start_ms > ms) {
+            self.frame_ms = Some(start_ms);
+        }
+        let entry = Entry {
+            id: frame.id.clone(),
+            scan_time: frame.scan_time.clone(),
+            start_ms,
+        };
+        let mut dropped = self.timeline.insert(entry);
+        if let Some(max) = self
+            .mosaic_source_id()
+            .and_then(|id| self.registry.history_max(id))
+        {
+            while self.timeline.stored.len() > max {
+                let old_id = self.timeline.stored[0].id.clone();
+                self.timeline.stored.remove(0);
+                self.mosaic.retain(|f| f.id != old_id);
+                dropped = true;
+            }
+        }
+        self.store_mosaic(frame, &texture)?;
+        self.mosaic
+            .retain(|f| self.timeline.stored.iter().any(|e| e.id == f.id));
+        let shown = if dropped {
+            self.show_position(0)
+        } else {
+            Ok(())
         };
         self.broadcast();
         shown
@@ -868,8 +1148,9 @@ impl Shared {
     fn apply(&mut self, command: Command) -> Option<String> {
         let (changed, rejection) = match command {
             Command::SelectSite { id } => self.select_site(&id),
-            Command::Follow { enabled } => (set(&mut self.state.site.follow, enabled), None),
-            Command::Lock { enabled } => (set(&mut self.state.site.locked, enabled), None),
+            Command::SelectSource { id } => self.select_source(&id),
+            Command::Follow { enabled } => (set(&mut self.state.navigation.follow, enabled), None),
+            Command::Lock { enabled } => self.set_lock(enabled),
             Command::ViewCenter { lat, lon } => self.view_center(lat, lon),
             Command::Seek { id } => self.navigate(|timeline| {
                 timeline.seek(&id).map_err(
@@ -882,7 +1163,14 @@ impl Shared {
             Command::SetProduct {
                 product,
                 elevation_index: 0,
-            } if product == self.state.frame.product => (false, None),
+            } if self
+                .state
+                .frame
+                .as_ref()
+                .is_some_and(|f| f.product() == product) =>
+            {
+                (false, None)
+            }
             Command::SetProduct { .. } => (
                 false,
                 Some("Only reflectivity at elevation index 0 is available in this build.".into()),
@@ -935,7 +1223,11 @@ fn publish(dir: &Path, stem: &str, frame: &str, bytes: &[u8]) -> io::Result<Stri
         .create_new(true)
         .open(&temporary)?;
     file.write_all(bytes)?;
-    file.sync_all()?;
+    // Polar sweeps are small; mosaic COMP PNGs are multi‑MB. fsync on every
+    // publish stalls the daemon under the shared lock during backfill/play.
+    if stem != "mosaic" {
+        file.sync_all()?;
+    }
     fs::rename(temporary, dir.join(&name))?;
     Ok(name)
 }
@@ -981,6 +1273,9 @@ fn decode_and_publish(dir: &Path, template: &Frame, archive: &[u8]) -> io::Resul
 /// record complete frames in the catalog, then hand the frame to the
 /// timeline, which publishes it if it is to be shown, and broadcast. An
 /// event for a station that is no longer selected is dropped.
+fn live_selected(shared: &Shared, site: &str) -> bool {
+    shared.state.mode == Mode::Live && shared.polar_site_id() == Some(site)
+}
 async fn live_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<live::Event>) {
     while let Some(event) = events.recv().await {
         match event {
@@ -992,7 +1287,7 @@ async fn live_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<live::Even
             } => {
                 let (frame, catalog) = {
                     let shared = shared.lock().unwrap();
-                    if shared.state.site.id != site || shared.state.source != Source::Live {
+                    if !live_selected(&shared, &site) {
                         continue;
                     }
                     let Some(station) = shared.sites.iter().find(|s| s.id == site) else {
@@ -1003,6 +1298,7 @@ async fn live_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<live::Even
                         shared.catalog.clone(),
                     )
                 };
+                let site_id = site.clone();
                 let encoded = spawn_blocking(move || -> io::Result<Arrival> {
                     let started = Instant::now();
                     let (texture, lut) = encode(&sweep, &frame)?;
@@ -1039,8 +1335,8 @@ async fn live_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<live::Even
                         let mut shared = shared.lock().unwrap();
                         // A switch while encoding: this frame belongs to the
                         // previous station's timeline, which is gone.
-                        if !arrival.frame.id.starts_with(&shared.state.site.id)
-                            || shared.state.source != Source::Live
+                        if !live_selected(&shared, &site_id)
+                            || !arrival.frame.id.starts_with(&site_id)
                         {
                             continue;
                         }
@@ -1058,7 +1354,7 @@ async fn live_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<live::Even
             } => {
                 let (frame, catalog) = {
                     let shared = shared.lock().unwrap();
-                    if shared.state.site.id != site || shared.state.source != Source::Live {
+                    if !live_selected(&shared, &site) {
                         continue;
                     }
                     let Some(station) = shared.sites.iter().find(|s| s.id == site) else {
@@ -1069,6 +1365,7 @@ async fn live_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<live::Even
                         shared.catalog.clone(),
                     )
                 };
+                let site_id = site.clone();
                 let stored = spawn_blocking(move || -> io::Result<Entry> {
                     let (texture, lut) = encode(&sweep, &frame)?;
                     catalog.store(&site, &frame, sweep.start_ms, &texture, &lut, &provenance)?;
@@ -1090,9 +1387,7 @@ async fn live_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<live::Even
                 match stored {
                     Ok(entry) => {
                         let mut shared = shared.lock().unwrap();
-                        if !entry.id.starts_with(&shared.state.site.id)
-                            || shared.state.source != Source::Live
-                        {
+                        if !live_selected(&shared, &site_id) || !entry.id.starts_with(&site_id) {
                             continue;
                         }
                         if let Err(e) = shared.backfilled(entry) {
@@ -1111,16 +1406,73 @@ async fn live_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<live::Even
         }
     }
 }
+
+fn grid_selected(shared: &Shared, source_id: &str) -> bool {
+    shared.state.mode == Mode::Live && shared.mosaic_source_id() == Some(source_id)
+}
+
+async fn mosaic_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<source::GridEvent>) {
+    while let Some(event) = events.recv().await {
+        match event {
+            source::GridEvent::Frame {
+                source_id,
+                frame,
+                texture,
+                start_ms,
+            } => {
+                let mut shared = shared.lock().unwrap();
+                if !grid_selected(&shared, &source_id) {
+                    continue;
+                }
+                if let Err(e) = shared.mosaic_arrived(*frame, texture, start_ms) {
+                    eprintln!("{source_id} frame: {e}");
+                }
+            }
+            source::GridEvent::Backfill {
+                source_id,
+                frame,
+                texture,
+                start_ms,
+            } => {
+                let mut shared = shared.lock().unwrap();
+                if !grid_selected(&shared, &source_id) {
+                    continue;
+                }
+                if let Err(e) = shared.mosaic_backfilled(*frame, texture, start_ms) {
+                    eprintln!("{source_id} backfill: {e}");
+                }
+            }
+            source::GridEvent::Offline { source_id, reason } => {
+                report_grid(&shared, &source_id, &reason, ConnectionStatus::Offline);
+            }
+            source::GridEvent::Silent { source_id, reason } => {
+                report_grid(&shared, &source_id, &reason, ConnectionStatus::Unavailable);
+            }
+        }
+    }
+}
+
 /// The poller's word on the feed for `site`: `Offline` when the bucket could
 /// not be reached, `Unavailable` when it answered with nothing for the
 /// station. Broadcast if the condition changed; ignored for a station no
 /// longer selected.
 fn report(shared: &Mutex<Shared>, site: &str, reason: &str, condition: ConnectionStatus) {
     let mut shared = shared.lock().unwrap();
-    if shared.state.site.id != site || shared.state.source != Source::Live {
+    if !live_selected(&shared, site) {
         return;
     }
     eprintln!("Live {site}: {reason}");
+    if set(&mut shared.state.connection.status, condition) {
+        shared.broadcast();
+    }
+}
+
+fn report_grid(shared: &Mutex<Shared>, source_id: &str, reason: &str, condition: ConnectionStatus) {
+    let mut shared = shared.lock().unwrap();
+    if !grid_selected(&shared, source_id) {
+        return;
+    }
+    eprintln!("Live {source_id}: {reason}");
     if set(&mut shared.state.connection.status, condition) {
         shared.broadcast();
     }
@@ -1195,13 +1547,21 @@ impl Retirement {
     }
 }
 fn cleanup(dir: &Path, shared: &Mutex<Shared>, retirement: &mut Retirement) -> io::Result<()> {
-    let referenced: HashSet<PathBuf> = shared
-        .lock()
-        .unwrap()
+    let shared = shared.lock().unwrap();
+    // Current state plus every mosaic still in the playback ring. Polar
+    // republishes each tick (new revision); mosaics publish once, so the
+    // ring paths must stay referenced or play steps onto deleted files.
+    let mut referenced: HashSet<PathBuf> = shared
         .state
         .referenced_files()
         .map(|path| dir.join(path))
         .collect();
+    for frame in &shared.mosaic {
+        if !frame.texture.is_empty() {
+            referenced.insert(dir.join(&frame.texture));
+        }
+    }
+    drop(shared);
     let mut present = Vec::new();
     for entry in fs::read_dir(dir.join("tex"))? {
         let entry = entry?;
@@ -1312,7 +1672,8 @@ fn client(
         if shared.clients.len() >= 64 {
             return Err(io::Error::other("Too many clients"));
         }
-        tx.try_send(line(&Message::Hello(&hello()))).unwrap();
+        tx.try_send(line(&Message::Hello(&hello_from(&shared.registry))))
+            .unwrap();
         tx.try_send(snapshot).unwrap();
         id = shared.next_client;
         shared.next_client += 1;
@@ -1549,7 +1910,9 @@ fn serve(dir: PathBuf) -> io::Result<()> {
     // Development runs may start on an archived volume; the shipped daemon
     // starts with no frame and goes live on the first `select_site`.
     let archive = env::var_os(ARCHIVE_ENV).filter(|path| !path.is_empty());
-    let (frame, frame_ms, entries, source, status) = match archive {
+    let registry = source::SourceRegistry::compiled();
+    let sites = registry.hello_sites();
+    let (frame, frame_ms, entries, mode, status, selection) = match archive {
         Some(path) => {
             let bytes = fs::read(&path).map_err(|e| {
                 io::Error::other(format!(
@@ -1558,30 +1921,33 @@ fn serve(dir: PathBuf) -> io::Result<()> {
                 ))
             })?;
             let (frame, ms) = decode_and_publish(&dir, &template, &bytes)?;
+            let site_id = frame.id.split('-').next().unwrap_or_default().to_owned();
             let entry = Entry {
                 id: frame.id.clone(),
                 scan_time: frame.scan_time.clone(),
                 start_ms: ms,
             };
             (
-                frame,
+                Some(FrameWire::Polar(frame)),
                 Some(ms),
                 vec![entry],
-                Source::Archived,
+                Mode::Archived,
                 ConnectionStatus::Ok,
+                Some(Selection {
+                    source_id: "nexrad".into(),
+                    target: AdapterTarget::Site { site_id },
+                }),
             )
         }
         None => {
-            let mut frame = startup_frame(&template);
-            let (texture, lut) = blank_textures(&frame)?;
-            publish_frame(&dir, &mut frame, &texture, &lut)?;
             eprintln!("Ready with no frame; waiting for select_site");
             (
-                frame,
+                None,
                 None,
                 Vec::new(),
-                Source::Live,
-                ConnectionStatus::Loading,
+                Mode::Live,
+                ConnectionStatus::Idle,
+                None,
             )
         }
     };
@@ -1594,19 +1960,24 @@ fn serve(dir: PathBuf) -> io::Result<()> {
     // The frame ring buffer; live frames are written here as they complete.
     let catalog = Arc::new(catalog::Catalog::open(osm::cache_root()?.join("frames"))?);
     let (events, event_rx) = mpsc::channel(16);
+    let (grid_events, grid_rx) = mpsc::channel(32);
     let wake = Arc::new(Notify::new());
     let shared = Arc::new(Mutex::new(Shared {
-        state: initial_state(frame, osm.info(), source, status),
+        state: initial_state(frame, osm.info(), mode, status, selection),
         tiles: tile_store,
         clients: Vec::new(),
         next_client: 0,
         template,
-        sites: hello().sites,
+        sites,
+        registry,
+        last_center: None,
+        mosaic: Vec::new(),
         dir: dir.clone(),
         catalog,
         live: None,
         last_live_restart: Instant::now(),
         events,
+        grid_events,
         frame_ms,
         timeline: Timeline::new(entries),
         pending: None,
@@ -1622,6 +1993,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
     let _guard = runtime.enter();
     let listener = UnixListener::bind(&socket)?;
     runtime.spawn(live_events(shared.clone(), event_rx));
+    runtime.spawn(mosaic_events(shared.clone(), grid_rx));
     runtime.spawn(player(shared.clone(), wake));
     let cleanup_shared = shared.clone();
     runtime.spawn(async move {
@@ -1636,9 +2008,9 @@ fn serve(dir: PathBuf) -> io::Result<()> {
             // Once a second while live, `ageSeconds` and `stale` move on a
             // quiet feed; `broadcast` sends nothing when nothing changed.
             let mut shared = cleanup_shared.lock().unwrap();
-            if shared.state.source == Source::Live {
+            if shared.state.mode == Mode::Live {
                 shared.broadcast();
-                if !shared.state.site.id.is_empty()
+                if shared.polar_site_id().is_some()
                     && should_restart_live(
                         shared.live.as_ref().is_none_or(JoinHandle::is_finished),
                         shared.evidence_age_secs(),
@@ -1654,6 +2026,13 @@ fn serve(dir: PathBuf) -> io::Result<()> {
                         )
                     };
                     shared.restart_live(&why, true);
+                } else if shared
+                    .mosaic_source_id()
+                    .is_some_and(|id| shared.registry.polls(id))
+                    && shared.live.as_ref().is_none_or(JoinHandle::is_finished)
+                    && shared.last_live_restart.elapsed() >= UNAVAILABLE_AFTER
+                {
+                    shared.restart_live("poller ended; restarting", false);
                 }
             }
         }
@@ -2013,7 +2392,7 @@ mod tests {
             assert_eq!(feed_condition(from, None), from);
         }
         // A switch or the poller set these; only a sweep clears them.
-        for held in [Loading, Offline] {
+        for held in [Loading, Offline, Idle] {
             for age in [None, Some(0), Some(stale), Some(unavailable)] {
                 assert_eq!(feed_condition(held, age), held);
             }
@@ -2157,89 +2536,5 @@ mod tests {
         let mut expired = retirement.sweep(present, &referenced, start + RETIRE_AFTER);
         expired.sort();
         assert_eq!(expired, files(&["tex/old.png", "tex/old.png.tmp"]));
-    }
-}
-#[cfg(test)]
-mod handoff_tests {
-    use super::{great_circle_km, handoff, site_table};
-    use crate::protocol::Station;
-
-    fn station(id: &str, lat: f64, lon: f64) -> Station {
-        Station {
-            id: id.into(),
-            name: id.into(),
-            state: String::new(),
-            lat,
-            lon,
-            alt_m: 0.0,
-        }
-    }
-    /// A point `fraction` of the way from `a` to `b` along the parallel.
-    fn between(a: &Station, b: &Station, fraction: f64) -> (f64, f64) {
-        (
-            a.lat + (b.lat - a.lat) * fraction,
-            a.lon + (b.lon - a.lon) * fraction,
-        )
-    }
-
-    #[test]
-    fn distances_match_known_values() {
-        let d = great_circle_km(35.333361, -97.277761, 36.740617, -98.127717);
-        assert!((d - 174.1).abs() < 0.2, "KTLX to KVNX: {d}");
-        assert_eq!(great_circle_km(10.0, 20.0, 10.0, 20.0), 0.0);
-    }
-
-    #[test]
-    fn the_midpoint_between_two_stations_keeps_whichever_is_held() {
-        let a = station("AAAA", 35.0, -97.0);
-        let b = station("BBBB", 35.0, -95.0);
-        let sites = [a.clone(), b.clone()];
-        for fraction in [0.45, 0.5, 0.55] {
-            let (lat, lon) = between(&a, &b, fraction);
-            assert!(
-                handoff(&sites, "AAAA", lat, lon).is_none(),
-                "{fraction} from A"
-            );
-            assert!(
-                handoff(&sites, "BBBB", lat, lon).is_none(),
-                "{fraction} from B"
-            );
-        }
-        // Past the dead band the nearer station takes over, and only it.
-        let (lat, lon) = between(&a, &b, 0.6);
-        assert_eq!(
-            handoff(&sites, "AAAA", lat, lon).map(|s| &s.id[..]),
-            Some("BBBB")
-        );
-        assert!(handoff(&sites, "BBBB", lat, lon).is_none());
-        let (lat, lon) = between(&a, &b, 0.4);
-        assert_eq!(
-            handoff(&sites, "BBBB", lat, lon).map(|s| &s.id[..]),
-            Some("AAAA")
-        );
-        assert!(handoff(&sites, "AAAA", lat, lon).is_none());
-    }
-
-    #[test]
-    fn co_located_stations_need_a_kilometre_to_swap() {
-        // KOUN and KCRI are 300 m apart; near them the ratio alone would flap.
-        let sites = site_table().sites;
-        let koun = sites.iter().find(|s| s.id == "KOUN").unwrap();
-        assert!(handoff(&sites, "KCRI", koun.lat, koun.lon).is_none());
-        assert!(handoff(&sites, "KOUN", koun.lat + 0.002, koun.lon).is_none());
-        // From Oklahoma City's radar the Norman pair is a real hand-off.
-        assert!(handoff(&sites, "KTLX", koun.lat, koun.lon).is_some());
-    }
-
-    #[test]
-    fn the_fixture_home_view_stays_on_ktlx() {
-        let sites = site_table().sites;
-        // The window's home view sits 5 km west and 15 km north of the site.
-        assert!(handoff(&sites, "KTLX", 35.4681, -97.3326).is_none());
-        // A station outside the table (or archived) hands off at once.
-        assert_eq!(
-            handoff(&sites, "ZZZZ", 35.333361, -97.277761).map(|s| &s.id[..]),
-            Some("KTLX")
-        );
     }
 }

@@ -1,9 +1,9 @@
 //! Converts the Natural Earth GeoJSON that `scripts/extract-fixtures.sh`
 //! extracts into the geography the binary embeds (DESIGN.md, basemap tiles,
 //! shipped geography): one polyline blob holding the 1:50m world set and the
-//! 1:10m set clipped to the NEXRAD network envelope, and the populated places
-//! for low-zoom labels. GeoNames cities with population ≥ 5000, clipped to
-//! the same envelope, become the location-picker gazetteer. Reruns only when
+//! 1:10m set clipped to the compiled live-source envelope, and the populated
+//! places for low-zoom labels. GeoNames cities with population ≥ 5000, clipped
+//! to the same envelope, become the location-picker gazetteer. Reruns only when
 //! an input changes.
 //!
 //! Blob layout (`ne.bin`, read by `src/tiles.rs`): the magic `OMNE\x01`, then
@@ -16,6 +16,9 @@
 use serde_json::Value;
 use std::{env, fs, path::Path, process::exit};
 
+#[path = "src/envelope.rs"]
+mod envelope;
+
 const RAW: &str = "../data/raw";
 const THEMES: [(&str, usize); 4] = [
     ("admin_0_boundary_lines_land", 0),
@@ -23,10 +26,8 @@ const THEMES: [(&str, usize); 4] = [
     ("coastline", 1),
     ("lakes", 1),
 ];
-/// Everything the site table reaches (DESIGN.md): 5–75° N, west of 20° W or
-/// east of 120° E, holding Lajes, Guam, Kunsan, and Kadena with their range.
 fn in_envelope(lon: f64, lat: f64) -> bool {
-    (5.0..=75.0).contains(&lat) && (lon <= -20.0 || lon >= 120.0)
+    envelope::in_live_envelope(lon, lat)
 }
 const SCALE: f64 = 1e5;
 
@@ -144,8 +145,9 @@ fn main() {
     write_gazetteer(&raw, Path::new(&out));
 }
 
-/// GeoNames `cities5000` clipped to the NEXRAD envelope, for the location
-/// picker only. Map labels stay on Natural Earth (`places.json`).
+/// GeoNames `cities5000` clipped to the compiled live-source envelope
+/// (NEXRAD plus OPERA), for the location picker only. Map labels stay on
+/// Natural Earth (`places.json`).
 fn write_gazetteer(raw: &Path, out: &Path) {
     let mut admin1 = std::collections::HashMap::new();
     for line in fs::read_to_string(raw.join("admin1CodesASCII.txt"))

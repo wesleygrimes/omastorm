@@ -7,8 +7,11 @@ versioning are in [docs/RELEASING.md](../docs/RELEASING.md).
 
 The binary embeds Natural Earth geography, `data/sites.json`, and
 `data/fixture.json` (the product, palette, and frame template). It embeds no
-archived radar. A daemon starts with no station; `select_site` starts live
-polling. An `OMASTORM_ARCHIVE` scan is decoded at startup and labeled archived.
+archived radar. Compiled radar sources live in `src/source.rs`: PolarFamily
+NEXRAD and each GridFamily mosaic (OPERA today) are registry entries. A
+daemon starts with no selection; `select_site` or `select_source` starts
+the matching poller. An `OMASTORM_ARCHIVE` scan is decoded at startup and
+labeled archived.
 Missing build data
 produces an error naming `scripts/extract-fixtures.sh`; vendored archives and checksums
 are described in [data/README.md](../data/README.md).
@@ -38,7 +41,7 @@ The grace period starts when observed, so a restart preserves recently served
 textures. Transport, commands, state, and texture encoding are defined in
 [docs/protocol.md](../docs/protocol.md).
 
-## Radar
+## NEXRAD
 
 `src/sweep.rs` decodes Level II with the pinned `nexrad-data`, `nexrad-decode`,
 and `nexrad-model` dependencies. It reads through the lowest cut, sorts rays
@@ -88,12 +91,23 @@ The station table's source, retrieval date, and caveats are in `data/sites.json`
 and hello. It includes archived and test sites; membership does not imply live
 availability. An archived scan retains its measured coordinates.
 
+## European mosaic
+
+`src/opera.rs` fetches EUMETNET OPERA maximum-reflectivity composites from
+Open Radar Data's public 24-hour cache. It lists COMP DBZH GeoTIFF objects,
+loads the newest frame, and backfills earlier frames. History is capped at
+12 frames. `src/cog.rs` decodes the raster; the UI samples its native grid.
+Mosaic frames are complete images, with no polar sweep or elevation selector.
+Source selection and the grid contract are in
+[docs/grid-adapters.md](../docs/grid-adapters.md).
+
 ## Basemap
 
 `build.rs` converts Natural Earth lines to a compact polyline blob and embeds
 populated places for map labels. GeoNames cities with population ≥ 5000,
 clipped to the same envelope, are the location-picker gazetteer. The 1:50m
-set is global; the 1:10m set is clipped to the NEXRAD network envelope. `src/tiles.rs` rasterizes these with `tiny-skia`,
+set is global; the 1:10m set is clipped to the compiled live-source envelope
+(`src/envelope.rs`). `src/tiles.rs` rasterizes these with `tiny-skia`,
 using 1:50m below z5 and 1:10m from z5. Segments outside a tile are skipped.
 
 `src/osm.rs` serves OpenMapTiles vector data from z7 through z14, with Natural

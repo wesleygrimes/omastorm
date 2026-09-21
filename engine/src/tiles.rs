@@ -265,8 +265,9 @@ impl Geography {
     }
 }
 
-/// GeoNames cities with population ≥ 5000, clipped to the NEXRAD envelope.
-/// Location search uses this; map labels stay on Natural Earth `places`.
+/// GeoNames cities with population ≥ 5000, clipped to the compiled
+/// live-source envelope. Location search uses this; map labels stay on
+/// Natural Earth `places`.
 fn gazetteer() -> &'static [Place] {
     static GAZETTEER_PLACES: OnceLock<Vec<Place>> = OnceLock::new();
     GAZETTEER_PLACES
@@ -457,40 +458,142 @@ pub fn render(geography: &Geography, key: TileKey) -> io::Result<Vec<u8>> {
 }
 
 /// Ranked gazetteer places matching `query` for the location picker
-/// (GeoNames ≥ 5000 people in the network envelope). Word-start matches
-/// beat substrings; nearer the optional origin, then lower rank, win
-/// within a tier. Empty or blank queries return nothing.
+/// (GeoNames ≥ 5000 people in the network envelope).
+///
+/// `name` or `name, where` — the optional comma clause matches region or
+/// country (ISO code or a common alias such as `uk` / `united kingdom`).
+/// Exact name matches rank by importance then distance so a far capital can
+/// beat a nearby village of the same name; other matches stay nearer-first.
+/// Empty or blank queries return nothing.
 pub fn search_places(query: &str, origin: Option<(f64, f64)>, limit: usize) -> Vec<Label> {
-    let needle = query.trim().to_lowercase();
-    if needle.is_empty() || limit == 0 {
+    let parsed = parse_place_query(query);
+    if parsed.name.is_empty() || limit == 0 {
         return Vec::new();
     }
-    let mut scored: Vec<(u32, f64, u32, &Place)> = Vec::new();
+    let mut scored: Vec<(u32, u32, f64, &Place)> = Vec::new();
     for place in gazetteer() {
+        if let Some(where_) = parsed.where_.as_deref()
+            && !where_matches(place, where_)
+        {
+            continue;
+        }
         let name = place.name.to_lowercase();
-        let tier = if word_start(&name, &needle) {
-            0
-        } else if name.contains(&needle) {
+        let tier = if name == parsed.name {
+            0 // exact
+        } else if word_start(&name, &parsed.name) {
             1
+        } else if name.contains(&parsed.name) {
+            2
         } else {
             continue;
         };
         let distance = origin.map_or(0.0, |(lat, lon)| {
             great_circle_km(lat, lon, place.lat, place.lon)
         });
-        scored.push((tier, distance, place.rank, place));
+        scored.push((tier, place.rank, distance, place));
     }
     scored.sort_by(|a, b| {
-        a.0.cmp(&b.0)
-            .then(a.1.total_cmp(&b.1))
-            .then(a.2.cmp(&b.2))
-            .then(a.3.name.cmp(&b.3.name))
+        a.0.cmp(&b.0).then_with(|| {
+            if a.0 == 0 || parsed.where_.is_some() {
+                // Exact name, or a where clause: importance then distance.
+                a.1.cmp(&b.1)
+                    .then(a.2.total_cmp(&b.2))
+                    .then(a.3.name.cmp(&b.3.name))
+            } else {
+                a.2.total_cmp(&b.2)
+                    .then(a.1.cmp(&b.1))
+                    .then(a.3.name.cmp(&b.3.name))
+            }
+        })
     });
     scored
         .into_iter()
         .take(limit)
         .map(|(_, _, _, place)| place.label())
         .collect()
+}
+
+struct PlaceQuery {
+    name: String,
+    where_: Option<String>,
+}
+
+fn parse_place_query(query: &str) -> PlaceQuery {
+    let trimmed = query.trim();
+    if let Some((name, rest)) = trimmed.split_once(',') {
+        let name = name.trim().to_lowercase();
+        let where_ = rest.trim().to_lowercase();
+        if !name.is_empty() && !where_.is_empty() {
+            return PlaceQuery {
+                name,
+                where_: Some(where_),
+            };
+        }
+    }
+    PlaceQuery {
+        name: trimmed.to_lowercase(),
+        where_: None,
+    }
+}
+
+fn where_matches(place: &Place, where_: &str) -> bool {
+    let region = place.region.to_lowercase();
+    let country = place.country.to_lowercase();
+    if country == where_ || word_start(&region, where_) || region.contains(where_) {
+        return true;
+    }
+    countries_for_where(where_)
+        .iter()
+        .any(|code| country == *code)
+}
+
+/// Map a country/region qualifier to ISO alpha-2 codes used in the gazetteer.
+fn countries_for_where(where_: &str) -> Vec<&'static str> {
+    const ALIASES: &[(&str, &str)] = &[
+        ("uk", "gb"),
+        ("u.k", "gb"),
+        ("u.k.", "gb"),
+        ("united kingdom", "gb"),
+        ("great britain", "gb"),
+        ("britain", "gb"),
+        ("usa", "us"),
+        ("u.s", "us"),
+        ("u.s.", "us"),
+        ("u.s.a", "us"),
+        ("u.s.a.", "us"),
+        ("united states", "us"),
+        ("united states of america", "us"),
+        ("america", "us"),
+        ("canada", "ca"),
+        ("deutschland", "de"),
+        ("germany", "de"),
+        ("france", "fr"),
+        ("spain", "es"),
+        ("italy", "it"),
+        ("italia", "it"),
+        ("netherlands", "nl"),
+        ("holland", "nl"),
+        ("belgium", "be"),
+        ("switzerland", "ch"),
+        ("austria", "at"),
+        ("poland", "pl"),
+        ("norway", "no"),
+        ("sweden", "se"),
+        ("finland", "fi"),
+        ("denmark", "dk"),
+        ("ireland", "ie"),
+        ("portugal", "pt"),
+    ];
+    let mut out = Vec::new();
+    for &(alias, code) in ALIASES {
+        let hit = alias == where_
+            || (where_.len() >= 3 && word_start(alias, where_))
+            || (where_.len() >= 3 && alias.starts_with(where_));
+        if hit && !out.contains(&code) {
+            out.push(code);
+        }
+    }
+    out
 }
 
 fn word_start(text: &str, needle: &str) -> bool {
@@ -742,10 +845,10 @@ mod tests {
                 .map(|p| p.points.len())
                 .sum()
         };
-        // DESIGN.md measured about 116 k vertices for the 1:50m world and
-        // 324 k for the 1:10m envelope.
+        // DESIGN.md measured about 116 k vertices for the 1:50m world; the
+        // 1:10m clip follows the compiled live-source envelope.
         assert!((90_000..200_000).contains(&vertices(&geography.sets[0])));
-        assert!((250_000..450_000).contains(&vertices(&geography.sets[1])));
+        assert!((250_000..800_000).contains(&vertices(&geography.sets[1])));
         for scale in &geography.sets {
             for polyline in scale.layers.iter().flat_map(|l| &l.polylines) {
                 assert!(polyline.points.len() >= 2);
@@ -762,7 +865,7 @@ mod tests {
                 .iter()
                 .map(|&(x, y)| {
                     let (lon, lat) = (f64::from(x) * QUANTUM, f64::from(y) * QUANTUM);
-                    (5.0..=75.0).contains(&lat) && (lon <= -20.0 || lon >= 120.0)
+                    crate::envelope::in_live_envelope(lon, lat)
                 })
                 .collect();
             for i in 0..inside.len() {
@@ -781,6 +884,10 @@ mod tests {
                 .places
                 .iter()
                 .any(|p| p.name == "Oklahoma City" && p.class == "city" && p.rank == 3)
+        );
+        assert!(
+            gazetteer().iter().any(|p| p.name == "Paris"),
+            "OPERA envelope should admit European gazetteer cities"
         );
     }
 
@@ -808,6 +915,37 @@ mod tests {
         assert_eq!(stokesdale[0].region, "North Carolina");
         assert!(gazetteer().len() > 15_000);
         assert!(gazetteer().len() > Geography::embedded().places.len());
+    }
+
+    #[test]
+    fn place_search_accepts_region_and_country_qualifiers() {
+        let kfcx = (37.0244, -80.273969);
+        let bare = search_places("london", Some(kfcx), 4);
+        assert!(
+            bare.iter().any(|p| p.name == "London" && p.country == "GB"),
+            "exact 'London' should surface England by importance even from KFCX: {:?}",
+            bare.iter()
+                .map(|p| (&p.name, &p.region, &p.country))
+                .collect::<Vec<_>>()
+        );
+        let england = search_places("london, england", Some(kfcx), 4);
+        assert_eq!(england[0].name, "London");
+        assert_eq!(england[0].region, "England");
+        assert_eq!(england[0].country, "GB");
+        let uk = search_places("london, uk", Some(kfcx), 4);
+        assert!(uk.iter().any(|p| p.country == "GB" && p.name == "London"));
+        let united = search_places("london, united", Some(kfcx), 8);
+        assert!(
+            united
+                .iter()
+                .any(|p| p.country == "GB" && p.name == "London"),
+            "united → united kingdom alias: {:?}",
+            united
+                .iter()
+                .map(|p| (&p.name, &p.country))
+                .collect::<Vec<_>>()
+        );
+        assert!(search_places("london, antarctica", Some(kfcx), 4).is_empty());
     }
 
     #[test]

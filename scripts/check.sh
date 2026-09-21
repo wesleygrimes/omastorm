@@ -35,6 +35,7 @@ export TMPDIR=$scratch/tmp
 failed=0
 lanes=()
 child=
+plugin_alias=
 cleanup() {
   for pid in "${lanes[@]}"; do kill "$pid" 2> /dev/null; done
   wait 2> /dev/null
@@ -42,6 +43,7 @@ cleanup() {
     [[ -d $runtime ]] && XDG_RUNTIME_DIR=$runtime target/debug/omastorm-engine stop > /dev/null 2>&1
   done
   rm -rf "$scratch"/r-* "$scratch/tmp"
+  [[ -z $plugin_alias ]] || rm -rf "$plugin_alias"
 }
 trap cleanup EXIT
 trap 'kill "${child:-}" 2> /dev/null; exit 130' INT TERM
@@ -77,11 +79,17 @@ tests() { # the compiled tests; the cap ends a hung test and its daemons
   local rc=0
   trap 'kill "${child:-}" 2> /dev/null; exit 143' TERM
   step test timeout 600 bash scripts/cargo.sh test --offline --locked || rc=1
-  if (( gpu )); then
+  if (( gpu )) && [[ $engine_protocol == "$ui_protocol" ]]; then
     step rendering timeout 600 env QT_QPA_PLATFORM=offscreen bash scripts/cargo.sh test --offline --locked -- --ignored rendering || rc=1
   fi
   return $rc
 }
+engine_protocol=$(sed -n 's/^pub const VERSION: u32 = \([0-9][0-9]*\);$/\1/p' engine/src/protocol.rs)
+ui_protocol=$(rg -o 'message\.v !== ([0-9]+)' -r '$1' ui/Engine.qml)
+if [[ -z $engine_protocol || -z $ui_protocol ]]; then
+  echo 'Could not determine engine/UI protocol versions.'
+  exit 1
+fi
 step fmt bash scripts/cargo.sh fmt --check || failed=1
 step clippy bash scripts/cargo.sh clippy --offline --locked --all-targets -- -D warnings || failed=1
 # The engine and the test binaries, so the tests and the windows below
@@ -92,9 +100,29 @@ if step build bash scripts/cargo.sh test --offline --locked --no-run; then
   # OMASTORM_ARCHIVE names the volume (a shipped daemon starts with no frame).
   export OMASTORM_ARCHIVE="$PWD/data/raw/KTLX20130520_201643_V06.gz"
   tests & lanes+=($!)
+  # Validate the candidate independently of the currently shipped client.
+  step engine-binary bash scripts/check-engine-binary.sh target/debug/omastorm-engine || failed=1
+  step engine-release bash scripts/check-engine-release.sh || failed=1
+  # A split protocol release keeps the old UI and its published pin together.
+  # Test that pair in a disposable tree; never overwrite the candidate binary.
+  if [[ $engine_protocol != "$ui_protocol" ]]; then
+    if (( gpu )); then
+      echo 'Candidate GPU checks require a matching UI; run them with the UI PR.'
+      failed=1
+    fi
+    if ! step pinned-ui-setup bash scripts/prepare-pinned-ui-check.sh "$scratch/plugin"; then
+      exit 1
+    fi
+    # Keep runtime socket names below sockaddr_un's limit even in worktrees.
+    # Only the alias lives in /tmp; fixture copies and logs stay under target/.
+    plugin_alias=$(mktemp -d /tmp/omastorm-ui.XXXXXX)
+    ln -s "$scratch/plugin" "$plugin_alias/tree"
+    cd "$plugin_alias/tree" || exit 1
+    echo "UI checks: published pin (protocol v$ui_protocol); candidate engine: v$engine_protocol"
+  fi
   # check-picker and check-keys select stations for real, so they run last.
   lane window check-engine-ui check-map-sites check-map-network check-location check-picker check-keys & lanes+=($!)
-  lane alone check-ip-location check-bind check-link-plugin check-launcher check-theme check-map-tiles test-engine-pin check-engine-release check-popover check-reconnect & lanes+=($!)
+  lane alone check-ip-location check-bind check-link-plugin check-launcher check-theme check-map-tiles test-engine-pin check-popover check-reconnect & lanes+=($!)
   for pid in "${lanes[@]}"; do wait "$pid" || failed=1; done
   lanes=()
 else

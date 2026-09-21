@@ -66,13 +66,21 @@ struct Engine {
 }
 impl Engine {
     fn start() -> Self {
+        Self::spawn(true)
+    }
+    fn start_lean() -> Self {
+        Self::spawn(false)
+    }
+    fn spawn(archive: bool) -> Self {
         let root = scratch_root("engine");
-        let child = Command::new(env!("CARGO_BIN_EXE_omastorm-engine"))
-            .env("OMASTORM_ARCHIVE", ARCHIVE)
-            .env("XDG_RUNTIME_DIR", &root)
-            .stdout(Stdio::null())
-            .spawn()
-            .unwrap();
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_omastorm-engine"));
+        cmd.env("XDG_RUNTIME_DIR", &root).stdout(Stdio::null());
+        if archive {
+            cmd.env("OMASTORM_ARCHIVE", ARCHIVE);
+        } else {
+            cmd.env_remove("OMASTORM_ARCHIVE");
+        }
+        let child = cmd.spawn().unwrap();
         let mut engine = Self { child, root };
         await_daemon(&engine.root, || engine.child.try_wait().unwrap().is_none());
         engine
@@ -114,13 +122,16 @@ fn fixture_transport_and_shared_commands() {
     let mut first = engine.connect();
     let hello = read(&mut first);
     assert_eq!(hello["type"], "hello");
-    assert_eq!(hello["v"], 1);
+    assert_eq!(hello["v"], 2);
     assert_eq!(hello["build"].as_str().unwrap().len(), 16);
     let sites = hello["sites"].as_array().unwrap();
     assert_eq!(sites.len(), 163);
     let mut ids = std::collections::HashSet::new();
     for site in sites {
         assert!(ids.insert(site["id"].as_str().unwrap()));
+        assert_eq!(site["sourceId"], "nexrad");
+        assert_eq!(site["coverage"]["kind"], "circle");
+        assert_eq!(site["coverage"]["radiusKm"].as_f64(), Some(460.0));
         assert!((-90.0..=90.0).contains(&site["lat"].as_f64().unwrap()));
         assert!((-180.0..=180.0).contains(&site["lon"].as_f64().unwrap()));
         assert!(site["altM"].as_f64().unwrap() > -500.0);
@@ -128,9 +139,29 @@ fn fixture_transport_and_shared_commands() {
     for id in ["KTLX", "PABC", "PHKI", "PGUA", "TJUA", "RKJK", "LPLA"] {
         assert!(ids.contains(id));
     }
+    let sources = hello["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 3);
+    assert_eq!(sources[0]["id"], "nexrad");
+    assert_eq!(sources[0]["family"], "polar");
+    assert_eq!(sources[0]["kind"], "site");
+    assert_eq!(sources[1]["id"], "opera");
+    assert_eq!(sources[1]["family"], "grid");
+    assert_eq!(sources[1]["kind"], "mosaic");
+    assert_eq!(sources[1]["selectionPriority"], 10);
+    assert_eq!(sources[1]["attribution"], "EUMETNET OPERA");
+    assert_eq!(sources[1]["coverage"]["kind"], "box");
+    assert_eq!(sources[2]["id"], "fixture-mosaic");
+    assert_eq!(sources[2]["family"], "grid");
+    assert_eq!(sources[2]["kind"], "mosaic");
+    assert_eq!(sources[2]["selectionPriority"], 100);
+    assert_eq!(sources[2]["coverage"]["kind"], "box");
     let initial = read(&mut first);
     assert_eq!(initial["frame"]["scanTime"], "2013-05-20T20:16:43Z");
-    assert_eq!(initial["source"], "archived");
+    assert_eq!(initial["mode"], "archived");
+    assert_eq!(initial["selection"]["sourceId"], "nexrad");
+    assert_eq!(initial["selection"]["target"]["kind"], "site");
+    assert_eq!(initial["selection"]["target"]["siteId"], "KTLX");
+    assert_eq!(initial["frame"]["kind"], "polar");
     // The timeline lists what `seek` accepts: here the one archived frame.
     assert_eq!(
         initial["timeline"],
@@ -183,8 +214,8 @@ fn fixture_transport_and_shared_commands() {
         .write_all(b"true}\n{\"type\":\"follow\",\"enabled\":false}\n")
         .unwrap();
     for client in [&mut first, &mut second] {
-        state(client, |s| s["site"]["locked"] == true);
-        state(client, |s| s["site"]["follow"] == false);
+        state(client, |s| s["navigation"]["locked"] == true);
+        state(client, |s| s["navigation"]["follow"] == false);
     }
     // A station outside the hello table cannot be selected (a table station
     // would go live and reach the network, which no test does). The command
@@ -193,7 +224,7 @@ fn fixture_transport_and_shared_commands() {
     send(&mut second, json!({"type":"select_site","id":"XXXX"}));
     let e = read(&mut second);
     assert_eq!(e["type"], "error");
-    assert_eq!(e["v"], 1);
+    assert_eq!(e["v"], 2);
     assert_eq!(e["command"], "select_site");
     assert!(e["message"].as_str().unwrap().contains("XXXX"));
     first
@@ -224,7 +255,7 @@ fn fixture_transport_and_shared_commands() {
     for client in [&mut first, &mut second] {
         let s = read(client);
         assert_eq!(s["type"], "state");
-        assert_eq!(s["site"]["follow"], true);
+        assert_eq!(s["navigation"]["follow"], true);
         assert!(s.get("error").is_none());
     }
     // A known command with a mistyped field is rejected to its sender alone.
@@ -255,7 +286,7 @@ fn fixture_transport_and_shared_commands() {
     );
     let places = read(&mut first);
     assert_eq!(places["type"], "places");
-    assert_eq!(places["v"], 1);
+    assert_eq!(places["v"], 2);
     assert_eq!(places["query"], "oklahoma");
     let results = places["results"].as_array().unwrap();
     assert_eq!(results[0]["name"], "Oklahoma City");
@@ -276,20 +307,25 @@ fn fixture_transport_and_shared_commands() {
     assert_eq!(e["type"], "error");
     assert_eq!(e["command"], "search_places");
     assert!(e["message"].as_str().unwrap().contains("lat"));
-    // Still locked from above, a settle far from the station hands off to
-    // nothing (the nearest there would go live and reach the network); the
-    // other client's next state is the release.
+    // Still locked, a settle far from the station only stores the centre.
+    // Unlock reselects from that centre (`docs/grid-adapters.md`); put the
+    // centre back on KTLX first so unlock does not go live on another dish
+    // and reach the network.
     send(
         &mut first,
         json!({"type":"view_center","lat":40.0,"lon":-105.0}),
     );
+    send(
+        &mut first,
+        json!({"type":"view_center","lat":35.333,"lon":-97.278}),
+    );
     send(&mut first, json!({"type":"lock","enabled":false}));
     let s = read(&mut second);
     assert_eq!(s["type"], "state");
-    assert_eq!(s["site"]["locked"], false);
-    assert_eq!(s["site"]["follow"], true);
-    assert_eq!(s["site"]["id"], "KTLX");
-    assert_eq!(s["source"], "archived");
+    assert_eq!(s["navigation"]["locked"], false);
+    assert_eq!(s["navigation"]["follow"], true);
+    assert_eq!(s["selection"]["target"]["siteId"], "KTLX");
+    assert_eq!(s["mode"], "archived");
     assert!(
         Command::new(env!("CARGO_BIN_EXE_omastorm-engine"))
             .env("OMASTORM_ARCHIVE", ARCHIVE)
@@ -307,7 +343,7 @@ fn fixture_transport_and_shared_commands() {
     assert!(!duplicate.status.success());
     let mut third = engine.connect();
     assert_eq!(read(&mut third)["type"], "hello");
-    assert_eq!(read(&mut third)["site"]["locked"], false);
+    assert_eq!(read(&mut third)["navigation"]["locked"], false);
 }
 #[test]
 fn crash_recovery_and_immutable_revisions() {
@@ -477,7 +513,7 @@ fn tiles_needed_is_answered_tile_by_tile_to_the_sender() {
     for _ in 0..4 {
         let tile = read(&mut asker);
         assert_eq!(tile["type"], "tile_ready", "{tile}");
-        assert_eq!(tile["v"], 1);
+        assert_eq!(tile["v"], 2);
         assert_eq!(tile["set"], "ne");
         assert_eq!(tile["z"], 5);
         let (x, y) = (tile["x"].as_u64().unwrap(), tile["y"].as_u64().unwrap());
@@ -550,8 +586,8 @@ fn tiles_needed_is_answered_tile_by_tile_to_the_sender() {
     assert_eq!(s["type"], "state", "{s}");
 }
 
-/// Without `OMASTORM_ARCHIVE` the daemon starts lean: no station, no frame
-/// to draw, an empty timeline, `loading` until a client selects a site.
+/// Without `OMASTORM_ARCHIVE` the daemon starts lean: no selection, no frame
+/// to draw, an empty timeline, `idle` until a client selects a covering source.
 #[test]
 fn a_lean_start_has_no_frame_until_a_site_is_selected() {
     let _serial = serial();
@@ -567,19 +603,11 @@ fn a_lean_start_has_no_frame_until_a_site_is_selected() {
     assert_eq!(hello["type"], "hello");
     let initial = read(&mut client);
     assert_eq!(initial["type"], "state");
-    assert_eq!(initial["source"], "live");
-    assert_eq!(initial["site"]["id"], "");
-    assert_eq!(initial["connection"]["status"], "loading");
+    assert_eq!(initial["mode"], "live");
+    assert_eq!(initial["selection"], json!(null));
+    assert_eq!(initial["connection"]["status"], "idle");
     assert_eq!(initial["timeline"], json!([]));
-    assert_eq!(initial["frame"]["id"], "-loading");
-    assert_eq!(initial["frame"]["scanTime"], "");
-    assert_eq!(initial["frame"]["rays"], 1);
-    assert_eq!(initial["frame"]["gates"], 1);
-    assert!(
-        root.join("omastorm")
-            .join(initial["frame"]["texture"].as_str().unwrap())
-            .is_file()
-    );
+    assert_eq!(initial["frame"], json!(null));
     let _ = child.kill();
     let _ = child.wait();
     let _ = fs::remove_dir_all(&root);
@@ -631,4 +659,114 @@ fn launcher_retries_a_slow_hello_within_its_startup_budget() {
     );
     drop(lock);
     fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn select_source_publishes_the_fixture_mosaic_and_rejects_polar_ids() {
+    let _serial = serial();
+    let engine = Engine::start_lean();
+    let mut client = engine.connect();
+    assert_eq!(read(&mut client)["type"], "hello");
+    let initial = read(&mut client);
+    assert_eq!(initial["selection"], json!(null));
+    assert_eq!(initial["frame"], json!(null));
+    send(
+        &mut client,
+        json!({"type":"select_source","id":"fixture-mosaic"}),
+    );
+    let s = state(&mut client, |s| s["frame"]["kind"] == "mosaic");
+    assert_eq!(s["mode"], "live");
+    assert_eq!(s["selection"]["sourceId"], "fixture-mosaic");
+    assert_eq!(s["selection"]["target"]["kind"], "mosaic");
+    assert_eq!(s["connection"]["status"], "ok");
+    let frame = &s["frame"];
+    assert_eq!(frame["kind"], "mosaic");
+    assert_eq!(frame["productName"], "Reflectivity");
+    assert_eq!(frame["status"], "complete");
+    assert!(frame.get("azimuthLut").is_none());
+    assert!(frame.get("rays").is_none());
+    assert_eq!(frame["width"], 16);
+    assert_eq!(frame["height"], 16);
+    assert_eq!(frame["crs"]["kind"], "geographic");
+    assert_eq!(
+        frame["crs"]["ellipsoid"]["semiMajorM"].as_f64(),
+        Some(6_378_137.0)
+    );
+    let path = frame["texture"].as_str().unwrap();
+    assert!(path.starts_with("tex/"));
+    assert!(engine.root.join("omastorm").join(path).is_file());
+    assert!(s["timeline"].as_array().unwrap().len() >= 2);
+    send(&mut client, json!({"type":"select_source","id":"nexrad"}));
+    let e = read(&mut client);
+    assert_eq!(e["type"], "error");
+    assert_eq!(e["command"], "select_source");
+    assert!(e["message"].as_str().unwrap().contains("select_site"));
+    send(
+        &mut client,
+        json!({"type":"select_source","id":"no-such-source"}),
+    );
+    let e = read(&mut client);
+    assert_eq!(e["type"], "error");
+    assert!(e["message"].as_str().unwrap().contains("no-such-source"));
+    // Archive polar still works: this lean daemon has no archive, but
+    // select_site of a table station is the polar path (it would go live).
+    send(&mut client, json!({"type":"select_site","id":"XXXX"}));
+    let e = read(&mut client);
+    assert_eq!(e["command"], "select_site");
+    assert!(e["message"].as_str().unwrap().contains("XXXX"));
+}
+
+#[test]
+fn view_center_idles_without_a_covering_source() {
+    let _serial = serial();
+    let engine = Engine::start_lean();
+    let mut client = engine.connect();
+    read(&mut client);
+    read(&mut client);
+    send(
+        &mut client,
+        json!({"type":"select_source","id":"fixture-mosaic"}),
+    );
+    let s = state(&mut client, |s| {
+        s["selection"]["sourceId"] == "fixture-mosaic"
+    });
+    assert_eq!(s["frame"]["kind"], "mosaic");
+    // The fixture is select_source-only; unlocked follow will not keep it,
+    // even over its own box.
+    send(
+        &mut client,
+        json!({"type":"view_center","lat":0.5,"lon":0.5}),
+    );
+    let s = state(&mut client, |s| s["selection"].is_null());
+    assert_eq!(s["connection"]["status"], "idle");
+    assert_eq!(s["frame"], json!(null));
+    assert_eq!(s["timeline"], json!([]));
+    assert_eq!(s["playing"], false);
+}
+
+#[test]
+fn view_center_over_europe_selects_opera() {
+    let _serial = serial();
+    let engine = Engine::start_lean();
+    let mut client = engine.connect();
+    read(&mut client);
+    read(&mut client);
+    send(
+        &mut client,
+        json!({"type":"view_center","lat":51.5,"lon":-0.1}),
+    );
+    let s = state(&mut client, |s| s["selection"]["sourceId"] == "opera");
+    assert_eq!(s["selection"]["target"]["kind"], "mosaic");
+    assert!(
+        s["connection"]["status"] == "loading"
+            || s["connection"]["status"] == "ok"
+            || s["connection"]["status"] == "offline"
+            || s["connection"]["status"] == "unavailable"
+    );
+    if s["connection"]["status"] == "loading" {
+        assert_eq!(s["frame"]["kind"], "mosaic");
+        assert_eq!(s["frame"]["id"], "opera-loading");
+        assert_eq!(s["frame"]["scanTime"], "");
+        assert_eq!(s["timeline"], json!([]));
+    }
 }

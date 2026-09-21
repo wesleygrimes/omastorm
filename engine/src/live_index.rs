@@ -19,7 +19,7 @@ pub const LIST_LIMIT: usize = 1000;
 const ARCHIVE_HOST: &str = "https://unidata-nexrad-level2.s3.amazonaws.com";
 const CHUNK_HOST: &str = "https://unidata-nexrad-level2-chunks.s3.amazonaws.com";
 /// S3 list of 1000 keys is far smaller; reject before retaining overflow.
-const LISTING_MAX: usize = 1 << 20;
+pub(crate) const LISTING_MAX: usize = 1 << 20;
 /// Archive II volume header: format, slot, date, time, ICAO.
 const HEADER_LEN: usize = 24;
 /// Biggest live chunk kept in memory. A start chunk is the 24-byte header

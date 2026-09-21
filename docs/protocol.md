@@ -1,7 +1,9 @@
 # Engine to UI protocol
 
-Version 1. The Rust engine (`omastorm-engine`) is the server. The Quickshell UI is a thin client. Radar values never
-travel over this protocol; they go to the GPU as texture files.
+Version 2. The Rust engine (`omastorm-engine`) is the server. The Quickshell UI is a thin client. Radar values never
+travel over this protocol; they go to the GPU as texture files. GridFamily mosaics join PolarFamily
+sweeps on this version; a v1 client reports an incompatible-version error instead of drawing a grid.
+See [grid-adapters.md](grid-adapters.md) for source registry, coverage, and CRS.
 
 ## Transport
 
@@ -9,29 +11,52 @@ travel over this protocol; they go to the GPU as texture files.
 - Newline-delimited JSON, UTF-8, one object per line, no pretty printing.
 - Multiple clients may connect (window and popover). Every client receives every
   broadcast. Commands from any client apply to the shared state.
-- Every message has `"type"`. Engine messages also carry `"v": 1`. A client that
+- Every message has `"type"`. Engine messages also carry `"v": 2`. A client that
   sees an unknown `v` shows an error and stops rendering radar.
 - Key order within an object is not significant; clients read keys by name.
 
 ## Engine messages
 
 `hello` is sent once on connect, followed immediately by a full `state`.
+Polar sites remain in `hello.sites` with `sourceId` and circle `coverage`.
+Mosaics are compiled sources in `hello.sources`, not site rows.
 
 ```json
-{"type":"hello","v":1,"engine":"0.1.1",
- "sites":[{"id":"KTLX","name":"Oklahoma City","state":"OK",
-           "lat":35.33306,"lon":-97.27748,"altM":388.0}]}
+{"type":"hello","v":2,"engine":"0.1.13",
+ "sites":[{"id":"KTLX","sourceId":"nexrad",
+           "name":"Oklahoma City","state":"OK",
+           "lat":35.33306,"lon":-97.27748,"altM":388.0,
+           "coverage":{"kind":"circle","radiusKm":460}}],
+ "sources":[{"id":"nexrad","family":"polar","kind":"site",
+             "defaultProductClass":"reflectivity",
+             "name":"NOAA NEXRAD","attribution":"NOAA NEXRAD"},
+            {"id":"opera","family":"grid","kind":"mosaic",
+             "defaultProductClass":"reflectivity",
+             "name":"EUMETNET OPERA","attribution":"EUMETNET OPERA",
+             "selectionPriority":10,
+             "coverage":{"kind":"box","north":70,"south":32,
+                         "east":50,"west":-30}},
+            {"id":"fixture-mosaic","family":"grid","kind":"mosaic",
+             "defaultProductClass":"reflectivity",
+             "name":"Fixture mosaic",
+             "attribution":"Omastorm fixture",
+             "selectionPriority":100,
+             "coverage":{"kind":"box","north":1,"south":0,
+                         "east":1,"west":0}}]}
 ```
 
 `state` is the complete current state, re-sent whenever anything in it changes.
 It is small (a few KB) so clients replace rather than merge.
 
 ```json
-{"type":"state","v":1,
- "source":"archived",
- "connection":{"status":"ok","ageSeconds":0},
- "site":{"id":"KTLX","follow":true,"locked":false},
- "frame":{"id":"KTLX-20130520T201643Z-e0",
+{"type":"state","v":2,
+ "mode":"live",
+ "navigation":{"follow":true,"locked":false},
+ "selection":{"sourceId":"nexrad",
+              "target":{"kind":"site","siteId":"KTLX"}},
+ "connection":{"status":"ok","ageSeconds":24},
+ "frame":{"kind":"polar",
+          "id":"KTLX-20130520T201643Z-e0",
           "product":"REF","productName":"Reflectivity","units":"dBZ","elevationDeg":0.48,
           "scanTime":"2013-05-20T20:16:43Z","sweepEnd":"2013-05-20T20:17:00Z",
           "status":"complete",
@@ -46,17 +71,24 @@ It is small (a few KB) so clients replace rather than merge.
  "playing":false}
 ```
 
-- `source`: `archived` | `live`. The daemon starts `live` with no station:
-  `site.id` is empty, `connection.status` is `loading`, the frame is the
-  placeholder below, and the first `select_site` goes live on a station.
+- `mode`: `archived` | `live`. Takes over v1's `state.source`. The daemon
+  starts `live` with no selection: `selection` is `null`, `connection.status`
+  is `idle`, `frame` is `null`, the timeline is empty, and `playing` is false.
   Started with `OMASTORM_ARCHIVE` naming a Level II volume (development and
-  the checks) it starts `archived` on that scan instead.
-- `connection.status`: `ok` | `stale` | `unavailable` | `offline` | `loading`.
+  the checks) it starts `archived` on that polar scan instead.
+- `navigation`: `{follow, locked}`. Valid even with no selection. Lock pins the
+  exact `selection` (source plus polar site or mosaic), not merely a station
+  id. `locked: true` requires a non-null selection.
+- `selection`: `{sourceId, target}` or `null`. A polar target is
+  `{kind: "site", siteId}`; a mosaic is `{kind: "mosaic"}`. Attribution and
+  mosaic coverage come from the matching `hello.sources` row.
+- `connection.status`: `ok` | `stale` | `unavailable` | `offline` | `loading` | `idle`.
   `ageSeconds` is the age of the newest complete frame (0 while there is
   none). `connection` is the only place a lasting error condition lives; it
-  describes the engine's data path and no client command can clear it. In live
-  mode, the status is `loading` from a `select_site` until the station's first sweep
-  arrives or the poller reports; then, with the feed reachable, the status
+  describes the engine's data path and no client command can clear it.
+  `idle` is no active selection. In live mode, the status is `loading` from a
+  `select_site` until the station's first sweep arrives or the poller reports;
+  then, with the feed reachable, the status
   follows the age of the newest radial the station has published (the sweep
   in progress while one paints, else the newest complete frame): `ok` under
   10 minutes, `stale` from 10 minutes, `unavailable` from 30 minutes (the
@@ -70,42 +102,54 @@ It is small (a few KB) so clients replace rather than merge.
 - `timeline` is every frame a client can `seek` to, oldest first:
   the station's complete frames from its catalog (the newest 60) and, while a
   sweep is painting, that sweep as the last entry with `status` `partial`
-  (`complete` otherwise). `frame` is one of them. The engine owns the
+  (`complete` otherwise). Mosaic sources publish their complete frames the
+  same way. `frame` is one of them, or `null` with no selection. The engine owns the
   position: a new sweep replaces `frame` while it is the newest entry, and
   leaves it alone once a client stepped or sought elsewhere, until a step or
   seek lands on the newest entry again. Archived, the timeline is the one
-  archived frame; before any `select_site` it is empty.
+  archived frame; with no selection it is empty.
 - `playing` is true while the engine advances `frame` one complete timeline
   entry at a time, oldest after newest, pacing the loop to about ten seconds
   (250 ms to 1 s per frame, by how many there are). The sweep in progress is not part of
   the loop.
-- `frame.status`: `complete` | `partial`. Partial frames are live sweeps still
+- `frame` is internally tagged `kind: "polar"` | `"mosaic"`, or `null`. Polar
+  frames keep today's sweep fields (`azimuthLut`, rays, gates, scale, offset,
+  elevation, site geometry). Mosaic frames carry georeference (`width`,
+  `height`, `crs`, `geotransform`) and omit polar-only keys; `status` is
+  `complete`. Grid `bounds` are JSON numbers and may be fractional.
+- `frame.status`: `complete` | `partial`. Partial frames are live polar sweeps still
   being filled; the texture path changes on every republish (revision suffix).
-  While a station's first live sweep loads and nothing is cached, the frame is
+  While a station's first live sweep loads and nothing is cached, the polar frame is
   a placeholder that draws nothing: `id` `<SITE>-loading`, `status` `partial`,
   `rays` 1, `gates` 1, empty `scanTime` and `sweepEnd`, the station table's
-  coordinates. Before any station is selected the placeholder is `-loading`, sited
-  at the middle of the contiguous network.
+  coordinates. A live mosaic (`select_source` opera) does the same with
+  `id` `opera-loading`, `kind` `mosaic`, empty `scanTime`, and a 1×1 texture,
+  so legend and tick-strip chrome stay up until the first COMP arrives.
+  There is no placeholder with no selection: `frame` is `null`.
 - Paths are relative to `$XDG_RUNTIME_DIR/omastorm/` and have the form
   `tex/<file>`: the literal prefix `tex/` and exactly one further segment that
   is not empty, `.`, or `..` and contains no `/`, backslash, or NUL. The file
   name is otherwise free and carries no meaning to the UI. Both ends apply this
   one rule: the engine refuses to publish a path that breaks it, and the UI
-  rejects a `state` whose path breaks it.
+  rejects a `state` whose path breaks it. Polar frames require `texture` and
+  `azimuthLut`; mosaic frames require `texture` only.
 - `frame.product` is the code commands use; `frame.productName` is its display
   name. The engine owns product, unit, and site vocabulary; the UI only cases
-  and lays out what it receives, and looks the site name up in `hello.sites`.
+  and lays out what it receives, looks the site name up in `hello.sites`, and
+  shows the active source's `attribution` from `hello.sources`. Mosaic chrome
+  omits tilt.
 - `frame.palette` has one color per class, in class order, and `frame.bounds`
   has one more entry than `palette`: class `i` covers `bounds[i]` up to
   `bounds[i+1]` in `units`. The UI uploads `palette` to the GPU as a
   `palette.length` × 1 texture and labels the legend from `bounds` (first band
   `<bounds[1]`, last band `bounds[n-1]+`), so any band count works and radar
   and legend share one source of color.
-- `frame.scale` and `frame.offset` are the moment's own encoding:
+- Polar `frame.scale` and `frame.offset` are the moment's own encoding:
   value = (code − offset) / scale in `units`. The UI uses them to place the
   weak-return floor, a view setting in `units`, in code units for the shader
   (lookup rule, below). Both are 0 on the loading placeholder, which
-  therefore has no floor.
+  therefore has no floor. Mosaic frames omit them; the weak-return floor is
+  disabled on the grid path.
 
 `error` answers one command from one client. It goes only to the client that
 sent the command, `state` does not change, and nothing is broadcast, so a
@@ -116,7 +160,7 @@ its next command, ahead of any `connection` condition; a `tiles_needed` the
 map sends on its own does not count as the user's next command.
 
 ```json
-{"type":"error","v":1,"command":"select_site",
+{"type":"error","v":2,"command":"select_site",
  "message":"Unknown site XXXX; stations are listed in hello."}
 ```
 
@@ -129,7 +173,7 @@ Earth) otherwise, in which case the tile is announced again under a new path
 when `osm` becomes available. `labels` are the tile's places for the overlay.
 
 ```json
-{"type":"tile_ready","v":1,"set":"osm","z":11,"x":470,"y":808,
+{"type":"tile_ready","v":2,"set":"osm","z":11,"x":470,"y":808,
  "path":"tiles/osm/11/470/808-3f9a1c2e.png",
  "labels":[{"name":"Moore","lat":35.3395,"lon":-97.4867,"class":"city","rank":8}]}
 ```
@@ -160,6 +204,7 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
 
 ```json
 {"type":"select_site","id":"KTLX"}
+{"type":"select_source","id":"fixture-mosaic"}
 {"type":"follow","enabled":true}
 {"type":"lock","enabled":false}
 {"type":"view_center","lat":35.4,"lon":-97.5}
@@ -169,35 +214,48 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
 {"type":"tiles_needed","z":11,"x0":469,"y0":807,"x1":472,"y1":810}
 ```
 
-- `select_site` names a station from `hello.sites`. The engine goes
-  live on it: the newest frame in its catalog (the per-station ring buffer) or
-  the loading placeholder shows at once with `connection.status` `loading`,
-  and a poller replaces the previous station's; the same station again changes
-  nothing. An id outside the table is answered with an `error`.
+- `select_site` is polar-only: a station from `hello.sites`, implying its
+  source. The engine goes live on it: the newest frame in its catalog (the
+  per-station ring buffer) or the loading placeholder shows at once with
+  `connection.status` `loading`, and a poller replaces the previous station's;
+  the same station again changes nothing. An id outside the table is answered
+  with an `error`.
+- `select_source` names a mosaic id from `hello.sources`. That mosaic is the
+  whole target. A polar id is answered with an `error` instructing the client
+  to use `select_site`. Unknown ids error against the source table. Used to
+  restore a remembered mosaic lock, when the user chooses a live mosaic from
+  the radar list, and by tests.
 - `view_center` is sent when a pan or zoom settles and the centre moved, not
-  per frame. With `follow` on and `lock` off, the engine hands off to the
-  station nearest the centre by great-circle distance when that station beats
-  the current one by the hysteresis rule (closer than 0.8 of the current
-  station's distance and by at least 1 km, so a centre between two stations
-  keeps whichever it has; the dead band is about a twentieth of the spacing
-  either side of the midpoint); the hand-off is a `select_site`, so `state`
-  is broadcast and an uncached station opens on the loading placeholder.
-  Locked or not following, or when the current station stays nearest,
-  nothing changes and nothing is sent. The engine never moves the camera:
-  the centre is the user's. A latitude outside ±90 or a longitude outside
-  ±180 is answered with an `error`. `lock` and `follow` are shared flags;
-  releasing the lock hands off on the next settle, not at once.
+  per frame. With `follow` on and `lock` off, the engine selects the covering
+  source at that centre ([grid-adapters.md](grid-adapters.md), Source
+  selection): polar hysteresis while the held dish still covers, an immediate
+  nearest covering polar dish once it does not, PolarFamily over any grid,
+  then grid product class and `selectionPriority`. The polar hand-off is a
+  `select_site`, so `state` is broadcast and an uncached station opens on the
+  loading placeholder. With no covering source the engine cancels the poller
+  and publishes `selection: null`, `connection.status` `idle`, `frame: null`,
+  an empty timeline, and `playing: false`. Locked or not following, or when
+  the held selection still covers under those rules, nothing changes and
+  nothing is sent. The engine never moves the camera: the centre is the
+  user's. A latitude outside ±90 or a longitude outside ±180 is answered with
+  an `error`. `lock` and `follow` are shared flags; releasing the lock hands
+  off on the next settle, not at once.
 - `search_places` ranks the embedded gazetteer (GeoNames populated places
-  with population ≥ 5000, clipped to the NEXRAD network envelope) for the
+  with population ≥ 5000, clipped to the compiled live-source envelope) for the
   location picker and is answered with `places` to the sender only, like
   `tile_ready`. Map labels stay on Natural Earth. `query` is required;
-  optional `lat` and `lon` order nearer matches first. Word-start matches
-  beat substrings. At most eight results. A blank query returns no results.
-  A latitude or longitude outside range is answered with an `error`. The
-  reply is not shared state:
+  optional `lat` and `lon`. Exact name matches order by importance then
+  distance so a far capital can beat a nearby namesake; other matches stay
+  nearer-first. Word-start matches beat substrings. A comma clause
+  (`london, england` or `london, uk`) filters by region or country (ISO
+  code or a common alias). At most eight results. A blank query returns
+  no results. A latitude or longitude outside range is answered with an
+  `error`. `search_places` still returns gazetteer `place` rows. The UI radar
+  list adds live mosaic sources from `hello.sources`; a mosaic is not a
+  `hello.sites` row. The reply is not shared state:
 
 ```json
-{"type":"places","v":1,"query":"jacksonville",
+{"type":"places","v":2,"query":"jacksonville",
  "results":[{"name":"Jacksonville","lat":30.3322,"lon":-81.6749,"class":"city","rank":8,
              "region":"Florida","country":"US"}]}
 ```
@@ -268,6 +326,19 @@ derives from `frame.scale` and `frame.offset` for the floor in `units`
 draws nothing, exactly as a blank cell does; 0 is no floor. Folded and
 below-threshold codes are never weak, and the legend names the hidden range.
 
+**Mosaic texture (`frame.texture` when `kind` is `mosaic`):** PNG, RGBA,
+width × height as published. R is palette class + 1 (0 draws nothing), G bit
+0 is missing, G bit 1 is undetect, B is 0, A is 255. No `azimuthLut`.
+
+**Grid lookup (`ui/shaders/grid.frag`):** each 3 px screen cell becomes WGS84
+longitude and latitude from the same Web Mercator camera, then the grid CRS
+(optional inverse Helmert, then the named projection), then
+`inverse(geotransform)` to a pixel. Coordinates outside
+`[0, width) × [0, height)` draw nothing. Geographic, Mercator, transverse
+Mercator, polar stereographic, Lambert conformal conic, and Lambert azimuthal
+equal area are implemented; any other `crs.kind` draws nothing. The
+weak-return floor is disabled.
+
 **Tiles:** `$XDG_RUNTIME_DIR/omastorm/tiles/<set>/<z>/<x>/<y>-<gen>.png`,
 Web Mercator XYZ numbering, 512 px, RGBA antialiased masks tinted by the
 UI's shader (`ui/shaders/tile.frag`):
@@ -336,9 +407,10 @@ paints live.
 `~/.config/omastorm/config.toml` and
 `$XDG_STATE_HOME/omastorm/state.json` are read by the UI, never by the engine.
 Explicit preferences override remembered view state. The UI resolves the map
-center and radar lock independently, then sends `select_site`, `lock`,
-`follow`, and settled `view_center` commands as needed. Unlocked navigation
-uses follow; locked navigation preserves the selected radar. Treatment and
+center and radar lock independently, then sends `select_site` or
+`select_source`, `lock`, `follow`, and settled `view_center` commands as
+needed. Unlocked navigation uses follow; locked navigation preserves the
+exact selection. Treatment and
 the weak-return floor stay in the UI. File ownership, launch precedence,
 onboarding, and validation are in [configuration.md](configuration.md).
 

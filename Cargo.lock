@@ -913,9 +913,10 @@ dependencies = [
 
 [[package]]
 name = "omastorm-engine"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "chrono",
+ "flate2",
  "geo-types",
  "libc",
  "mvt-reader",

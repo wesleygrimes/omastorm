@@ -1,4 +1,4 @@
-//! Wire types for `docs/protocol.md`, version 1. Objects serialize in
+//! Wire types for `docs/protocol.md`, version 2. Objects serialize in
 //! declaration order; clients read keys by name, so order is not significant.
 #![allow(
     dead_code,
@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
 /// Engine to client. Borrows so a snapshot never clones the state tree.
 #[derive(Serialize)]
@@ -83,9 +83,82 @@ pub struct Hello {
     pub pid: u32,
     pub build: String,
     pub sites: Vec<Station>,
+    pub sources: Vec<SourceInfo>,
     pub sites_source: String,
     pub sites_retrieved: String,
     pub sites_notes: String,
+}
+
+/// One compiled adapter listed in `hello.sources` (`docs/grid-adapters.md`).
+#[derive(Serialize, PartialEq, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceInfo {
+    pub id: String,
+    pub family: Family,
+    pub kind: Kind,
+    pub default_product_class: ProductClass,
+    pub name: String,
+    pub attribution: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_priority: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub coverage: Option<Coverage>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum Family {
+    Polar,
+    Grid,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum Kind {
+    Site,
+    Mosaic,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Debug, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "camelCase")]
+pub enum ProductClass {
+    Other,
+    PrecipitationRate,
+    Reflectivity,
+}
+
+/// A lat/lon vertex on the wire (`docs/grid-adapters.md`).
+#[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Debug)]
+pub struct GeoPoint {
+    pub lat: f64,
+    pub lon: f64,
+}
+
+/// Adapter-declared coverage. Site circles omit lat/lon on the wire (those
+/// live on `hello.sites`); mosaic boxes and polygons carry their own.
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum Coverage {
+    Circle {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lat: Option<f64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lon: Option<f64>,
+        radius_km: f64,
+    },
+    Box {
+        north: f64,
+        south: f64,
+        east: f64,
+        west: f64,
+    },
+    Polygon {
+        vertices: Vec<GeoPoint>,
+    },
 }
 
 /// The launcher's view of a running daemon's hello. Only the fields needed to
@@ -112,25 +185,64 @@ pub struct SiteTable {
 #[serde(rename_all = "camelCase")]
 pub struct Station {
     pub id: String,
+    #[serde(default)]
+    pub source_id: String,
     pub name: String,
     pub state: String,
     pub lat: f64,
     pub lon: f64,
     pub alt_m: f64,
+    #[serde(default = "nexrad_site_coverage")]
+    pub coverage: Coverage,
+}
+
+fn nexrad_site_coverage() -> Coverage {
+    Coverage::Circle {
+        lat: None,
+        lon: None,
+        radius_km: 460.0,
+    }
 }
 
 #[derive(Serialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct State {
     pub v: u32,
-    pub source: Source,
+    pub mode: Mode,
+    pub navigation: Navigation,
+    pub selection: Option<Selection>,
     pub connection: Connection,
-    pub site: SiteSelection,
     pub timeline: Vec<TimelineEntry>,
-    pub frame: Frame,
+    pub frame: Option<FrameWire>,
     /// The tile sources (`docs/protocol.md`, `tile_ready`).
     pub basemap: Basemap,
     pub playing: bool,
+}
+
+/// Follow / lock flags; valid even with no selection (`docs/grid-adapters.md`).
+#[derive(Serialize, PartialEq, Clone, Debug)]
+pub struct Navigation {
+    pub follow: bool,
+    pub locked: bool,
+}
+
+/// The exact thing being viewed: a compiled source plus its polar site or mosaic.
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Selection {
+    pub source_id: String,
+    pub target: AdapterTarget,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum AdapterTarget {
+    Site { site_id: String },
+    Mosaic,
 }
 
 /// `state.basemap`: what draws the tiles and, for `osm`, whether it can.
@@ -204,15 +316,20 @@ impl State {
     /// reading. Texture cleanup retires a file 30 s after it leaves this set,
     /// so any new path field (azimuth tables, timeline frames) is added here.
     pub fn referenced_files(&self) -> impl Iterator<Item = &str> {
-        [self.frame.texture.as_str(), self.frame.azimuth_lut.as_str()]
-            .into_iter()
-            .filter(|path| !path.is_empty())
+        match &self.frame {
+            Some(FrameWire::Polar(frame)) => {
+                [frame.texture.as_str(), frame.azimuth_lut.as_str()].into_iter()
+            }
+            Some(FrameWire::Mosaic(frame)) => [frame.texture.as_str(), ""].into_iter(),
+            None => ["", ""].into_iter(),
+        }
+        .filter(|path| !path.is_empty())
     }
 }
 
 #[derive(Serialize, PartialEq, Clone, Copy, Debug)]
 #[serde(rename_all = "lowercase")]
-pub enum Source {
+pub enum Mode {
     Archived,
     Live,
 }
@@ -230,7 +347,7 @@ pub struct Connection {
 /// radial received at each snapshot, so they only ever say how quiet a
 /// reachable feed has been; `Loading` is set by a site switch and `Offline`
 /// by the poller when the bucket cannot be reached, and the next live sweep
-/// clears both.
+/// clears both. `Idle` is no active selection (`docs/grid-adapters.md`).
 #[derive(Serialize, PartialEq, Clone, Copy, Debug)]
 #[serde(rename_all = "lowercase")]
 pub enum ConnectionStatus {
@@ -239,13 +356,7 @@ pub enum ConnectionStatus {
     Unavailable,
     Offline,
     Loading,
-}
-
-#[derive(Serialize, PartialEq, Debug)]
-pub struct SiteSelection {
-    pub id: String,
-    pub follow: bool,
-    pub locked: bool,
+    Idle,
 }
 
 /// One frame a client can `seek` to (`docs/protocol.md`, `state.timeline`):
@@ -259,9 +370,206 @@ pub struct TimelineEntry {
     pub status: FrameStatus,
 }
 
-/// `engine/data/fixture.json` plus what the engine decodes and publishes: the
-/// polar sweep texture, its azimuth lookup, and the gate geometry the shader
-/// needs to place every gate (`docs/protocol.md`, texture files).
+/// Polar sweep or georeferenced mosaic (`docs/grid-adapters.md`). Internally
+/// tagged with `kind`. Polar is today's sweep frame; mosaic omits polar-only
+/// keys. The fixture file deserializes as [`Frame`], not this enum.
+#[derive(Serialize, Clone, Debug, PartialEq)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum FrameWire {
+    Polar(Frame),
+    Mosaic(MosaicFrame),
+}
+
+impl FrameWire {
+    pub fn id(&self) -> &str {
+        match self {
+            Self::Polar(frame) => &frame.id,
+            Self::Mosaic(frame) => &frame.id,
+        }
+    }
+    pub fn product(&self) -> &str {
+        match self {
+            Self::Polar(frame) => &frame.product,
+            Self::Mosaic(frame) => &frame.product,
+        }
+    }
+    pub fn scan_time(&self) -> &str {
+        match self {
+            Self::Polar(frame) => &frame.scan_time,
+            Self::Mosaic(frame) => &frame.scan_time,
+        }
+    }
+    pub fn as_polar(&self) -> Option<&Frame> {
+        match self {
+            Self::Polar(frame) => Some(frame),
+            Self::Mosaic(_) => None,
+        }
+    }
+    pub fn as_polar_mut(&mut self) -> Option<&mut Frame> {
+        match self {
+            Self::Polar(frame) => Some(frame),
+            Self::Mosaic(_) => None,
+        }
+    }
+}
+
+/// GridFamily frame (`docs/grid-adapters.md`). Bounds are JSON numbers and
+/// may be fractional; polar frames keep integer bounds.
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct MosaicFrame {
+    pub id: String,
+    pub product: String,
+    pub product_name: String,
+    pub units: String,
+    pub scan_time: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sweep_end: Option<String>,
+    pub status: FrameStatus,
+    #[serde(default)]
+    pub texture: String,
+    pub width: u32,
+    pub height: u32,
+    pub crs: Crs,
+    pub geotransform: [f64; 6],
+    pub palette: Vec<String>,
+    pub bounds: Vec<f64>,
+}
+
+/// Tagged CRS: WGS84 lon/lat in, east-then-north x/y out (`docs/grid-adapters.md`).
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum Crs {
+    Geographic {
+        ellipsoid: Ellipsoid,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        datum_transform: Option<DatumTransform>,
+    },
+    Mercator {
+        ellipsoid: Ellipsoid,
+        lon0_deg: f64,
+        scale: f64,
+        false_easting_m: f64,
+        false_northing_m: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        datum_transform: Option<DatumTransform>,
+    },
+    TransverseMercator {
+        ellipsoid: Ellipsoid,
+        lat0_deg: f64,
+        lon0_deg: f64,
+        scale: f64,
+        false_easting_m: f64,
+        false_northing_m: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        datum_transform: Option<DatumTransform>,
+    },
+    PolarStereographic {
+        ellipsoid: Ellipsoid,
+        lat0_deg: f64,
+        lon0_deg: f64,
+        scale: f64,
+        false_easting_m: f64,
+        false_northing_m: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        datum_transform: Option<DatumTransform>,
+    },
+    LambertConformalConic {
+        ellipsoid: Ellipsoid,
+        lat0_deg: f64,
+        lon0_deg: f64,
+        standard_parallel1_deg: f64,
+        standard_parallel2_deg: f64,
+        false_easting_m: f64,
+        false_northing_m: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        datum_transform: Option<DatumTransform>,
+    },
+    LambertAzimuthalEqualArea {
+        ellipsoid: Ellipsoid,
+        lat0_deg: f64,
+        lon0_deg: f64,
+        false_easting_m: f64,
+        false_northing_m: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        datum_transform: Option<DatumTransform>,
+    },
+}
+
+impl Crs {
+    pub fn ellipsoid(&self) -> &Ellipsoid {
+        match self {
+            Self::Geographic { ellipsoid, .. }
+            | Self::Mercator { ellipsoid, .. }
+            | Self::TransverseMercator { ellipsoid, .. }
+            | Self::PolarStereographic { ellipsoid, .. }
+            | Self::LambertConformalConic { ellipsoid, .. }
+            | Self::LambertAzimuthalEqualArea { ellipsoid, .. } => ellipsoid,
+        }
+    }
+    pub fn datum_transform(&self) -> Option<&DatumTransform> {
+        match self {
+            Self::Geographic {
+                datum_transform, ..
+            }
+            | Self::Mercator {
+                datum_transform, ..
+            }
+            | Self::TransverseMercator {
+                datum_transform, ..
+            }
+            | Self::PolarStereographic {
+                datum_transform, ..
+            }
+            | Self::LambertConformalConic {
+                datum_transform, ..
+            }
+            | Self::LambertAzimuthalEqualArea {
+                datum_transform, ..
+            } => datum_transform.as_ref(),
+        }
+    }
+    /// WGS84 geographic, as the fixture mosaic publishes.
+    pub fn wgs84_geographic() -> Self {
+        Self::Geographic {
+            ellipsoid: Ellipsoid::WGS84,
+            datum_transform: None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct Ellipsoid {
+    pub semi_major_m: f64,
+    pub inverse_flattening: f64,
+}
+
+impl Ellipsoid {
+    pub const WGS84: Self = Self {
+        semi_major_m: 6_378_137.0,
+        inverse_flattening: 298.257_223_563,
+    };
+}
+
+/// EPSG position-vector seven-parameter Helmert transform, grid datum → WGS84.
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum DatumTransform {
+    Helmert7 {
+        translation_m: [f64; 3],
+        rotation_arc_seconds: [f64; 3],
+        scale_ppm: f64,
+    },
+}
 #[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Frame {
@@ -325,6 +633,11 @@ pub enum Command {
     SelectSite {
         id: String,
     },
+    /// Restore a mosaic by its `hello.sources` id. Polar ids error; unknown
+    /// ids error against the source table (`docs/grid-adapters.md`).
+    SelectSource {
+        id: String,
+    },
     Follow {
         enabled: bool,
     },
@@ -360,7 +673,8 @@ pub enum Command {
         lon: f64,
     },
     /// Rank gazetteer places for the location picker. Answered with
-    /// `places` to the sender; optional `lat`/`lon` order nearer matches first.
+    /// `places` to the sender; optional `lat`/`lon` bias nearer matches.
+    /// `name, where` filters by region or country.
     SearchPlaces {
         query: String,
         #[serde(default)]
