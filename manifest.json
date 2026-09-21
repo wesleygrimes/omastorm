@@ -6,7 +6,7 @@
   "author": "Wes Grimes",
   "license": "MIT",
   "homepage": "https://omastorm.com",
-  "description": "Omarchy-native live radar"
+  "description": "Omarchy-native live radar",
   "kinds": [
     "bar-widget",
     "panel"
