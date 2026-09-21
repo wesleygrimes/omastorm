@@ -64,6 +64,8 @@ OPERA. Coverage depends on radar range and the data available from each
 provider. Some areas have no radar data, even when their cities appear in
 search.
 
+![EUMETNET OPERA radar mosaic over Warsaw, Poland](docs/media/readme/omastorm-europe.png)
+
 ## What you are looking at
 
 Omastorm currently uses two radar products. In the U.S., NOAA NEXRAD provides

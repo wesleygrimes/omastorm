@@ -13,6 +13,8 @@ Refresh both sets when the interface changes. Dark Tokyo Night and light
 Flexoki Light window stills lead the page side by side, stacking on mobile.
 The window/popover hero, search, and treatment stills illustrate the guide.
 The hero is also the Open Graph sharing image.
+`media/omastorm-europe.png` mirrors the Europe demo poster from
+`docs/media/readme/omastorm-europe.png` and shows OPERA coverage over Warsaw.
 
 The site uses still images only. Every required image is committed; no video
 capture or generated media is needed for deployment. Cloudflare Pages caps
