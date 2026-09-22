@@ -124,6 +124,16 @@
       "contributions": [
         "bug"
       ]
+    },
+    {
+      "login": "fearjet44",
+      "name": "Justin Hagemeier",
+      "avatar_url": "https://avatars.githubusercontent.com/u/314382095?v=4",
+      "profile": "https://github.com/fearjet44",
+      "contributions": [
+        "code",
+        "doc"
+      ]
     }
   ],
   "commitType": "docs"
