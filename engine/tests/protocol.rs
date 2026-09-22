@@ -780,8 +780,8 @@ fn view_center_over_europe_selects_opera() {
 #[test]
 fn metar_query_is_a_sender_reply() {
     let _serial = serial();
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/metar-ktlx.json");
-    let stations = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("data/stations-ktlx.json");
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/metar-ktlx.json");
+    let stations = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/stations-ktlx.json");
     let engine = Engine::launch(&[
         (
             "OMASTORM_METAR_FIXTURE",

@@ -6,7 +6,7 @@ versioning are in [docs/RELEASING.md](../docs/RELEASING.md).
 ## Architecture
 
 The binary embeds Natural Earth geography, `data/sites.json`, and
-`data/fixture.json` (the product, palette, and frame template). It embeds no
+`data/product.json` (the product, palette, and frame template). It embeds no
 archived radar. Compiled radar sources live in `src/source.rs`: PolarFamily
 NEXRAD and each GridFamily mosaic (OPERA today) are registry entries. A
 daemon starts with no selection; `select_site` or `select_source` starts
@@ -160,7 +160,7 @@ The decoder tests compare every moment byte, ray angle, timestamp, and gate
 geometry with `golden/ktlx-20130520/`. Other tests cover partial sweep assembly,
 catalog retention, deterministic tile rendering, cache eviction, protocol
 validation, client isolation, daemon replacement, and texture retirement.
-Recorded vector-tile fixtures have provenance in `data/vt/tiles.json`.
+Recorded vector-tile fixtures have provenance in `tests/fixtures/vt/tiles.json`.
 
 The rendering check compares all three treatments against the shader's sampling
 rule replayed in Rust over golden codes. It checks default and zoomed views,

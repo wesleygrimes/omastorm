@@ -41,7 +41,7 @@ impl FixtureMosaic {
                 && r < f64::from(HEIGHT))
         );
         let template: crate::protocol::Frame =
-            serde_json::from_str(include_str!("../data/fixture.json")).unwrap();
+            serde_json::from_str(include_str!("../data/product.json")).unwrap();
         let palette = template.palette.clone();
         let bounds: Vec<f64> = template.bounds.iter().map(|&b| b as f64).collect();
         let frames = ["2026-01-01T00:00:00Z", "2026-01-01T00:05:00Z"]

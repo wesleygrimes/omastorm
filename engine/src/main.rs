@@ -113,7 +113,7 @@ fn hello_from(registry: &source::SourceRegistry) -> Hello {
     }
 }
 fn fixture_frame() -> Frame {
-    serde_json::from_str(include_str!("../data/fixture.json")).unwrap()
+    serde_json::from_str(include_str!("../data/product.json")).unwrap()
 }
 fn now_ms() -> i64 {
     SystemTime::now()

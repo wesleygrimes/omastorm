@@ -103,7 +103,7 @@ pub struct Opera {
 impl Opera {
     pub fn new() -> Self {
         let template: crate::protocol::Frame =
-            serde_json::from_str(include_str!("../data/fixture.json")).unwrap();
+            serde_json::from_str(include_str!("../data/product.json")).unwrap();
         Self {
             id: ID,
             coverage: Coverage::Box {

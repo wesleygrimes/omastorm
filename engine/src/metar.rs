@@ -948,8 +948,8 @@ mod tests {
     use std::collections::HashMap;
 
     const KTLX: (f64, f64) = (35.33306, -97.27748);
-    const FIXTURE: &str = include_str!("../data/metar-ktlx.json");
-    const STATIONS: &str = include_str!("../data/stations-ktlx.json");
+    const FIXTURE: &str = include_str!("../tests/fixtures/metar-ktlx.json");
+    const STATIONS: &str = include_str!("../tests/fixtures/stations-ktlx.json");
 
     fn nearest_query(limit: usize) -> Query {
         Query {

@@ -659,7 +659,7 @@ mod tests {
     use super::*;
     use crate::tiles::review::{DIR as REVIEW, preview};
 
-    const RECORDED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/data/vt");
+    const RECORDED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/vt");
 
     /// A loopback response, optionally held open after its last supplied byte.
     /// No public service or disk cache is involved. Holding the response open
@@ -871,7 +871,7 @@ mod tests {
 
     #[test]
     fn renders_recorded_tiles() {
-        // `engine/data/vt/tiles.json` records where these came from.
+        // `engine/tests/fixtures/vt/tiles.json` records where these came from.
         for (name, file, key, expect_labels, expect_minor) in [
             (
                 "ktlx-z7-osm",
