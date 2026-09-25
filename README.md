@@ -132,6 +132,21 @@ airports appear and how they are selected; see [configuration](docs/configuratio
   <img src="docs/media/readme/aviation-popover.png" width="30%" alt="Omastorm bar popover showing airport flight categories on the radar map">
 </p>
 
+## Screensaver
+
+A fullscreen picture of the same radar, one window on each monitor. It is
+not the lock screen. It uses the remembered map and keeps showing new scans.
+`[metar] show` turns aviation chips on; leaving it off keeps city names.
+Pressing a key or clicking leaves the screensaver. Chips do not open the
+raw METAR.
+
+Omarchy's idle timer still starts its terminal screensaver. This window
+does not replace that until Omarchy launches it. To open it from a checkout:
+
+```sh
+OMASTORM_QML=ui/screensaver.qml bash run.sh
+```
+
 ## Search
 
 `/` (or `s`) is one field. Type a city, a radar site or mosaic name, or paste coordinates.

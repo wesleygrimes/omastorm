@@ -42,13 +42,16 @@ the ids and comments in `ui/RadarWindow.qml`.
 | **map stage** | Radar map frame |
 | **locate chip** | Map marker, top-left of the map; jump to the approximate location |
 | **help chip** | Keys / `?` on the map |
-| **metar chips** | Optional. ICAO labels with FAA flight-category color in place of city names, around the selected live NEXRAD radar (US and Canada; OPERA Europe is a no-op). Off until toggled. Default is the nearest stations (at most 16). Optional AWC-priority pick uses the current map view so hubs outrank closer small fields; `count` shrinks the pool; `always_on_when_in_view` pins a home field that is on screen. A chip at the selected radar (KLIT next to KLZK) sits beside the site tag. Optional `mark`: filled category block (`chip`), ICAO letters in category color (`ink`), or a larger category-colored location (`pin`). Click shows the raw METAR on a **metar card** over the map, 80% width, bottom-right, above the OSM credit, so the scale bar stays clear. |
+| **metar chips** | Optional. ICAO labels with FAA flight-category color in place of city names, around the selected live NEXRAD radar (US and Canada; OPERA Europe is a no-op). Off until toggled. Default is the nearest stations (at most 16). Optional AWC-priority pick uses the current map view so hubs outrank closer small fields; `count` shrinks the pool; `always_on_when_in_view` pins a home field that is on screen. A chip at the selected radar (KLIT next to KLZK) sits beside the site tag. Optional `mark`: filled category block (`chip`), ICAO letters in category color (`ink`), or a larger category-colored location (`pin`). Click shows the raw METAR on a **metar card** over the map, 80% width, bottom-right, above the OSM credit, so the scale bar stays clear. The screensaver does not open that card. |
+| **screensaver** | Fullscreen picture on each monitor. Not the lock screen. Remembered view, live frames, site, LIVE / ARCHIVED, age, scale bar, legend, OSM credit. No search, transport, or map keys. `[metar] show` draws the chips; the session toggle does not. A key or a click exits. |
 | **scale bar** | Ground distance under the map, left; locale picks km or mi; label updates with zoom |
 | **legend** | dBZ scale directly under the map |
 | **transport** | Playback buttons |
 | **tick strip** | Frame ticks on the timeline |
 | **strip stamp** | Date / time / zone above the tick strip |
 | **frame index** | `N / total` above the strip, right-aligned; counts available frames only |
+
+**Screensaver.** `ui/screensaver.qml` is a separate process, one fullscreen window per monitor. It shows the remembered view and follows new live frames. It does not pan, search, or play the loop. `[metar] show` is the aviation default: chips when true, city names otherwise. Chips are not targets. A key or a click quits the process. This is not the session lock; Omarchy still launches its own lock, and its idle screensaver stays the terminal until Omarchy can start this window instead.
 
 **Bottom chrome order.** Map stage, then legend, then transport + tick
 strip, with the strip stamp left-aligned and frame index right-aligned

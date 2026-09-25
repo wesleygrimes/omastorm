@@ -151,7 +151,8 @@ the machine's own state and weather files are not read unless
   `aviation` key are a no-op. The `aviation` key (`a`) toggles the
   session without writing the file; an edit of this value re-seeds. A
   value that is not a boolean is named in the status slot like a bad
-  `treatment`.
+  `treatment`. The screensaver follows this value, not the session
+  toggle, and does not open the raw METAR card.
 - `[metar] pick`: optional. `"nearest"` (omit is this) is the 16 closest
   stations to the selected radar. `"priority"` takes stations in the
   current map view and ranks them by AWC stationinfo `priority` (1 is a
