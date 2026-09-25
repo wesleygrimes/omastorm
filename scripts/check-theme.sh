@@ -49,7 +49,18 @@ mv "$tmp/theme/new.toml" "$tmp/theme/colors.toml"
 expect '#aabbcc #abcdef #aabbcc 18 monospace'
 rm "$tmp/user.toml" "$tmp/theme/shell.toml"
 expect '#445566 #778899 #aabbcc 12 monospace'
-# Directory replacement is why explicit switches also have an IPC hook.
+# `omarchy theme set` replaces the directory (rm -rf, then mv) and rewrites
+# theme.name beside it; the watchers follow with no hook.
+mkdir "$tmp/next-theme"
+printf 'background = "#0a0b0c"\naccent = "#0d0e0f"\n' > "$tmp/next-theme/colors.toml"
+rm -rf "$tmp/theme"
+mv "$tmp/next-theme" "$tmp/theme"
+echo next > "$tmp/theme.name"
+expect '#0a0b0c #a9b1d6 #0d0e0f 12 monospace'
+# The watch lands on the new directory, so edits after a switch still apply.
+printf 'background = "#0b0c0d"\naccent = "#0d0e0f"\n' > "$tmp/theme/colors.toml"
+expect '#0b0c0d #a9b1d6 #0d0e0f 12 monospace'
+# The explicit IPC hook still reloads after a replacement.
 mv "$tmp/theme" "$tmp/old-theme"
 mkdir "$tmp/theme"
 printf 'background = "#102030"\n' > "$tmp/theme/colors.toml"
@@ -58,4 +69,4 @@ expect '#102030 #a9b1d6 #7aa2f7 12 monospace'
 # Watchers must remain usable after that explicit reload.
 printf 'background = "#203040"\n' > "$tmp/theme/colors.toml"
 expect '#203040 #a9b1d6 #7aa2f7 12 monospace'
-printf 'Theme watching, overrides, replacement, fallback, and IPC hook: PASS\n'
+printf 'Theme watching, overrides, replacement, theme switch, fallback, and IPC hook: PASS\n'
