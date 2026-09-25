@@ -1,5 +1,6 @@
 mod catalog;
 mod cog;
+mod eccc;
 mod envelope;
 mod grid_fixture;
 mod live;
