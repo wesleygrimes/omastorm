@@ -84,6 +84,7 @@ pub enum MosaicStartError {
 pub struct SourceRegistry {
     pub nexrad: Nexrad,
     pub opera: crate::opera::Opera,
+    pub jma: crate::jma::Jma,
     pub fixture: crate::grid_fixture::FixtureMosaic,
 }
 
@@ -92,14 +93,16 @@ impl SourceRegistry {
         Self {
             nexrad: Nexrad::new(),
             opera: crate::opera::Opera::new(),
+            jma: crate::jma::Jma::new(),
             fixture: crate::grid_fixture::FixtureMosaic::new(),
         }
     }
 
-    pub fn adapters(&self) -> [AdapterRef<'_>; 3] {
+    pub fn adapters(&self) -> [AdapterRef<'_>; 4] {
         [
             AdapterRef::Nexrad(&self.nexrad),
             AdapterRef::Grid(GridRef::Opera(&self.opera)),
+            AdapterRef::Grid(GridRef::Jma(&self.jma)),
             AdapterRef::Grid(GridRef::FixtureMosaic(&self.fixture)),
         ]
     }
@@ -176,6 +179,7 @@ pub enum AdapterRef<'a> {
 /// a `SourceRegistry` field, and its box in `envelope.rs`.
 pub enum GridRef<'a> {
     Opera(&'a crate::opera::Opera),
+    Jma(&'a crate::jma::Jma),
     FixtureMosaic(&'a crate::grid_fixture::FixtureMosaic),
 }
 
@@ -215,6 +219,7 @@ impl<'a> GridRef<'a> {
     fn id(&self) -> &str {
         match self {
             Self::Opera(a) => a.id,
+            Self::Jma(a) => a.id,
             Self::FixtureMosaic(a) => a.id,
         }
     }
@@ -222,6 +227,7 @@ impl<'a> GridRef<'a> {
     fn metadata(&self) -> SourceMetadataBorrowed<'a> {
         match self {
             Self::Opera(a) => a.metadata(),
+            Self::Jma(a) => a.metadata(),
             Self::FixtureMosaic(a) => a.metadata(),
         }
     }
@@ -247,6 +253,9 @@ impl<'a> GridRef<'a> {
             Self::Opera(a) => MosaicStart::Live {
                 placeholder: a.loading_placeholder().map(Box::new),
             },
+            Self::Jma(a) => MosaicStart::Live {
+                placeholder: a.loading_placeholder().map(Box::new),
+            },
             Self::FixtureMosaic(a) => MosaicStart::Static { frames: a.frames() },
         }
     }
@@ -254,17 +263,19 @@ impl<'a> GridRef<'a> {
     fn history_max(&self) -> Option<usize> {
         match self {
             Self::Opera(_) => Some(crate::opera::HISTORY_MAX),
+            Self::Jma(_) => Some(crate::jma::HISTORY_MAX),
             Self::FixtureMosaic(_) => None,
         }
     }
 
     fn polls(&self) -> bool {
-        matches!(self, Self::Opera(_))
+        matches!(self, Self::Opera(_) | Self::Jma(_))
     }
 
     fn poll(&self, events: Sender<GridEvent>, known: HashSet<String>) -> Option<JoinHandle<()>> {
         match self {
             Self::Opera(a) => a.poll(&AdapterTarget::Mosaic, events, known),
+            Self::Jma(a) => a.poll(&AdapterTarget::Mosaic, events, known),
             Self::FixtureMosaic(_) => None,
         }
     }
@@ -838,6 +849,12 @@ mod tests {
             Ok(MosaicStart::Live { .. })
         ));
         assert!(registry.polls("opera"));
+        assert!(matches!(
+            registry.mosaic_start("jma"),
+            Ok(MosaicStart::Live { .. })
+        ));
+        assert!(registry.polls("jma"));
+        assert_eq!(registry.history_max("jma"), Some(crate::jma::HISTORY_MAX));
         assert!(!registry.polls("fixture-mosaic"));
         assert!(matches!(
             registry.mosaic_start("fixture-mosaic"),

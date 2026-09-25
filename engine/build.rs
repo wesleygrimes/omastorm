@@ -146,7 +146,7 @@ fn main() {
 }
 
 /// GeoNames `cities5000` clipped to the compiled live-source envelope
-/// (NEXRAD plus OPERA), for the location picker only. Map labels stay on
+/// (NEXRAD plus the live mosaics), for the location picker only. Map labels stay on
 /// Natural Earth (`places.json`).
 fn write_gazetteer(raw: &Path, out: &Path) {
     let mut admin1 = std::collections::HashMap::new();

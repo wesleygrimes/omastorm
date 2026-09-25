@@ -192,7 +192,9 @@ smear an edge pixel beyond the raster.
 enter it as WGS84 longitude/latitude degrees and leave as x/y, east then
 north: metres for projected CRSs and degrees only for `geographic`. It
 carries `kind`, an ellipsoid as `semiMajorM` and `inverseFlattening`, and
-the named parameters for that projection:
+the named parameters for that projection. An `inverseFlattening` of 0 is
+a sphere, as in PROJ: Web Mercator (EPSG:3857) tiles are `mercator` on a
+6,378,137 m sphere with WGS84 latitudes projected unchanged.
 
 | `kind` | Required parameters |
 |---|---|
