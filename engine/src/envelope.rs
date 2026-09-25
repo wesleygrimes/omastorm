@@ -35,8 +35,18 @@ pub const OPERA: LatLonBox = LatLonBox {
     west: -30.0,
 };
 
+/// JMA high-resolution precipitation nowcast service footprint: the
+/// extent of its observed area (the hole in `hrpns_nd`, 120.5–149.0°E,
+/// 21.0–46.7°N), rounded out.
+pub const JMA: LatLonBox = LatLonBox {
+    north: 47.0,
+    south: 20.5,
+    east: 149.5,
+    west: 120.0,
+};
+
 /// Live GridFamily boxes. Polar NEXRAD uses [`nexrad_network`].
-pub const LIVE_MOSAICS: &[LatLonBox] = &[OPERA];
+pub const LIVE_MOSAICS: &[LatLonBox] = &[OPERA, JMA];
 
 /// Coarse NEXRAD network clip (CONUS / AK / HI / Guam), not per-dish circles.
 pub fn nexrad_network(lon: f64, lat: f64) -> bool {

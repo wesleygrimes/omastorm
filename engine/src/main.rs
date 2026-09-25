@@ -2,6 +2,7 @@ mod catalog;
 mod cog;
 mod envelope;
 mod grid_fixture;
+mod jma;
 mod live;
 mod live_index;
 mod metar;

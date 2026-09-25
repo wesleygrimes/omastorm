@@ -8,8 +8,9 @@ Live weather radar in your Omarchy bar. Beta.
 
 A radar that lives next to the clock. The popover shows your selected radar
 and its actual scan time. Click the map (or press Enter) for the full
-window: individual NOAA NEXRAD sweeps in the U.S. and the EUMETNET OPERA
-European mosaic, drawn in your Omarchy theme.
+window: individual NOAA NEXRAD sweeps in the U.S., the EUMETNET OPERA
+European mosaic, and the Japan Meteorological Agency's rain-rate nowcast,
+drawn in your Omarchy theme.
 
 This page is the user guide: install, first run, and everyday use. How the
 code is built lives in [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -60,9 +61,11 @@ you left off.
 ## Coverage
 
 U.S. radar comes from NOAA NEXRAD; European radar comes from EUMETNET
-OPERA. Coverage depends on radar range and the data available from each
-provider. Some areas have no radar data, even when their cities appear in
-search.
+OPERA; Japan comes from the Japan Meteorological Agency (JMA). Coverage
+depends on radar range and the data available from each provider. Where a
+NEXRAD dish reaches (Kadena on Okinawa, Kunsan as far as northern Kyushu),
+that dish is shown instead of the JMA mosaic. Some areas have no radar
+data, even when their cities appear in search.
 
 [![EUMETNET OPERA radar mosaic over Warsaw, Poland](docs/media/readme/omastorm-europe.png)](https://github.com/wesleygrimes/omastorm/releases/download/v0.1.14/omastorm-europe.mp4)
 
@@ -70,16 +73,24 @@ search.
 
 ## What you are looking at
 
-Omastorm currently uses two radar products. In the U.S., NOAA NEXRAD provides
+Omastorm currently uses three radar products. In the U.S., NOAA NEXRAD provides
 individual radar volumes: each dish spins, sends a pulse, and measures how
 much bounced back. In Europe, EUMETNET OPERA provides a mosaic
-combining the strongest radar returns at each location.
+combining the strongest radar returns at each location. In Japan, JMA's
+high-resolution precipitation nowcast provides a national rain-rate
+analysis every five minutes.
 
 For NEXRAD, Omastorm shows **reflectivity** on the lowest tilt: the beam that
 stays closest to the ground. OPERA combines multiple radars and elevations into one image.
 
 Color is **dBZ**, not a rain rate and not a warning. Stronger return, warmer
 color. The legend under the map is that scale.
+
+Japan is the exception: JMA publishes an estimated **precipitation rate** in
+mm/h, in eight bands (under 1, 1–5, 5–10, 10–20, 20–30, 30–50, 50–80, and
+80 or more). The product line says it is an estimate and the legend is in
+mm/h. It is never converted to dBZ. Omastorm shows JMA's observed frames
+only, not its forecast steps, at about 2 km per pixel.
 
 A bright blob is often rain or snow. Radar can also detect:
 
@@ -123,8 +134,8 @@ airport code to read its raw METAR. These are current observations, not
 forecasts or flight guidance.
 
 The overlay is off by default and works with live NEXRAD radar in the U.S. and
-Canada. It is unavailable on the European OPERA mosaic. To start with it on,
-set `[metar] show = true` in your configuration. You can also choose how many
+Canada. It is unavailable on the European OPERA and Japanese JMA mosaics.
+To start with it on, set `[metar] show = true` in your configuration. You can also choose how many
 airports appear and how they are selected; see [configuration](docs/configuration.md#display-and-keyboard-preferences).
 
 <p align="center">
@@ -146,7 +157,8 @@ still applies when choosing a place.
 A **site** (`KTLX`, `tlx`) locks that dish and centres on it. Clicking the
 source title opens the same card on covering mosaics and nearby dishes.
 
-A **mosaic** (`opera`) locks that source and centres the map on its coverage.
+A **mosaic** (`opera`, `jma`) locks that source and centres the map on its
+coverage.
 
 ![Search a radar site](docs/media/readme/search-site.png)
 
@@ -173,7 +185,8 @@ map. It is not a new row of chrome.
 
 Selecting a radar loads its recent scans for playback. NEXRAD history grows
 toward **60 frames / two hours**;
-OPERA retains up to **12 mosaic frames**. Older scans drop out. Space loops
+OPERA and JMA retain up to **12 mosaic frames** each (an hour at their
+five-minute step). Older scans drop out. Space loops
 what is available; `[` `]` steps; Home and End jump.
 
 NOAA publishes NEXRAD Level II via the [Open Data program on AWS](https://registry.opendata.aws/noaa-nexrad/).
@@ -181,7 +194,9 @@ A full volume takes about four to seven minutes (faster in severe weather,
 slower in clear air). While a volume is in progress the engine reads live
 chunks, so the sweep can paint as the antenna turns. If no new chunk arrives
 for 90 seconds it rediscovers the latest volume; cached frames stay. OPERA
-polls its public 24-hour cache and loads complete mosaic frames.
+polls its public 24-hour cache and loads complete mosaic frames. JMA polls
+the frame list of its own web viewer once a minute and stitches each frame
+from that viewer's map tiles.
 
 ## Look
 
@@ -301,8 +316,13 @@ Then delete the `o.bind` line if you added one.
 Radar: NOAA NEXRAD Level II via the NOAA Open Data program on AWS; Europe
 mosaic from [EUMETNET OPERA](https://www.eumetnet.eu/) COMP DBZH via the
 [Open Radar Data](https://eumetnet.github.io/openradardata-documentation/1-ORD-API-overview/)
-24-hour cache ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). Basemap: ©
-OpenStreetMap contributors, [ODbL](https://opendatacommons.org/licenses/odbl/1-0/),
+24-hour cache ([CC BY 4.0](https://creativecommons.org/licenses/by/4.0/)). Japan:
+created by processing the Japan Meteorological Agency (気象庁) High-resolution
+Precipitation Nowcasts, observed frames ([JMA](https://www.jma.go.jp/bosai/nowc/)),
+under the [Public Data License 1.0](https://www.jma.go.jp/jma/kishou/info/coment.html)
+(PDL1.0, compatible with CC BY 4.0); Omastorm maps JMA's legend colors back
+to rain-rate bands and recolors them, so the picture is not a JMA product.
+Basemap: © OpenStreetMap contributors, [ODbL](https://opendatacommons.org/licenses/odbl/1-0/),
 tiles by [OpenFreeMap](https://openfreemap.org); Natural Earth, public domain.
 Location search: [GeoNames](https://www.geonames.org/),
 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).

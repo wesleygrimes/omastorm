@@ -1,0 +1,12 @@
+{
+  "source": "https://www.jma.go.jp/bosai/jmatile/data/nowc/",
+  "retrieved": "2026-09-25",
+  "attribution": "Japan Meteorological Agency (気象庁)",
+  "license": "Public Data License 1.0 (公共データ利用規約 第1.0版), compatible with CC BY 4.0: https://www.jma.go.jp/jma/kishou/info/coment.html",
+  "files": {
+    "targetTimes_N1.json": "The first three entries of the live observed-frame index, verbatim apart from the closing bracket",
+    "hrpns-stripes-4bit.png": "Synthetic, no JMA data: a 256 px tile encoded as JMA serves hrpns tiles (4-bit indexed, the same ten-entry PLTE and tRNS read off live tiles that day), with 16 px columns of palette indices 0-9 and index 0 after them",
+    "hrpns_nd-synthetic.geojson": "Synthetic, no JMA data: the shape of hrpns_nd/data.geojson (one NoData polygon whose outer ring is the world and whose hole is the observed area), with the hole reduced to 136-144E, 33-36N"
+  },
+  "notes": "Recorded for the engine's JMA unit tests (engine/src/jma.rs); the daemon never reads them. Live tiles are 256 px Web Mercator PNGs, either 4-bit indexed or 8-bit RGBA; odd zooms are served blank."
+}

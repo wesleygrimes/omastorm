@@ -1,0 +1,1 @@
+{"type":"FeatureCollection","features":[{"type":"Feature","properties":{"id":"synthetic_hrpns_nd_cnt_NoData","level":"NoData"},"geometry":{"type":"Polygon","coordinates":[[[-45,-85],[315,-85],[315,85],[-45,85],[-45,-85]],[[136,33],[144,33],[144,36],[136,36],[136,33]]]}}]}

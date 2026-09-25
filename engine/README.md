@@ -8,7 +8,7 @@ versioning are in [docs/RELEASING.md](../docs/RELEASING.md).
 The binary embeds Natural Earth geography, `data/sites.json`, and
 `data/product.json` (the product, palette, and frame template). It embeds no
 archived radar. Compiled radar sources live in `src/source.rs`: PolarFamily
-NEXRAD and each GridFamily mosaic (OPERA today) are registry entries. A
+NEXRAD and each GridFamily mosaic (OPERA and JMA today) are registry entries. A
 daemon starts with no selection; `select_site` or `select_source` starts
 the matching poller. An `OMASTORM_ARCHIVE` scan is decoded at startup and
 labeled archived.
@@ -101,6 +101,24 @@ Mosaic frames are complete images, with no polar sweep or elevation selector.
 Source selection and the grid contract are in
 [docs/grid-adapters.md](../docs/grid-adapters.md).
 
+## Japanese mosaic
+
+`src/jma.rs` reads the Japan Meteorological Agency's high-resolution
+precipitation nowcast from the data root of JMA's own web viewer
+(`www.jma.go.jp/bosai/jmatile/data/nowc/`, not a documented API). It polls
+`targetTimes_N1.json` once a minute and keeps observed frames only; the
+forecast steps (`_N2`, `_N3`) are never read. A frame is JMA's `hrpns_nd`
+no-data polygon (gzipped GeoJSON) plus the z6 Web Mercator tiles that touch
+the observed area, about 24 of the 42 over the coverage box, stitched into
+one 1536 × 1792 raster in EPSG:3857 (`mercator` on a sphere). The tiles are
+colored with JMA's eight-band legend; each exact legend color maps back to
+its mm/h band, a transparent pixel is undetect inside the observed area and
+missing outside it, and any other color is missing. The texture is never
+converted to dBZ. At most four JMA requests are in flight per poller, each
+with a 15-second timeout, one retry, and a body cap; a tile that cannot be
+read fails the frame rather than showing a dry hole. History is capped at
+12 frames, backfilled one frame at a time after the newest is on screen.
+
 ## METAR
 
 `src/metar.rs` answers `metar_query` with airport observations around the
@@ -160,7 +178,9 @@ The decoder tests compare every moment byte, ray angle, timestamp, and gate
 geometry with `golden/ktlx-20130520/`. Other tests cover partial sweep assembly,
 catalog retention, deterministic tile rendering, cache eviction, protocol
 validation, client isolation, daemon replacement, and texture retirement.
-Recorded vector-tile fixtures have provenance in `tests/fixtures/vt/tiles.json`.
+Recorded vector-tile fixtures have provenance in `tests/fixtures/vt/tiles.json`;
+the JMA index excerpt and the synthetic JMA-encoded tile and no-data polygon
+in `tests/fixtures/jma/sources.json`.
 
 The rendering check compares all three treatments against the shader's sampling
 rule replayed in Rust over golden codes. It checks default and zoomed views,

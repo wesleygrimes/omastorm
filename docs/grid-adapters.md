@@ -33,7 +33,11 @@ exist outside a source's actual coverage.
 - Choosing HDF5 when the same provider product is available as COG or
   GeoTIFF.
 - Precolored consumer tiles or any paid / key-gated feed as a default
-  source.
+  source. One exception: a national provider's own tiles when no open
+  grid of the product exists and each tile color is that provider's
+  published legend. The adapter maps every exact legend color back to its
+  class in the product's real units, treats any other color as missing,
+  and converts nothing to another quantity (JMA's precipitation nowcast).
 - Polar ODIM / DX / ORD `PVOL` readers. Those stay PolarFamily.
 - Faking NEXRAD Level II history, tilts, or a painting sweep on a
   mosaic that has none.
@@ -148,7 +152,8 @@ GridFamily frames use this wire shape. PolarFamily frames keep the
 sweep + azimuth lookup in [protocol.md](protocol.md).
 
 A grid frame is measured values on a georeferenced raster, not a
-precolored map and not polar gates.
+precolored map and not polar gates. The one precolored exception above is
+decoded back to its legend classes before it becomes a frame.
 
 | Field | Role |
 |---|---|
@@ -192,7 +197,9 @@ smear an edge pixel beyond the raster.
 enter it as WGS84 longitude/latitude degrees and leave as x/y, east then
 north: metres for projected CRSs and degrees only for `geographic`. It
 carries `kind`, an ellipsoid as `semiMajorM` and `inverseFlattening`, and
-the named parameters for that projection:
+the named parameters for that projection. An `inverseFlattening` of 0 is
+a sphere, as in PROJ: Web Mercator (EPSG:3857) tiles are `mercator` on a
+6,378,137 m sphere with WGS84 latitudes projected unchanged.
 
 | `kind` | Required parameters |
 |---|---|
