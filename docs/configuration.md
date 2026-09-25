@@ -147,7 +147,7 @@ the machine's own state and weather files are not read unless
   it. Anything else is reported like a bad `treatment` and leaves the default.
 - `[metar] show`: optional. `true` seeds the METAR overlay on (ICAO chips
   replace city names around the selected live NEXRAD radar). Omit or
-  `false` is off. US and Canada only; on OPERA Europe the overlay and the
+  `false` is off. US and Canada only; on OPERA Europe and JMA Japan the overlay and the
   `aviation` key are a no-op. The `aviation` key (`a`) toggles the
   session without writing the file; an edit of this value re-seeds. A
   value that is not a boolean is named in the status slot like a bad
