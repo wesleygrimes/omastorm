@@ -8,8 +8,8 @@ Live weather radar in your Omarchy bar. Beta.
 
 A radar that lives next to the clock. The popover shows your selected radar
 and its actual scan time. Click the map (or press Enter) for the full
-window: individual NOAA NEXRAD sweeps in the U.S. and the EUMETNET OPERA
-European mosaic, drawn in your Omarchy theme.
+window: NOAA NEXRAD sweeps, the EUMETNET OPERA European mosaic, and
+ECCC rain-rate estimates for Canada, drawn in your Omarchy theme.
 
 This page is the user guide: install, first run, and everyday use. How the
 code is built lives in [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -60,8 +60,11 @@ you left off.
 ## Coverage
 
 U.S. radar comes from NOAA NEXRAD; European radar comes from EUMETNET
-OPERA. Coverage depends on radar range and the data available from each
-provider. Some areas have no radar data, even when their cities appear in
+OPERA. Canada uses Environment and Climate Change Canada's mosaic where
+NEXRAD does not cover the map centre. Search `eccc` to select and lock that
+mosaic directly. A covering NEXRAD dish remains preferred automatically,
+including near the Canadian border. Coverage depends on radar range and
+the data available from each provider. Some areas have no radar data, even when their cities appear in
 search.
 
 [![EUMETNET OPERA radar mosaic over Warsaw, Poland](docs/media/readme/omastorm-europe.png)](https://github.com/wesleygrimes/omastorm/releases/download/v0.1.14/omastorm-europe.mp4)
@@ -70,7 +73,8 @@ search.
 
 ## What you are looking at
 
-Omastorm currently uses two radar products. In the U.S., NOAA NEXRAD provides
+Omastorm shows radar reflectivity and estimated precipitation rate.
+NOAA NEXRAD provides
 individual radar volumes: each dish spins, sends a pulse, and measures how
 much bounced back. In Europe, EUMETNET OPERA provides a mosaic
 combining the strongest radar returns at each location.
@@ -78,8 +82,11 @@ combining the strongest radar returns at each location.
 For NEXRAD, Omastorm shows **reflectivity** on the lowest tilt: the beam that
 stays closest to the ground. OPERA combines multiple radars and elevations into one image.
 
-Color is **dBZ**, not a rain rate and not a warning. Stronger return, warmer
-color. The legend under the map is that scale.
+NEXRAD and OPERA show **dBZ** reflectivity. ECCC shows **rain rate estimates
+in mm/h**, in the provider's discrete classes from 0.1 to 200+. The legend
+always names the units; ECCC's classes do not recover the original radar
+measurements. Transparent areas have no reported rate, which can mean
+below threshold or missing coverage. No product is a weather warning.
 
 A bright blob is often rain or snow. Radar can also detect:
 
@@ -173,7 +180,8 @@ map. It is not a new row of chrome.
 
 Selecting a radar loads its recent scans for playback. NEXRAD history grows
 toward **60 frames / two hours**;
-OPERA retains up to **12 mosaic frames**. Older scans drop out. Space loops
+OPERA retains up to **12 mosaic frames**; ECCC retains up to **30 frames**
+at six-minute intervals. Older scans drop out. Space loops
 what is available; `[` `]` steps; Home and End jump.
 
 NOAA publishes NEXRAD Level II via the [Open Data program on AWS](https://registry.opendata.aws/noaa-nexrad/).
