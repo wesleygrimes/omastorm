@@ -766,7 +766,7 @@ Item {
                     locked: app.locked
                     metarMode: app.store.metarEnabled && Metar.available(app.state, engine.site, engine.source) && app.metars.length > 0
                     metars: app.metars
-                    metarMark: Metar.markFromConfig(app.config.values) || "chip"
+                    metarMark: Metar.markFromConfig(app.config.values) || "pin"
                     interactive: !app.store.needsLocation && !locationPicker.open
                     onNavigated: (lat, lon, spanKm) => app.store.userNavigated(lat, lon, spanKm)
                     // A settled pan hands the centre to the engine, which switches

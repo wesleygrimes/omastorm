@@ -39,7 +39,7 @@ function countFromConfig(values) {
 }
 
 function markFromConfig(values) {
-    if (!values || values["metar.mark"] === undefined) return "chip";
+    if (!values || values["metar.mark"] === undefined) return "pin";
     var mark = String(values["metar.mark"]).toLowerCase();
     return mark === "chip" || mark === "ink" || mark === "pin" ? mark : "";
 }

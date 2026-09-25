@@ -95,7 +95,7 @@ show = false                         # ICAO chips on the map; omit or false is o
 pick = "nearest"                     # nearest to the radar, or "priority" (AWC tiers in view)
 count = 16                           # 1–16 chips; omit is 16. 8 or 4 shrinks the pool
 always_on_when_in_view = "KM19"      # quoted ICAO list; pinned first while on screen
-mark = "chip"                        # chip (filled category block), ink (ICAO in category color), pin (larger category marker)
+mark = "pin"                         # pin (larger category marker; omit is this), chip (filled block), ink (ICAO in category color)
 
 [keys]
 pan_left = "h Left"
@@ -168,11 +168,11 @@ the machine's own state and weather files are not read unless
   when `pick` is `"priority"`. A home field stays on screen instead of
   being crowded out by hubs. Toml.js is the scalar subset, so this is a
   string, not a TOML array. Bad tokens are named in the status slot.
-- `[metar] mark`: optional. `"chip"` (omit is this) is the filled
-  flight-category block Wes's screenshot used. `"ink"` colors the ICAO
-  letters with that category and drops the fill. `"pin"` leaves the ICAO
-  as theme chrome and paints a larger location marker in the category
-  color. Anything else is named in the status slot.
+- `[metar] mark`: optional. `"pin"` (omit is this, including when there
+  is no config file) leaves the ICAO as theme chrome and paints a larger
+  location marker in the flight-category color. `"chip"` is the filled
+  flight-category block. `"ink"` colors the ICAO letters with that
+  category and drops the fill. Anything else is named in the status slot.
 - `[keys]`: one entry per action, laid over the defaults in `ui/Keys.js`:
   `search` (`/ s`), `nearest` (`n`), `lock` (`Shift+L`), `locate` (`m`,
   approximate location), `pan_left`

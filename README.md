@@ -124,8 +124,10 @@ forecasts or flight guidance.
 
 The overlay is off by default and works with live NEXRAD radar in the U.S. and
 Canada. It is unavailable on the European OPERA mosaic. To start with it on,
-set `[metar] show = true` in your configuration. You can also choose how many
-airports appear and how they are selected; see [configuration](docs/configuration.md#display-and-keyboard-preferences).
+set `[metar] show = true` in your configuration. With no config file, or when
+`[metar] mark` is omitted, each airport is a pin. The pictures below use the
+filled chip (`mark = "chip"`). You can also choose how many airports appear
+and how they are selected; see [configuration](docs/configuration.md#display-and-keyboard-preferences).
 
 <p align="center">
   <img src="docs/media/readme/aviation-window.png" width="65%" alt="Omastorm window with color-coded airport codes and a raw METAR for KDAN">

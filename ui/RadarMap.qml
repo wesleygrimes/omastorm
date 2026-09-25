@@ -59,9 +59,10 @@ Item {
     signal metarPicked(var report)
     property var metars: []
     property bool metarMode: false
-    // chip: filled FCC block (default). ink: ICAO in FCC, no fill.
-    // pin: bigger FCC location marker; ICAO stays theme chrome.
-    property string metarMark: "chip"
+    // pin: bigger FCC location marker; ICAO stays theme chrome. Default
+    // when mark is omitted or there is no config file. chip: filled FCC
+    // block. ink: ICAO in FCC, no fill.
+    property string metarMark: "pin"
     // The view centre once a pan or zoom settles, when it moved since the last
     // report; the surface sends it as `view_center` and the engine decides the
     // hand-off. The camera is never moved from here in answer.

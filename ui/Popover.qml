@@ -174,7 +174,7 @@ FocusScope {
                 theme: card.theme
                 metarMode: card.session.metarEnabled && Metar.available(card.state, connection.site, connection.source) && card.metars.length > 0
                 metars: card.metars
-                metarMark: Metar.markFromConfig(card.session.config.values) || "chip"
+                metarMark: Metar.markFromConfig(card.session.config.values) || "pin"
                 onMetarPicked: report => card.selectedMetar = report
                 treatment: card.session.treatment
                 weakFloor: card.session.weakFloor
