@@ -146,7 +146,7 @@ fn fixture_transport_and_shared_commands() {
         assert!(ids.contains(id));
     }
     let sources = hello["sources"].as_array().unwrap();
-    assert_eq!(sources.len(), 3);
+    assert_eq!(sources.len(), 4);
     assert_eq!(sources[0]["id"], "nexrad");
     assert_eq!(sources[0]["family"], "polar");
     assert_eq!(sources[0]["kind"], "site");
@@ -156,11 +156,18 @@ fn fixture_transport_and_shared_commands() {
     assert_eq!(sources[1]["selectionPriority"], 10);
     assert_eq!(sources[1]["attribution"], "EUMETNET OPERA");
     assert_eq!(sources[1]["coverage"]["kind"], "box");
-    assert_eq!(sources[2]["id"], "fixture-mosaic");
-    assert_eq!(sources[2]["family"], "grid");
-    assert_eq!(sources[2]["kind"], "mosaic");
-    assert_eq!(sources[2]["selectionPriority"], 100);
-    assert_eq!(sources[2]["coverage"]["kind"], "box");
+    assert_eq!(sources[2]["id"], "eccc");
+    assert_eq!(sources[2]["defaultProductClass"], "precipitationRate");
+    assert_eq!(
+        sources[2]["attribution"],
+        "Environment and Climate Change Canada"
+    );
+    assert_eq!(sources[2]["coverage"]["north"], 67.19);
+    assert_eq!(sources[3]["id"], "fixture-mosaic");
+    assert_eq!(sources[3]["family"], "grid");
+    assert_eq!(sources[3]["kind"], "mosaic");
+    assert_eq!(sources[3]["selectionPriority"], 100);
+    assert_eq!(sources[3]["coverage"]["kind"], "box");
     let initial = read(&mut first);
     assert_eq!(initial["frame"]["scanTime"], "2013-05-20T20:16:43Z");
     assert_eq!(initial["mode"], "archived");
@@ -748,6 +755,31 @@ fn view_center_idles_without_a_covering_source() {
     assert_eq!(s["frame"], json!(null));
     assert_eq!(s["timeline"], json!([]));
     assert_eq!(s["playing"], false);
+}
+
+#[test]
+fn canada_selection_publishes_rate_placeholder_and_hands_back_to_nexrad() {
+    let _serial = serial();
+    let engine = Engine::start_lean();
+    let mut client = engine.connect();
+    read(&mut client);
+    read(&mut client);
+    send(
+        &mut client,
+        json!({"type":"view_center","lat":53.5461,"lon":-113.4938}),
+    );
+    let s = state(&mut client, |s| s["selection"]["sourceId"] == "eccc");
+    assert_eq!(s["selection"]["target"]["kind"], "mosaic");
+    assert_eq!(s["frame"]["kind"], "mosaic");
+    assert_eq!(s["frame"]["units"], "mm/h");
+    assert_eq!(s["frame"]["bounds"][0], 0.1);
+    assert!(s["frame"].get("elevationDeg").is_none());
+    send(
+        &mut client,
+        json!({"type":"view_center","lat":43.6532,"lon":-79.3832}),
+    );
+    let s = state(&mut client, |s| s["selection"]["sourceId"] == "nexrad");
+    assert_eq!(s["selection"]["target"]["kind"], "site");
 }
 
 #[test]
