@@ -229,6 +229,7 @@ FocusScope {
                     color: Qt.alpha(card.theme.background, .92)
                     Label { id: product; anchors.centerIn: parent; font.pixelSize: 10; opacity: .8
                         text: card.scan ? card.scan.productName.toUpperCase()
+                            + (card.scan.kind === "mosaic" && card.scan.units ? " · " + card.scan.units : "")
                             + (card.scan.kind !== "mosaic" && card.scan.scanTime ? " " + card.scan.elevationDeg.toFixed(1) + "°" : "") : "" }
                 }
                 Item { Layout.fillWidth: true }
@@ -348,7 +349,7 @@ FocusScope {
             Layout.fillWidth: true
             font.pixelSize: 8
             opacity: .5
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
             text: map.osmOnScreen ? (connection.source ? connection.source.attribution : "NOAA") + " · © OpenStreetMap"
                 : (connection.source ? connection.source.attribution : "NOAA") + " · Natural Earth"
         }

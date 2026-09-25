@@ -83,5 +83,19 @@ for _ in {1..50}; do
   sleep .1
 done
 [[ $lat == "$want_lat" && $lon == "$want_lon" ]] || fail "Enter did not centre the map on $first" "Expected: $want_lat $want_lon" "Actual:   $lat $lon"
+# The Canada source is searchable, locks as a mosaic, and carries a finite
+# fractional rate bound and real units through the production window.
+call open eccc
+[[ $(call matches) == *eccc* ]] || fail 'eccc did not list the Canada mosaic'
+call accept
+for _ in {1..50}; do
+  source=$(quickshell ipc --pid "$pid" call keys field source)
+  [[ $source == eccc ]] && break
+  sleep .1
+done
+[[ $source == eccc ]] || fail 'Selecting ECCC did not select its mosaic'
+legend=$(quickshell ipc --pid "$pid" call keys legend)
+jq -e '.labels[0] == "0.1" and .labels[-1] == "200+" and .units == "mm/h" and .unitsVisible and .floorActive == false and .product == "Rain rate estimate"' <<< "$legend" >/dev/null || fail "ECCC legend lost rate semantics: $legend"
+[[ $(quickshell ipc --pid "$pid" call keys field locked) == true ]] || fail 'Selecting ECCC did not lock the source'
 if rg -q 'TypeError|ReferenceError|Unable to assign|Failed to create.*context' "$check_dir/log"; then fail "QML errors in the log"; fi
 echo "PICKER_PASSED"

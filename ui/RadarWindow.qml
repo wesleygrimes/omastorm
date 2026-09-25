@@ -125,7 +125,10 @@ Item {
     function jump(toNewest) { if (frames.length > 1) engine.send({type: "seek", id: frames[toNewest ? frames.length - 1 : 0].id}); }
     readonly property int bands: scan ? scan.palette.length : 0
     function legendLabel(index) {
+        if (!scan || index < 0 || index >= scan.palette.length) return "";
         var bounds = scan.bounds;
+        if (index === 0 && engine.source && engine.source.defaultProductClass === "precipitationRate")
+            return String(bounds[0]);
         return index === 0 ? "<" + bounds[1] : index === bands - 1 ? bounds[index] + "+" : String(bounds[index]);
     }
     // Where the weak-return floor cuts the legend strip, as a fraction of its
@@ -146,7 +149,8 @@ Item {
     readonly property var legendShown: {
         var n = bands, shown = [];
         if (!n) return shown;
-        var column = legendRow.width / n, gap = 8, last = (n - 1) * column, cursor = 0;
+        var column = legendRow.width / n, gap = 8, last = Math.min((n - 1) * column,
+            legendRow.width - legendUnits.implicitWidth - gap - legendLabel(n - 1).length * legendMetrics.advanceWidth), cursor = 0;
         for (var i = 0; i < n - 1; i++) {
             var x = i * column, right = x + legendLabel(i).length * legendMetrics.advanceWidth + gap;
             shown[i] = x >= cursor && right <= last;
@@ -307,6 +311,11 @@ Item {
     IpcHandler {
         target: "keys"
         function run(action: string): void { app.run(action); }
+        function legend(): string {
+            return JSON.stringify({labels: app.scan ? app.scan.palette.map((_, i) => app.legendLabel(i)) : [],
+                units: legendUnits.text, unitsVisible: legendUnits.visible, floorActive: app.floorActive,
+                product: app.scan ? app.scan.productName : ""});
+        }
         function bindings(): string { return JSON.stringify(app.bindings); }
         function errors(): string { return JSON.stringify(app.configErrors); }
         function menu(open: bool): void { if (open) treatmentMenu.show(); else treatmentMenu.close(); }
@@ -722,6 +731,7 @@ Item {
                         }
                         LabelText {
                             text: !app.scan ? "" : (engine.source ? engine.source.attribution : (app.scan.kind === "mosaic" ? "" : "NOAA NEXRAD"))
+                            visible: !(win.compact && app.scan && app.scan.kind === "mosaic")
                             font.letterSpacing: 1; opacity: .55
                             Layout.fillWidth: true
                             Layout.minimumWidth: 0
@@ -970,6 +980,16 @@ Item {
                         }
                     }
                 }
+                // Long mosaic credits remain readable when the header is compact.
+                LabelText {
+                    anchors.bottom: parent.bottom; anchors.right: parent.right
+                    anchors.left: parent.left; anchors.leftMargin: 12; anchors.rightMargin: 12
+                    anchors.bottomMargin: 30
+                    horizontalAlignment: Text.AlignRight
+                    text: engine.source ? engine.source.attribution : ""
+                    visible: win.compact && !!app.scan && app.scan.kind === "mosaic"
+                    font.pixelSize: 8; opacity: .65
+                }
                 // OSM ODbL safe harbour: short credit in a map corner. Full
                 // catalogue (NOAA, Natural Earth, GeoNames, …) stays in README.
                 LabelText {
@@ -1046,34 +1066,36 @@ Item {
                     height: 22
                     RowLayout {
                         id: legendRow
-                        anchors.fill: parent; spacing: 0
+                        anchors.left: parent.left; anchors.right: parent.right; anchors.top: parent.top
+                        height: 6; spacing: 0
                         Repeater {
                             model: app.scan ? app.scan.palette : []
-                            ColumnLayout {
+                            Rectangle {
                                 required property string modelData
-                                required property int index
-                                Layout.fillWidth: true; Layout.preferredWidth: 1; spacing: 4
-                                Rectangle { Layout.fillWidth: true; height: 6; color: modelData }
-                                // Number at the swatch's left edge; the unit sits at the far
-                                // right of the last column so the strip spans the full width.
-                                RowLayout {
-                                    id: labelRow
-                                    Layout.fillWidth: true; spacing: 0
-                                    LabelText {
-                                        id: number
-                                        text: app.legendLabel(index)
-                                        opacity: app.legendShown[index] ? 1 : 0
-                                        font.pixelSize: 10
-                                    }
-                                    Item { Layout.fillWidth: true }
-                                    LabelText {
-                                        text: app.scan ? app.scan.units : ""
-                                        font.pixelSize: 10
-                                        visible: index===app.bands-1 && labelRow.width >= number.implicitWidth + implicitWidth + 8
-                                    }
-                                }
+                                Layout.fillWidth: true; Layout.preferredWidth: 1
+                                height: 6; color: modelData
                             }
                         }
+                    }
+                    Repeater {
+                        model: app.bands
+                        LabelText {
+                            required property int index
+                            y: 10
+                            x: !app.bands ? 0 : index === app.bands - 1
+                                ? Math.min(index * legendRow.width / app.bands,
+                                    legendRow.width - legendUnits.implicitWidth - 8 - implicitWidth)
+                                : index * legendRow.width / app.bands
+                            text: app.legendLabel(index)
+                            opacity: app.legendShown[index] ? 1 : 0
+                            font.pixelSize: 10
+                        }
+                    }
+                    LabelText {
+                        id: legendUnits
+                        anchors.right: parent.right; y: 10
+                        text: app.scan ? app.scan.units : ""
+                        font.pixelSize: 10
                     }
                     // The hidden part of the scale (DESIGN.md, weak-return floor):
                     // the swatches under the floor sink into the background with a

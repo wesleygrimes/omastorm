@@ -56,7 +56,10 @@ on one row above the ticks. Playback buttons align with the track at the bottom.
 
 **Product stack.** Compact product line (name, then the active source's
 attribution). The meta
-line is the age only, right-aligned under that row.
+line is the age only, right-aligned under that row. In compact windows,
+mosaic attribution moves to the map corner so long provider names remain
+readable. The legend always shows the engine's units; precipitation-rate
+legends start at their first reported lower bound, including fractions.
 
 **Time.** Age on the meta line is how stale the frame on screen is. The
 strip stamp is the absolute observation time (date, time, zone). Locale
