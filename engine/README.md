@@ -8,7 +8,7 @@ versioning are in [docs/RELEASING.md](../docs/RELEASING.md).
 The binary embeds Natural Earth geography, `data/sites.json`, and
 `data/product.json` (the product, palette, and frame template). It embeds no
 archived radar. Compiled radar sources live in `src/source.rs`: PolarFamily
-NEXRAD and each GridFamily mosaic (OPERA today) are registry entries. A
+NEXRAD and each GridFamily mosaic (OPERA and ECCC) are registry entries. A
 daemon starts with no selection; `select_site` or `select_source` starts
 the matching poller. An `OMASTORM_ARCHIVE` scan is decoded at startup and
 labeled archived.
@@ -100,6 +100,18 @@ loads the newest frame, and backfills earlier frames. History is capped at
 Mosaic frames are complete images, with no polar sweep or elevation selector.
 Source selection and the grid contract are in
 [docs/grid-adapters.md](../docs/grid-adapters.md).
+
+## Canadian mosaic
+
+`src/eccc.rs` reads ECCC GeoMet observed timestamps and decodes the fixed
+`Radar-Rain_Dis-14colors` PNG style into precipitation-rate classes. The
+product is a rain rate estimate in mm/h, with up to 30 complete frames at
+six-minute intervals. The newest frame loads first; history loads serially
+with bounded requests, and switching sources cancels the poller. Unknown
+colours reject a frame; transparency is missing data, never measured zero.
+The grid is the requested geographic raster, not the original 1 km data.
+NEXRAD keeps priority wherever it covers. The source box comes from GeoMet
+metadata and does not guarantee measured coverage throughout Canada.
 
 ## METAR
 

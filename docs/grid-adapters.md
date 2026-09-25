@@ -33,7 +33,7 @@ exist outside a source's actual coverage.
 - Choosing HDF5 when the same provider product is available as COG or
   GeoTIFF.
 - Precolored consumer tiles or any paid / key-gated feed as a default
-  source.
+  source. The ECCC exception below permits a fixed discrete radar style.
 - Polar ODIM / DX / ORD `PVOL` readers. Those stay PolarFamily.
 - Faking NEXRAD Level II history, tilts, or a painting sweep on a
   mosaic that has none.
@@ -221,6 +221,28 @@ WGS84. Sampling applies its inverse before the projection. British
 National Grid therefore transforms WGS84 to OSGB36 before its Airy
 transverse-Mercator projection; using the Airy ellipsoid alone is not
 conforming.
+
+## ECCC rate-class exception
+
+ECCC GeoMet's `RADAR_1KM_RRAI` is decoded from the explicitly requested
+`Radar-Rain_Dis-14colors` WMS style. Its fixed RGB classes become palette
+indices; transparent pixels mean no reported value, and unexpected colours
+or partial alpha reject the frame. Class boundaries follow ECCC's
+[published radar classes](https://github.com/ECCC-MSC/geomet-mapfile/blob/master/geomet_mapfile/resources/mapserv/class/RADARURPPRECIPR14.json);
+RGB values are checked against the requested live style's legend and GetMap
+(the legacy file differs in its yellow swatch). No nearest-colour inference is allowed.
+This source is a **rain rate estimate in mm/h**, not raw reflectivity.
+The snow layer is an alternative conversion and is not merged into rain.
+
+Observed timestamps come from the layer's capabilities time dimension
+(6-minute cadence); at most 30 frames are retained. Requests use WMS 1.1.1
+EPSG:4326 with longitude/latitude axis order and a fixed 4096 × 1711 raster
+over the advertised service box. GeoMet resamples its mosaic into that
+requested grid; the engine classifies it without another spatial resample.
+This is an explicit exception to native raw-raster ingestion. It does not
+recover the original measurements or the provider's full 1 km resolution.
+NEXRAD still wins wherever a polar site covers the centre. The service box
+includes areas without radar measurements; transparent cells stay blank.
 
 ## Protocol v2
 
