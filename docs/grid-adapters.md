@@ -79,6 +79,14 @@ on its coverage. They are not fake dishes and there is no separate
 provider picker. Unlocked follow still selects automatically from the
 centre.
 
+Manual-only live sources keep their real geographic coverage but set the
+adapter's `MosaicMeta.covering` eligibility to false. NOAA MRMS (`mrms-conus`)
+uses this policy: it is found by `mrms` or name and appears in empty browsing
+inside its domain or while selected. Startup follow, pan/zoom, unlock, and
+place changes never select it automatically. It currently shows the newest
+valid QC base-reflectivity observation; its decoder and bounded live-fetch
+contract are in [mrms-decoder.md](mrms-decoder.md).
+
 ## On screen
 
 Same chrome, timeline, treatments, and keyboard. Radar color still
@@ -112,7 +120,12 @@ comes only from `frame.palette`. Pixels, Glyphs, and Stipple stay.
 Adapters are compiled in and are not discovered at runtime.
 `SourceRegistry` is enum dispatch: polar NEXRAD or a `GridRef` mosaic.
 The live loop never names a mosaic id. `select_source`, poll restart,
-history depth, and the loading placeholder all go through the registry.
+history policy, and the loading placeholder all go through the registry.
+`HistoryPolicy` supplies a count cap and optional observation-time window.
+MRMS uses 30 frames in `(newest − 60 minutes, newest]`; OPERA retains its
+12-frame count policy. Live and backfill arrivals enforce both limits before
+exposing entries, preserve retained pins, and reject expired late results.
+Poll restarts receive the retained timestamps, so MRMS can skip known frames.
 OPERA is one `GridRef` variant, the same shape as the next national
 mosaic.
 
@@ -120,7 +133,7 @@ A new live mosaic is:
 
 1. A module that polls (`GridEvent`s stamped with its `source_id`),
    publishes a loading placeholder, and declares coverage, product
-   class, `selection_priority`, and history depth.
+   class, `selection_priority`, and history policy.
 2. A `GridRef` variant and a field on `SourceRegistry`.
 3. Its service box in `engine/src/envelope.rs` (`LIVE_MOSAICS`), so the
    gazetteer and 1:10m tiles grow with follow.

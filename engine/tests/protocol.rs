@@ -146,7 +146,7 @@ fn fixture_transport_and_shared_commands() {
         assert!(ids.contains(id));
     }
     let sources = hello["sources"].as_array().unwrap();
-    assert_eq!(sources.len(), 3);
+    assert_eq!(sources.len(), 4);
     assert_eq!(sources[0]["id"], "nexrad");
     assert_eq!(sources[0]["family"], "polar");
     assert_eq!(sources[0]["kind"], "site");
@@ -161,6 +161,14 @@ fn fixture_transport_and_shared_commands() {
     assert_eq!(sources[2]["kind"], "mosaic");
     assert_eq!(sources[2]["selectionPriority"], 100);
     assert_eq!(sources[2]["coverage"]["kind"], "box");
+    let mrms = sources.iter().find(|s| s["id"] == "mrms-conus").unwrap();
+    assert_eq!(mrms["family"], "grid");
+    assert_eq!(mrms["kind"], "mosaic");
+    assert_eq!(mrms["attribution"], "NOAA/NSSL MRMS");
+    assert_eq!(
+        mrms["coverage"],
+        json!({"kind":"box", "north":55.0,"south":20.0,"east":-60.0,"west":-130.0})
+    );
     let initial = read(&mut first);
     assert_eq!(initial["frame"]["scanTime"], "2013-05-20T20:16:43Z");
     assert_eq!(initial["mode"], "archived");
@@ -748,6 +756,48 @@ fn view_center_idles_without_a_covering_source() {
     assert_eq!(s["frame"], json!(null));
     assert_eq!(s["timeline"], json!([]));
     assert_eq!(s["playing"], false);
+}
+
+#[test]
+fn mrms_is_explicit_and_its_lock_survives_client_reconnect_and_reselection() {
+    let _serial = serial();
+    let engine = Engine::start_lean();
+    let mut client = engine.connect();
+    read(&mut client);
+    read(&mut client);
+    send(&mut client, json!({"type":"select_site","id":"mrms-conus"}));
+    assert_eq!(read(&mut client)["type"], "error");
+    send(
+        &mut client,
+        json!({"type":"select_source","id":"mrms-conus"}),
+    );
+    let first = state(&mut client, |s| s["selection"]["sourceId"] == "mrms-conus");
+    assert_eq!(first["frame"]["kind"], "mosaic");
+    assert_eq!(first["frame"]["units"], "dBZ");
+    assert!(first["frame"].get("site").is_none());
+    send(&mut client, json!({"type":"lock","enabled":true}));
+    state(&mut client, |s| s["navigation"]["locked"] == true);
+    // Inside the MRMS box, outside NEXRAD coverage. A lock keeps MRMS here;
+    // automatic follow must select nothing after unlock.
+    send(
+        &mut client,
+        json!({"type":"view_center","lat":20.1,"lon":-129.9}),
+    );
+    send(
+        &mut client,
+        json!({"type":"select_source","id":"mrms-conus"}),
+    );
+    // A second client sees the same shared selection and lock. The UI's
+    // remembered-camera tests separately cover daemon restarts.
+    let mut reconnected = engine.connect();
+    read(&mut reconnected);
+    let resumed = read(&mut reconnected);
+    assert_eq!(resumed["selection"], first["selection"]);
+    assert_eq!(resumed["navigation"]["locked"], true);
+    send(&mut client, json!({"type":"lock","enabled":false}));
+    let followed = state(&mut client, |s| s["navigation"]["locked"] == false);
+    assert!(followed["selection"].is_null());
+    assert_eq!(followed["connection"]["status"], "idle");
 }
 
 #[test]

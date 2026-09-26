@@ -8,13 +8,19 @@ versioning are in [docs/RELEASING.md](../docs/RELEASING.md).
 The binary embeds Natural Earth geography, `data/sites.json`, and
 `data/product.json` (the product, palette, and frame template). It embeds no
 archived radar. Compiled radar sources live in `src/source.rs`: PolarFamily
-NEXRAD and each GridFamily mosaic (OPERA today) are registry entries. A
+NEXRAD and each GridFamily mosaic (OPERA and MRMS) are registry entries. A
 daemon starts with no selection; `select_site` or `select_source` starts
 the matching poller. An `OMASTORM_ARCHIVE` scan is decoded at startup and
 labeled archived.
 Missing build data
 produces an error naming `scripts/extract-fixtures.sh`; vendored archives and checksums
 are described in [data/README.md](../data/README.md).
+
+`src/mrms.rs` decodes NOAA MRMS CONUS QC base reflectivity into grid frames;
+`src/mrms/live.rs` retrieves its newest valid observation first and fills a
+30-frame, one-hour loop only while manually selected. Its input profile,
+coordinate normalization, live retrieval limits,
+and offline smoke test are documented in [MRMS decoding](../docs/mrms-decoder.md).
 
 ## Runtime and storage
 

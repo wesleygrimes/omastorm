@@ -49,6 +49,8 @@ rusqlite = { version = "0.40", features = ["bundled"] }
 serde_json = "1"
 
 [dev-dependencies]
+# Deterministic live/backfill deadlines without wall-clock sleeps.
+tokio = { version = "1.53", features = ["test-util"] }
 # Verifies the fixture's hash against `golden/ktlx-20130520/sweep0.json`;
 # already in the tree through nexrad-decode.
 sha2 = "0.10"
