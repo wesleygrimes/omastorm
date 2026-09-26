@@ -3,8 +3,11 @@
 # export) in the real window against the fixture daemon: state.json names
 # the station on screen with the frame's scan time and whether it is the
 # live head; stepping back flips `live` to false and moves `scan` to that
-# frame; jumping to the newest sets it true again. Run through check.sh's
-# window lane.
+# frame; jumping to the newest sets it true again. The window and the bar
+# are separate processes on one state.json, so the check also simulates the
+# other client: a pan lands on disk while this process stays put, the daemon
+# restarts, and the reconnect and the next sweep must leave the panned
+# camera alone. Run through check.sh's window lane.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 check_dir="$PWD/target/check-export"
@@ -73,6 +76,29 @@ until_export live true
 # Back to the newest: the head again — the same scan, or a newer one if
 # the live station delivered a sweep meanwhile.
 [[ $(exported scan) > $head || $(exported scan) == "$head" ]] || fail "The head scan went backwards: head $head, now $(exported scan)"
+
+# The cross-client clobber: the other client (the bar) pans while this
+# process stays put, so the file moves on and this process's camera does
+# not. When the daemon returns, the reconnect holds only the launch-time
+# camera — writing the whole snapshot here would put it back over the pan.
+# The reconnect and the sweep that follows may re-record site/scan/live,
+# never the camera keys.
+panned_lat=37.11; panned_lon=-80.25; panned_span=160
+jq --argjson lat "$panned_lat" --argjson lon "$panned_lon" --argjson span "$panned_span" \
+    '.lat = $lat | .lon = $lon | .span = $span' "$check_dir/state.json" > "$check_dir/state.next"
+mv "$check_dir/state.next" "$check_dir/state.json"
+sleep 1
+target/debug/omastorm-engine stop
+target/debug/omastorm-engine ensure
+until_export site "$site"
+pan_intact() { [[ $(exported lat) == "$panned_lat" && $(exported lon) == "$panned_lon" && $(exported span) == "$panned_span" ]]; }
+pan_intact || fail "The reconnect wrote the launch camera over the other client's pan: $(cat "$check_dir/state.json")"
+call run oldest
+until_export live false
+pan_intact || fail "A sweep rewrote the camera after the reconnect: $(cat "$check_dir/state.json")"
+call run newest
+until_export live true
+pan_intact || fail "A sweep rewrote the camera after the reconnect: $(cat "$check_dir/state.json")"
 
 if rg -q 'TypeError|ReferenceError|Unable to assign|is not a function' "$check_dir/log"; then fail "QML errors in the log"; fi
 echo "EXPORT_PASSED"
