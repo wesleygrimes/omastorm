@@ -227,3 +227,115 @@ fn waiting_for_a_previous_decoder_consumes_the_history_deadline() {
         assert_eq!(work.available_permits(), 1);
     });
 }
+
+#[test]
+fn previous_date_history_never_blocks_current_weather_or_reports_it_offline() {
+    runtime().block_on(async {
+        tokio::time::pause();
+        let today = Utc::now().date_naive();
+        let first = today.and_hms_opt(0, 10, 7).unwrap();
+        for slow in [false, true] {
+            let historical_calls = Arc::new(AtomicUsize::new(0));
+            let count = Arc::clone(&historical_calls);
+            let (tx, mut rx) = mpsc::channel(1);
+            let task = tokio::spawn(poll_loop(
+                GridSender::new(tx, 1),
+                vec![],
+                move |day, _| {
+                    let count = Arc::clone(&count);
+                    async move {
+                        if day == today {
+                            return Ok(page(&[key(first)], None));
+                        }
+                        count.fetch_add(1, Ordering::SeqCst);
+                        if slow {
+                            std::future::pending::<()>().await;
+                        }
+                        Err("previous day unavailable".into())
+                    }
+                },
+                |_| async { Ok(vec![]) },
+                Arc::new(decoded),
+                Arc::new(Semaphore::new(1)),
+                POLL_INTERVAL,
+            ));
+            let live = rx.recv().await.unwrap();
+            assert!(
+                matches!(live.event, GridEvent::Frame { start_ms, .. } if start_ms == ms(first))
+            );
+            assert_eq!(
+                historical_calls.load(Ordering::SeqCst),
+                0,
+                "publish before historical listing"
+            );
+            live.published.unwrap().send(true).unwrap();
+            let next = rx.recv().await.unwrap();
+            assert!(matches!(next.event, GridEvent::Online { .. }));
+            assert_eq!(historical_calls.load(Ordering::SeqCst), 1);
+            task.abort();
+            let _ = task.await;
+        }
+    });
+}
+
+#[test]
+fn midnight_fallback_uses_previous_date_without_repeating_failed_current_keys() {
+    runtime().block_on(async {
+        tokio::time::pause();
+        let today = Utc::now().date_naive();
+        let older = today.pred_opt().unwrap().and_hms_opt(23, 58, 7).unwrap();
+        for bad_current in 0..=3 {
+            let gets = Arc::new(Mutex::new(Vec::new()));
+            let calls = Arc::clone(&gets);
+            let (tx, mut rx) = mpsc::channel(1);
+            let task = tokio::spawn(poll_loop(
+                GridSender::new(tx, 1),
+                vec![],
+                move |day, _| async move {
+                    Ok(page(
+                        &if day == today {
+                            (0..bad_current)
+                                .map(|m| key(today.and_hms_opt(0, m * 2, 7).unwrap()))
+                                .collect()
+                        } else {
+                            vec![key(older)]
+                        },
+                        None,
+                    ))
+                },
+                move |requested| {
+                    calls.lock().unwrap().push(requested.clone());
+                    async move {
+                        if requested == key(older) {
+                            Ok(vec![])
+                        } else {
+                            Err("corrupt current object".into())
+                        }
+                    }
+                },
+                Arc::new(decoded),
+                Arc::new(Semaphore::new(1)),
+                POLL_INTERVAL,
+            ));
+            let live = rx.recv().await.unwrap();
+            if bad_current < 3 {
+                assert!(
+                    matches!(live.event, GridEvent::Frame { start_ms, .. } if start_ms == ms(older))
+                );
+            } else {
+                assert!(matches!(live.event, GridEvent::Offline { .. }));
+            }
+            let requested = gets.lock().unwrap().clone();
+            assert_eq!(
+                requested.len(),
+                ((bad_current + 1) as usize).min(FALLBACK_MAX)
+            );
+            assert_eq!(
+                requested.iter().collect::<HashSet<_>>().len(),
+                requested.len()
+            );
+            task.abort();
+            let _ = task.await;
+        }
+    });
+}

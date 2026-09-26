@@ -14,6 +14,8 @@ pub const ID: &str = "mrms-conus";
 const BODY_MAX: usize = 64 << 20;
 const PNG_MEMORY_MAX: usize = 16 << 20;
 const TEXTURE_MAX: usize = 32 << 20;
+/// Reserve one encoded result within the total 1 GiB runtime-texture budget.
+pub const DISK_TEXTURE_MAX: u64 = (1 << 30) - TEXTURE_MAX as u64;
 const WIDTH: u32 = 7000;
 const HEIGHT: u32 = 3500;
 const CELLS: usize = WIDTH as usize * HEIGHT as usize;

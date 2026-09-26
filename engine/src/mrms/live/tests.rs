@@ -163,7 +163,7 @@ fn registry_exposes_manual_only_mrms_without_changing_follow_or_map_clip() {
 }
 
 #[test]
-fn discovery_merges_midnight_pages_sorts_and_deduplicates() {
+fn discovery_reads_one_date_sorts_and_deduplicates_pages() {
     let yesterday = day().pred_opt().unwrap();
     let before = yesterday.and_hms_opt(23, 58, 1).unwrap();
     let newest = stamp(0, 20, 16);
@@ -199,16 +199,9 @@ fn discovery_merges_midnight_pages_sorts_and_deduplicates() {
     let found = runtime().block_on(discover(day(), &list)).unwrap();
     assert_eq!(
         found.iter().map(|o| o.stamp).collect::<Vec<_>>(),
-        vec![
-            cutoff,
-            cutoff + chrono::Duration::seconds(1),
-            before,
-            stamp(0, 0, 10),
-            stamp(0, 2, 5),
-            newest
-        ]
+        vec![stamp(0, 0, 10), stamp(0, 2, 5), newest]
     );
-    assert_eq!(calls.lock().unwrap().len(), 3);
+    assert_eq!(calls.lock().unwrap().len(), 2);
     let url = listing_url(HOST, day(), Some("a+b/&=")).unwrap();
     assert_eq!(
         url.query_pairs()
@@ -348,14 +341,14 @@ fn bad_newest_falls_back_but_attempts_duplicates_and_clock_rollback_are_bounded(
 fn polling_reports_failure_empty_recovery_and_new_data_without_duplicate_frames() {
     runtime().block_on(async {
         let today = Utc::now().date_naive();
-        let first = today.and_hms_opt(0, 1, 7).unwrap();
+        let first = today.and_hms_opt(12, 1, 7).unwrap();
         let next = first + chrono::Duration::minutes(2);
         let replies = Arc::new(Mutex::new(VecDeque::from([
-            Ok(page(&[key(first)], None)), Ok(page(&[], None)),
+            Ok(page(&[key(first)], None)),
             Err("network error".into()),
             Ok(page(&[], None)), Ok(page(&[], None)),
-            Ok(page(&[key(first)], None)), Ok(page(&[], None)),
-            Ok(page(&[key(next)], None)), Ok(page(&[], None)),
+            Ok(page(&[key(first)], None)),
+            Ok(page(&[key(next)], None)),
         ])));
         let (tx, mut rx) = mpsc::channel(1);
         let task = tokio::spawn(poll_loop(GridSender::new(tx, 4), vec![],
