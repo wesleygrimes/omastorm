@@ -203,6 +203,13 @@ source while its replacement loads. A source change clears that frame, and
 the first ready sweep fades in briefly. Display one radar station’s sweep
 at a time.
 
+A grid frame is presented only after its decoded image and actual GPU texture
+both match the frame's native dimensions. Qt can silently shrink an oversized
+upload, so image readiness alone is insufficient. Unsupported dimensions or
+failed verification hide the radar and show a readable error in both surfaces;
+the user can choose another source. Recheck each replacement and recreated
+scene graph, and discard results from superseded checks.
+
 ## Split
 
 The engine fetches, decodes, caches, and rasterizes. The UI is small state

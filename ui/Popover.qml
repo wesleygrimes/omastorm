@@ -250,11 +250,17 @@ FocusScope {
                     font.pixelSize: 10
                 }
             }
-            Label {
-                anchors.centerIn: parent; width: parent.width - 24; wrapMode: Text.Wrap
-                horizontalAlignment: Text.AlignHCenter
-                visible: !card.state
-                text: card.session.startupError || connection.error
+            Rectangle {
+                anchors.centerIn: parent; width: parent.width - 24
+                height: errorNotice.implicitHeight + 16
+                color: card.theme.background
+                visible: errorNotice.text.length > 0
+                Label {
+                    id: errorNotice
+                    anchors.centerIn: parent; width: parent.width - 16; wrapMode: Text.Wrap
+                    horizontalAlignment: Text.AlignHCenter
+                    text: map.error || card.session.startupError || connection.error
+                }
             }
             Rectangle {
                 anchors.fill: parent

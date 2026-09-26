@@ -379,6 +379,16 @@ Grids sample their native CRS in the shader: lon/lat, then the grid's
 CRS, then `inverse(geotransform)` to a pixel. One resample, from
 provider pixels. The engine does not warp rasters to Mercator.
 
+Before presenting a mosaic, `TextureCheck.qml` compares the decoded PNG size
+with the frame's width/height, then checks the uploaded sampler's `textureSize`
+in a small shader. Qt may otherwise silently downscale a texture that exceeds
+the backend's limit. Only a 16×16 pass/fail result is read back; radar pixels
+stay on the GPU. A mismatch or an unavailable verification shader/readback
+withholds radar and produces a visible error in both surfaces. Each new frame
+and scene-graph recreation is checked; superseded asynchronous results are
+discarded. The checker requires texture-size queries (OpenGL ES 3 or the
+corresponding desktop/RHI capability); it fails closed on older backends.
+
 A CRS ships only when its forward projection is implemented in the grid
 shader. Geographic lon/lat, Mercator, transverse Mercator, polar
 stereographic, Lambert conformal conic, and Lambert azimuthal equal area

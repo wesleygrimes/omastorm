@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Shapes
+import QtQuick.Window
 import Quickshell
 import "Metar.js" as Metar
 
@@ -53,7 +54,8 @@ Item {
     // and tag stay away too.
     readonly property bool drawable: !!scan && scan.scanTime !== ""
     readonly property int bands: scan ? scan.palette.length : 0
-    property string error: ""
+    property string graphicsError: ""
+    readonly property string error: graphicsError || textureCheck.error
     signal tilesNeeded(int z, int x0, int y0, int x1, int y1)
     /// ICAO chips replace city names when METAR is on. Click is a pick, not a pan.
     signal metarPicked(var report)
@@ -396,7 +398,7 @@ Item {
             property color minorRoads: Qt.alpha(map.theme.foreground, .24)
             property color majorRoads: Qt.alpha(map.theme.foreground, .48)
             fragmentShader: "shaders/tile.frag.qsb"
-            onStatusChanged: if (status === ShaderEffect.Error) map.error = "Basemap GPU shader failed: " + log
+            onStatusChanged: if (status === ShaderEffect.Error) map.graphicsError = "Basemap GPU shader failed: " + log
         }
     }
 
@@ -667,7 +669,17 @@ Item {
         + (scan && scan.site ? scan.site.id : "") + "/" + (mosaic ? "mosaic" : "polar")
     property var frontBuffer: null
     property var loadingBuffer: null
-    readonly property bool radarReady: drawable && !!frontBuffer
+    // A recreated scene graph uploads textures again, so its native-size
+    // check must run again too, even when the engine frame has not changed.
+    Connections {
+        target: map.Window.window
+        function onSceneGraphInvalidated() {
+            map.frontBuffer = null;
+            map.loadingBuffer = null;
+            Qt.callLater(map.stageSweep);
+        }
+    }
+    readonly property bool radarReady: drawable && !error && !!frontBuffer
         && !!frontBuffer.snapshot && frontBuffer.snapshot.key === sweepKey
     readonly property var renderScan: radarReady ? frontBuffer.snapshot.scan : null
     readonly property bool renderMosaic: !!renderScan && renderScan.kind === "mosaic"
@@ -699,7 +711,12 @@ Item {
             return buffer && buffer.snapshot && buffer.snapshot.key === sweepKey
                 && buffer.snapshot.texture === texture && buffer.snapshot.lut === azimuthLut;
         }
-        if (matches(frontBuffer)) return;
+        if (matches(frontBuffer)) {
+            // Seeking back can supersede a failed or still-checking upload.
+            loadingBuffer = null;
+            (frontBuffer === sweepA ? sweepB : sweepA).snapshot = null;
+            return;
+        }
         if (matches(loadingBuffer)) { presentSweep(); return; }
         loadingBuffer = frontBuffer === sweepA ? sweepB : sweepA;
         loadingBuffer.snapshot = { key: sweepKey, scan: scan, texture: texture, lut: azimuthLut };
@@ -709,7 +726,8 @@ Item {
         var buffer = loadingBuffer;
         if (!buffer || !buffer.snapshot || !drawable
             || buffer.snapshot.key !== sweepKey || buffer.snapshot.texture !== texture
-            || buffer.snapshot.lut !== azimuthLut || !buffer.ready) return;
+            || buffer.snapshot.lut !== azimuthLut || !buffer.ready
+            || buffer.snapshot.scan.kind === "mosaic" && !textureCheck.ready) return;
         frontBuffer = buffer;
         loadingBuffer = null;
     }
@@ -741,6 +759,14 @@ Item {
     }
     SweepBuffer { id: sweepA }
     SweepBuffer { id: sweepB }
+    TextureCheck {
+        id: textureCheck
+        readonly property var frame: map.loadingBuffer && map.loadingBuffer.snapshot
+            ? map.loadingBuffer.snapshot.scan : null
+        image: frame && frame.kind === "mosaic" ? map.loadingBuffer.sweep : null
+        expectedSize: frame && frame.kind === "mosaic" ? Qt.size(frame.width, frame.height) : Qt.size(0, 0)
+        onReadyChanged: if (ready) Qt.callLater(map.presentSweep)
+    }
     // The frame's palette as a bands x 1 strip; the shader samples
     // texel centers, so radar and legend share the socket palette.
     // The strip stays visible so its children get scene-graph nodes
@@ -773,8 +799,8 @@ Item {
         // The radar alone, not the basemap: .6 under UNAVAILABLE.
         opacity: map.sweepOpacity
         anchors.fill: parent
-        onStatusChanged: if (status === ShaderEffect.Error) map.error = "Radar GPU shader failed: " + log
-        Component.onCompleted: if (GraphicsInfo.api === GraphicsInfo.Software) map.error = "Radar requires GPU rendering (OpenGL/Vulkan)."
+        onStatusChanged: if (status === ShaderEffect.Error) map.graphicsError = "Radar GPU shader failed: " + log
+        Component.onCompleted: if (GraphicsInfo.api === GraphicsInfo.Software) map.graphicsError = "Radar requires GPU rendering (OpenGL/Vulkan)."
         property var sweep: map.frontBuffer ? map.frontBuffer.sweep : sweepA.sweep
         property var azimuthLut: map.frontBuffer ? map.frontBuffer.lut : sweepA.lut
         property var swatches: paletteTexture
@@ -803,7 +829,7 @@ Item {
         visible: map.radarReady && map.renderMosaic
         opacity: map.sweepOpacity
         anchors.fill: parent
-        onStatusChanged: if (status === ShaderEffect.Error) map.error = "Grid GPU shader failed: " + log
+        onStatusChanged: if (status === ShaderEffect.Error) map.graphicsError = "Grid GPU shader failed: " + log
         property var sweep: map.frontBuffer ? map.frontBuffer.sweep : sweepA.sweep
         property var swatches: paletteTexture
         property int bands: map.renderBands

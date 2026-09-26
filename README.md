@@ -292,6 +292,10 @@ that notice in the popover restarts the shell.
 
 If expand or the keybind does nothing after an update, restart the shell.
 
+If a mosaic reports that your GPU cannot display its native image size, choose
+another radar source. MRMS needs a native 7000×3500 texture. Omastorm checks the
+uploaded image before displaying it and also reports if that check cannot run.
+
 The engine is one daemon per login. Its log is
 `$XDG_RUNTIME_DIR/omastorm/engine.log` (usually `/run/user/<uid>/omastorm/`).
 If the engine could not be installed, the reason is `bootstrap.log` in the
