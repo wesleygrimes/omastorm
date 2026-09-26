@@ -226,36 +226,56 @@ fn parse_page(bytes: &[u8], day: NaiveDate) -> Result<Page, String> {
     Ok(Page { objects, next })
 }
 
-async fn discover<L, LF>(today: NaiveDate, list: &L) -> Result<Vec<Object>, String>
+async fn discover<L, LF>(day: NaiveDate, list: &L) -> Result<Vec<Object>, String>
 where
     L: Fn(NaiveDate, Option<String>) -> LF,
     LF: Future<Output = Result<Vec<u8>, String>>,
 {
-    let yesterday = today.pred_opt().ok_or("MRMS discovery: invalid UTC date")?;
     let mut objects = Vec::new();
-    for day in [today, yesterday] {
-        let mut token = None;
-        let mut tokens = HashSet::new();
-        for page_index in 0..PAGES_MAX {
-            let bytes = list(day, token).await?;
-            let page = parse_page(&bytes, day)?;
-            objects.extend(page.objects);
-            match page.next {
-                None => break,
-                Some(next) if page_index + 1 < PAGES_MAX && tokens.insert(next.clone()) => {
-                    token = Some(next)
-                }
-                Some(_) => {
-                    return Err(
-                        "MRMS listing: incomplete discovery (page limit or repeated token)".into(),
-                    );
-                }
+    let mut token = None;
+    let mut tokens = HashSet::new();
+    for page_index in 0..PAGES_MAX {
+        let bytes = list(day, token).await?;
+        let page = parse_page(&bytes, day)?;
+        objects.extend(page.objects);
+        match page.next {
+            None => break,
+            Some(next) if page_index + 1 < PAGES_MAX && tokens.insert(next.clone()) => {
+                token = Some(next)
+            }
+            Some(_) => {
+                return Err(
+                    "MRMS listing: incomplete discovery (page limit or repeated token)".into(),
+                );
             }
         }
     }
     objects.sort_by_key(|o| o.stamp);
     objects.dedup_by_key(|o| o.stamp);
     Ok(objects)
+}
+
+async fn list_day<L, LF>(
+    day: NaiveDate,
+    list: &L,
+    duration: Duration,
+) -> Result<Vec<Object>, String>
+where
+    L: Fn(NaiveDate, Option<String>) -> LF,
+    LF: Future<Output = Result<Vec<u8>, String>>,
+{
+    timeout(duration, discover(day, list))
+        .await
+        .map_err(|_| "MRMS discovery timed out".to_owned())?
+}
+
+fn crosses_midnight(newest_ms: i64, today: NaiveDate) -> bool {
+    newest_ms - HISTORY.window_ms.unwrap()
+        < today
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .and_utc()
+            .timestamp_millis()
 }
 
 type Decoded = (MosaicFrame, Vec<u8>, i64);
@@ -394,38 +414,86 @@ async fn poll_loop<L, LF, G, GF, D>(
             return;
         };
         let next_poll = Instant::now() + poll_interval;
-        let listed = timeout(HTTP_TIMEOUT, discover(Utc::now().date_naive(), &list))
-            .await
-            .map_err(|_| "MRMS discovery timed out".to_owned())
-            .and_then(|r| r);
-        let event = match &listed {
+        let today = Utc::now().date_naive();
+        let yesterday = today.pred_opt().unwrap();
+        let mut previous_read = false;
+        let mut listed = list_day(today, &list, HTTP_TIMEOUT).await;
+        // At UTC rollover today's prefix may still be empty. Only then must
+        // yesterday's listing precede the first live candidate.
+        if listed.as_ref().is_ok_and(Vec::is_empty) {
+            previous_read = true;
+            listed = list_day(yesterday, &list, HTTP_TIMEOUT).await;
+        }
+        let event = match &mut listed {
             Ok(objects) if objects.is_empty() => GridEvent::Silent {
                 source_id: ID.into(),
                 reason: "No QC base observations in current/previous UTC dates".into(),
             },
-            Ok(objects) => match newest_valid(
-                objects,
-                known.last().copied(),
-                &get,
-                Arc::clone(&decode),
-                Arc::clone(&work),
-            )
-            .await
-            {
-                Ok(Some((frame, texture, start_ms))) => GridEvent::Frame {
-                    source_id: ID.into(),
-                    frame: Box::new(frame),
-                    texture,
-                    start_ms,
-                },
-                Ok(None) => GridEvent::Online {
-                    source_id: ID.into(),
-                },
-                Err(reason) => GridEvent::Offline {
-                    source_id: ID.into(),
-                    reason,
-                },
-            },
+            Ok(objects) => {
+                let mut latest = newest_valid(
+                    objects,
+                    known.last().copied(),
+                    &get,
+                    Arc::clone(&decode),
+                    Arc::clone(&work),
+                )
+                .await;
+                // A bad first observation after midnight may need yesterday
+                // for fallback. Keep the combined attempt count at three and
+                // never download failed current-date keys a second time.
+                let newest_listed = objects.last().unwrap().stamp.and_utc().timestamp_millis();
+                if latest.is_err()
+                    && !previous_read
+                    && objects.len() < FALLBACK_MAX
+                    && crosses_midnight(newest_listed, today)
+                {
+                    previous_read = true;
+                    match list_day(yesterday, &list, HTTP_TIMEOUT).await {
+                        Ok(older) => {
+                            let mut candidates: Vec<_> = older
+                                .iter()
+                                .rev()
+                                .filter(|o| {
+                                    HISTORY.contains(
+                                        o.stamp.and_utc().timestamp_millis(),
+                                        newest_listed,
+                                    )
+                                })
+                                .take(FALLBACK_MAX - objects.len())
+                                .cloned()
+                                .collect();
+                            candidates.reverse();
+                            if !candidates.is_empty() {
+                                latest = newest_valid(
+                                    &candidates,
+                                    known.last().copied(),
+                                    &get,
+                                    Arc::clone(&decode),
+                                    Arc::clone(&work),
+                                )
+                                .await;
+                            }
+                            objects.splice(0..0, older);
+                        }
+                        Err(reason) => eprintln!("MRMS fallback discovery: {reason}"),
+                    }
+                }
+                match latest {
+                    Ok(Some((frame, texture, start_ms))) => GridEvent::Frame {
+                        source_id: ID.into(),
+                        frame: Box::new(frame),
+                        texture,
+                        start_ms,
+                    },
+                    Ok(None) => GridEvent::Online {
+                        source_id: ID.into(),
+                    },
+                    Err(reason) => GridEvent::Offline {
+                        source_id: ID.into(),
+                        reason,
+                    },
+                }
+            }
             Err(reason) => GridEvent::Offline {
                 source_id: ID.into(),
                 reason: reason.clone(),
@@ -442,7 +510,22 @@ async fn poll_loop<L, LF, G, GF, D>(
             known.insert(ms);
             retain_known(&mut known);
         }
-        if let Ok(objects) = listed {
+        if let Ok(mut objects) = listed {
+            // Publish current weather before consulting history-only prefixes.
+            // A slow or broken history listing cannot change live status or
+            // occupy the next live poll's interval.
+            let remaining = next_poll.saturating_duration_since(Instant::now());
+            if !previous_read
+                && !remaining.is_zero()
+                && known.last().is_some_and(|&ms| crosses_midnight(ms, today))
+            {
+                match list_day(yesterday, &list, remaining.min(HTTP_TIMEOUT)).await {
+                    Ok(older) => {
+                        objects.splice(0..0, older);
+                    }
+                    Err(reason) => eprintln!("MRMS history discovery: {reason}"),
+                }
+            }
             for obj in history_candidates(&objects, &known) {
                 if Instant::now() >= next_poll {
                     break;

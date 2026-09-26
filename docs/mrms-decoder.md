@@ -24,9 +24,12 @@ domain. Startup follow, pans, unlock, and place selection never choose MRMS
 automatically. The adapter displays the newest valid frame first, then fills
 history newest-to-oldest. It performs no network work until explicitly selected.
 
-Each poll reads the current and previous UTC date prefixes, merges strictly
-validated QC-base filenames, deduplicates observation timestamps, and sorts
-them. Each listing is capped at 2 MiB and four pages per date; a truncated
+Live discovery reads today’s UTC prefix first and publishes its newest valid
+observation before consulting yesterday’s history. An empty current prefix or
+a bounded fallback after corrupt first observations can consult yesterday for
+live data. Historical discovery reads yesterday only when the accepted hour
+crosses midnight; its failures cannot override a healthy live feed. Listings
+strictly validate QC-base filenames, deduplicate timestamps, and sort them. Each listing is capped at 2 MiB and four pages per date; a truncated
 result without a usable continuation token fails explicitly. Tokens are URL
 encoded. Discovery is capped at 30 seconds; each object download has its own
 30-second timeout and a 64 MiB allocation/byte cap. Live discovery is scheduled

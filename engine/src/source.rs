@@ -259,7 +259,7 @@ impl SourceRegistry {
     /// for the single pending encoded result. Existing retirement owns deletion.
     pub fn texture_bytes_max(&self, id: &str) -> Option<u64> {
         match self.get(id)? {
-            AdapterRef::Grid(GridRef::Mrms(_)) => Some((1 << 30) - (32 << 20)),
+            AdapterRef::Grid(GridRef::Mrms(_)) => Some(crate::mrms::DISK_TEXTURE_MAX),
             _ => None,
         }
     }
