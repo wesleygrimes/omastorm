@@ -151,6 +151,22 @@ until_status '.updatePending == false'
 until_status '.connected == false'
 "${OMASTORM_ENGINE_BINARY:?selected by mise test integration}" ensure
 until_status '.site == "KFCX" and .connected'
+# Pick MRMS through the embedded production window, then close/reopen the
+# card and reconnect. Both surfaces retain the exact mosaic and its camera.
+: > "$OMASTORM_CONFIG"
+sleep 0.3
+call expand
+until_status '.window'
+quickshell ipc --pid "$pid" call picker open mrms
+[[ $(quickshell ipc --pid "$pid" call picker matches) == *mrms-conus* ]] || fail 'Embedded picker did not find MRMS'
+quickshell ipc --pid "$pid" call picker accept
+until_status '.source == "mrms-conus" and .locked and .lat == 37.5 and .lon == -95'
+call closeWindow
+call reopen
+until_status '.source == "mrms-conus" and .locked'
+"${OMASTORM_ENGINE_BINARY:?selected by mise test integration}" stop
+"${OMASTORM_ENGINE_BINARY:?selected by mise test integration}" ensure
+until_status '.source == "mrms-conus" and .connected and .locked and .lat == 37.5 and .lon == -95'
 call quit
 wait "$pid"
 pid=

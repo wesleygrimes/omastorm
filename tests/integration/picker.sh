@@ -22,11 +22,24 @@ for _ in {1..100}; do call status > /dev/null 2>&1 && break; sleep .1; done
 call status > /dev/null || fail "The window's picker IPC never answered"
 call open ""
 for _ in {1..50}; do [[ $(call matches) != '[]' ]] && break; sleep .1; done
-# The fixture's home view centres north-west of KTLX: KTLX first among
-# stations, the Norman pair next. Live mosaics may precede station rows.
+# The fixture's home view centres north-west of KTLX: KTLX first, the Norman pair next.
 m=$(call matches)
-[[ $m == *'"KTLX","K'* && $m == *KOUN* && $m == *KCRI* ]] || fail "Empty query did not list the nearest stations first: $m"
-expect 'Empty query counts the whole table' '{"open":true,"query":"","selected":0,"total":163,"focused":true}' "$(call status)"
+[[ $m == *mrms-conus* && $m == *KTLX* && $m == *KOUN* ]] || fail "Empty query did not list the covering mosaic and nearest stations: $m"
+# This IPC field counts the station table; mosaic matches are checked above.
+expect 'Empty query counts the station table' '{"open":true,"query":"","selected":0,"total":163,"focused":true}' "$(call status)"
+call open mrms
+m=$(call matches)
+[[ $m == *mrms-conus* ]] || fail "mrms did not list the NOAA mosaic: $m"
+call accept
+for _ in {1..50}; do
+  src=$(quickshell ipc --pid "$pid" call keys field source)
+  locked=$(quickshell ipc --pid "$pid" call keys field locked)
+  lat=$(quickshell ipc --pid "$pid" call keys field lat)
+  lon=$(quickshell ipc --pid "$pid" call keys field lon)
+  [[ $src == mrms-conus && $locked == true && $lat == 37.5 && $lon == -95 ]] && break
+  sleep .1
+done
+[[ $src == mrms-conus && $locked == true && $lat == 37.5 && $lon == -95 ]] || fail "MRMS selection did not center and lock: $src $locked $lat $lon"
 call open opera
 m=$(call matches)
 [[ $m == *opera* ]] || fail "opera did not list the EUMETNET mosaic: $m"
