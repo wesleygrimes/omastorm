@@ -7,7 +7,7 @@ use crate::{
     sweep,
 };
 use chrono::{DateTime, SecondsFormat, Utc};
-use std::{collections::HashSet, io::Cursor, time::Duration};
+use std::{collections::HashSet, future::Future, io::Cursor, time::Duration};
 use tokio::{sync::mpsc::Sender, task::JoinHandle};
 use xml::reader::{EventReader, XmlEvent};
 
@@ -125,6 +125,7 @@ fn frame_id(stamp: DateTime<Utc>) -> String {
 /// from the wall clock or accept forecast layers / silently changed cadence.
 fn timestamps(body: &[u8]) -> Result<Vec<DateTime<Utc>>, String> {
     let mut layer_names = Vec::<String>::new();
+    let mut elements = Vec::<String>::new();
     let mut in_name = false;
     let mut in_time = false;
     let mut dimension = String::new();
@@ -132,17 +133,22 @@ fn timestamps(body: &[u8]) -> Result<Vec<DateTime<Utc>>, String> {
         match event.map_err(|e| format!("ECCC capabilities: {e}"))? {
             XmlEvent::StartElement {
                 name, attributes, ..
-            } => match name.local_name.as_str() {
-                "Layer" => layer_names.push(String::new()),
-                "Name" => in_name = true,
-                "Dimension" => {
-                    in_time = layer_names.last().is_some_and(|n| n == LAYER)
-                        && attributes
-                            .iter()
-                            .any(|a| a.name.local_name == "name" && a.value == "time")
+            } => {
+                let layer_child = elements.last().is_some_and(|parent| parent == "Layer");
+                match name.local_name.as_str() {
+                    "Layer" => layer_names.push(String::new()),
+                    "Name" => in_name = layer_child,
+                    "Dimension" => {
+                        in_time = layer_child
+                            && layer_names.last().is_some_and(|n| n.trim() == LAYER)
+                            && attributes
+                                .iter()
+                                .any(|a| a.name.local_name == "name" && a.value == "time");
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+                elements.push(name.local_name);
+            }
             XmlEvent::Characters(s) | XmlEvent::CData(s) => {
                 if in_name && let Some(n) = layer_names.last_mut() {
                     n.push_str(&s);
@@ -151,14 +157,17 @@ fn timestamps(body: &[u8]) -> Result<Vec<DateTime<Utc>>, String> {
                     dimension.push_str(&s);
                 }
             }
-            XmlEvent::EndElement { name } => match name.local_name.as_str() {
-                "Layer" => {
-                    layer_names.pop();
+            XmlEvent::EndElement { name } => {
+                match name.local_name.as_str() {
+                    "Layer" => {
+                        layer_names.pop();
+                    }
+                    "Name" => in_name = false,
+                    "Dimension" => in_time = false,
+                    _ => {}
                 }
-                "Name" => in_name = false,
-                "Dimension" => in_time = false,
-                _ => {}
-            },
+                elements.pop();
+            }
             _ => {}
         }
     }
@@ -283,65 +292,88 @@ async fn poll_loop(events: Sender<GridEvent>, mut known: HashSet<String>) {
                 continue;
             }
         };
-        let ids: HashSet<_> = stamps.iter().copied().map(frame_id).collect();
-        known.retain(|id| ids.contains(id));
-        // Recheck the newest observation even when history is slow.
-        let fill_started = std::time::Instant::now();
-        for (i, stamp) in stamps.into_iter().enumerate() {
-            if i > 0 && fill_started.elapsed() >= Duration::from_secs(60) {
-                break;
-            }
-            let id = frame_id(stamp);
-            if known.contains(&id) {
-                continue;
-            }
-            match load(stamp).await {
-                Ok((frame, texture)) => {
-                    let event = if i == 0 {
-                        GridEvent::Frame {
-                            source_id: ID.into(),
-                            frame: Box::new(frame),
-                            texture,
-                            start_ms: stamp.timestamp_millis(),
-                        }
-                    } else {
-                        GridEvent::Backfill {
-                            source_id: ID.into(),
-                            frame: Box::new(frame),
-                            texture,
-                            start_ms: stamp.timestamp_millis(),
-                        }
-                    };
-                    if events.send(event).await.is_err() {
-                        return;
-                    }
-                    known.insert(id);
-                    // Give source switches time to cancel before downloading history.
-                    if i == 0 {
-                        tokio::time::sleep(Duration::from_secs(3)).await;
-                    }
-                }
-                Err(reason) => {
-                    if i > 0 {
-                        eprintln!("ECCC history: {reason}");
-                        break;
-                    }
-                    if events
-                        .send(GridEvent::Offline {
-                            source_id: ID.into(),
-                            reason,
-                        })
-                        .await
-                        .is_err()
-                    {
-                        return;
-                    }
-                    break;
-                }
-            }
+        if !refresh_frames(&events, &mut known, stamps, load).await {
+            return;
         }
         tokio::time::sleep(Duration::from_secs(30)).await;
     }
+}
+
+/// One refresh, with an injectable loader for failure/retry/cancellation tests.
+/// Newest-frame failure reports offline; a missing historical frame must not
+/// prevent other history from loading. Only published frames become known.
+/// Returns false when the event receiver has closed.
+async fn refresh_frames<L, F>(
+    events: &Sender<GridEvent>,
+    known: &mut HashSet<String>,
+    stamps: Vec<DateTime<Utc>>,
+    mut load: L,
+) -> bool
+where
+    L: FnMut(DateTime<Utc>) -> F,
+    F: Future<Output = Result<(MosaicFrame, Vec<u8>), String>>,
+{
+    let ids: HashSet<_> = stamps.iter().copied().map(frame_id).collect();
+    known.retain(|id| ids.contains(id));
+    // Recheck the newest observation even when history is slow.
+    let fill_started = std::time::Instant::now();
+    for (i, stamp) in stamps.into_iter().enumerate() {
+        if i > 0 && fill_started.elapsed() >= Duration::from_secs(60) {
+            break;
+        }
+        if events.is_closed() {
+            return false;
+        }
+        let id = frame_id(stamp);
+        if known.contains(&id) {
+            continue;
+        }
+        match load(stamp).await {
+            Ok((frame, texture)) => {
+                let event = if i == 0 {
+                    GridEvent::Frame {
+                        source_id: ID.into(),
+                        frame: Box::new(frame),
+                        texture,
+                        start_ms: stamp.timestamp_millis(),
+                    }
+                } else {
+                    GridEvent::Backfill {
+                        source_id: ID.into(),
+                        frame: Box::new(frame),
+                        texture,
+                        start_ms: stamp.timestamp_millis(),
+                    }
+                };
+                if events.send(event).await.is_err() {
+                    return false;
+                }
+                known.insert(id);
+                // Give source switches time to cancel before downloading history.
+                if i == 0 {
+                    tokio::time::sleep(Duration::from_secs(3)).await;
+                }
+            }
+            Err(reason) => {
+                if i > 0 {
+                    eprintln!("ECCC history: {reason}");
+                    continue;
+                }
+                if events
+                    .send(GridEvent::Offline {
+                        source_id: ID.into(),
+                        reason,
+                    })
+                    .await
+                    .is_err()
+                {
+                    return false;
+                }
+                break;
+            }
+        }
+    }
+    !events.is_closed()
 }
 
 #[cfg(test)]
@@ -372,6 +404,138 @@ mod tests {
             .is_err()
         );
     }
+    #[test]
+    fn time_dimension_belongs_to_layer_not_nested_style() {
+        let xml = br#"<Layer><Name>RADAR_1KM_RRAI</Name>
+          <Style><Name>Radar-Rain_Dis-14colors</Name></Style>
+          <Dimension name="time">2026-09-25T12:00:00Z/2026-09-25T12:06:00Z/PT6M</Dimension>
+          <Layer><Name>other</Name><Dimension name="time">invalid</Dimension></Layer>
+        </Layer>"#;
+        assert_eq!(timestamps(xml).unwrap().len(), 2);
+        let nested_only = br#"<Layer><Style><Name>RADAR_1KM_RRAI</Name></Style>
+          <Dimension name="time">2026-09-25T12:00:00Z/2026-09-25T12:06:00Z/PT6M</Dimension>
+        </Layer>"#;
+        assert!(timestamps(nested_only).is_err());
+    }
+
+    fn runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    }
+    fn test_stamps() -> Vec<DateTime<Utc>> {
+        let newest = DateTime::parse_from_rfc3339("2026-09-25T12:12:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        (0..3)
+            .map(|i| newest - chrono::Duration::minutes(i * 6))
+            .collect()
+    }
+    fn loaded(stamp: DateTime<Utc>) -> (MosaicFrame, Vec<u8>) {
+        let mut frame = frame_template();
+        frame.id = frame_id(stamp);
+        frame.scan_time = stamp.to_rfc3339();
+        frame.status = FrameStatus::Complete;
+        (frame, vec![])
+    }
+
+    #[test]
+    fn history_gap_does_not_block_older_frames_and_is_retried() {
+        runtime().block_on(async {
+            let stamps = test_stamps();
+            let missing = stamps[1];
+            let mut known = HashSet::from([frame_id(stamps[0]), "expired".into()]);
+            let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+            assert!(refresh_frames(&tx, &mut known, stamps.clone(), |stamp| async move {
+                if stamp == missing { Err("missing history frame".into()) } else { Ok(loaded(stamp)) }
+            }).await);
+            assert!(matches!(rx.try_recv(), Ok(GridEvent::Backfill { start_ms, .. }) if start_ms == stamps[2].timestamp_millis()));
+            assert!(rx.try_recv().is_err()); // Historical failure does not mark the feed offline.
+            assert!(!known.contains("expired"));
+            assert!(!known.contains(&frame_id(missing)));
+            let mut calls = vec![];
+            assert!(refresh_frames(&tx, &mut known, stamps.clone(), |stamp| {
+                calls.push(stamp);
+                std::future::ready(Ok(loaded(stamp)))
+            }).await);
+            assert_eq!(calls, vec![missing]);
+            assert!(matches!(rx.try_recv(), Ok(GridEvent::Backfill { start_ms, .. }) if start_ms == missing.timestamp_millis()));
+            calls.clear();
+            assert!(refresh_frames(&tx, &mut known, stamps, |stamp| {
+                calls.push(stamp);
+                std::future::ready(Ok(loaded(stamp)))
+            }).await);
+            assert!(calls.is_empty(), "published frames must not be fetched again");
+        });
+    }
+
+    #[test]
+    fn newest_failure_reports_offline_and_remains_retryable() {
+        runtime().block_on(async {
+            let stamps = test_stamps();
+            let mut known = HashSet::new();
+            let mut calls = vec![];
+            let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+            for _ in 0..2 {
+                assert!(refresh_frames(&tx, &mut known, stamps.clone(), |stamp| {
+                    calls.push(stamp);
+                    std::future::ready(Err("fetch failed".into()))
+                }).await);
+                assert!(matches!(rx.try_recv(), Ok(GridEvent::Offline { source_id, .. }) if source_id == ID));
+                assert!(known.is_empty());
+            }
+            assert_eq!(calls, vec![stamps[0], stamps[0]]);
+        });
+    }
+
+    #[test]
+    fn aborting_refresh_drops_download_and_does_not_start_more_history() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
+        struct Dropped(Arc<AtomicBool>);
+        impl Drop for Dropped {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::SeqCst);
+            }
+        }
+        runtime().block_on(async {
+            let dropped = Arc::new(AtomicBool::new(false));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let (started_tx, mut started_rx) = tokio::sync::mpsc::channel(1);
+            let (tx, _rx) = tokio::sync::mpsc::channel(8);
+            let task = tokio::spawn({
+                let dropped = dropped.clone();
+                let calls = calls.clone();
+                async move {
+                    let stamps = test_stamps();
+                    let mut known = HashSet::from([frame_id(stamps[0])]);
+                    refresh_frames(&tx, &mut known, stamps, |_| {
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        let guard = Dropped(dropped.clone());
+                        let started = started_tx.clone();
+                        async move {
+                            let _guard = guard;
+                            started.send(()).await.unwrap();
+                            std::future::pending().await
+                        }
+                    })
+                    .await;
+                }
+            });
+            tokio::time::timeout(Duration::from_secs(1), started_rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            task.abort();
+            assert!(task.await.unwrap_err().is_cancelled());
+            assert!(dropped.load(Ordering::SeqCst));
+            assert_eq!(calls.load(Ordering::SeqCst), 1);
+        });
+    }
+
     #[test]
     fn synthetic_palette_decodes_every_class_and_missing() {
         let mut raw: Vec<_> = COLORS
