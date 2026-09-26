@@ -224,15 +224,29 @@ Chrome follows the Omarchy theme. Radar color comes from the measured reflectivi
 
 ## Preferences
 
-`~/.config/omastorm/config.toml` is what you mean to keep. The last map
-center, zoom, and UI radar lock are saved separately in
-`~/.local/state/omastorm/state.json`. Panning never rewrites config.
+## Configuration
+
+`~/.config/omastorm/config.toml` holds deliberate preferences. The app saves
+last map center, zoom, and UI radar lock separately in
+`$XDG_STATE_HOME/omastorm/state.json` (default
+`~/.local/state/omastorm/state.json`). Navigation never rewrites your config.
+`Shift+H`, or LOCATION, opens the location picker; it writes state, not config.
+
+Explicit center coordinates win on every launch. Without them, Omastorm
+restores your last view, then falls back to the weather location or location
+picker. Radar selection is independent: a configured lock wins, otherwise a
+remembered lock is restored, otherwise the nearest radar follows the map.
+With a GPS receiver on a running `gpsd`, `gpsd = true` makes the map follow
+the receiver once a view exists, handing the radar off as you drive. The
+crosshair on the map is the follow chip: click to pause and resume; `NO FIX`
+shows when the receiver is silent.
 
 ```toml
 # Optional: always open here. Omit both to remember the last map position.
 center_lat = 36.23708
 center_lon = -79.97948
-# locked_radar = "KFCX"  # optional; coordinates do not lock a radar
+# locked_radar = "KFCX" # optional radar override; coordinates do not imply a lock
+# gpsd = true           # optional: follow a GPS receiver on the local gpsd
 
 treatment = "GLYPHS"  # PIXELS, GLYPHS, or STIPPLE at launch
 weak_floor = 5        # dBZ; false draws every measured return

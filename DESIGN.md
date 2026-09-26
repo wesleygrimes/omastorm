@@ -41,6 +41,7 @@ the ids and comments in `ui/RadarWindow.qml`.
 | **meta line** | Age, right-aligned under the product line |
 | **map stage** | Radar map frame |
 | **locate chip** | Map marker, top-left of the map; jump to the approximate location |
+| **follow chip** | GPS crosshair beside it while `gpsd = true`; pause / resume follow, `NO FIX` when the receiver is silent |
 | **help chip** | Keys / `?` on the map |
 | **metar chips** | Optional. ICAO labels with FAA flight-category color in place of city names, around the selected live NEXRAD radar (US and Canada; OPERA Europe is a no-op). Off until toggled. Default is the nearest stations (at most 16). Optional AWC-priority pick uses the current map view so hubs outrank closer small fields; `count` shrinks the pool; `always_on_when_in_view` pins a home field that is on screen. A chip at the selected radar (KLIT next to KLZK) sits beside the site tag. Optional `mark`: filled category block (`chip`), ICAO letters in category color (`ink`), or a larger category-colored location (`pin`). Click shows the raw METAR on a **metar card** over the map, 80% width, bottom-right, above the OSM credit, so the scale bar stays clear. |
 | **scale bar** | Ground distance under the map, left; locale picks km or mi; label updates with zoom |
@@ -116,6 +117,23 @@ same fetch as onboarding. It centres on the estimate, unlocks, and selects
 a covering source, keeping the current zoom. Off until clicked; a successful
 onboarding estimate does not enable it. Failure leaves the camera and
 flashes a short overlay on the map. Archived sessions never locate.
+
+A GPS receiver is a map centre that moves on its own. With `gpsd = true`,
+each fix from the local gpsd that has moved more than 100 m becomes the
+centre, and the radar follows it by the same nearest-with-hysteresis
+hand-off a pan gets. The crosshair beside the locate chip is the follow
+chip: filled while a fix is steering the camera, outlined while a pan has
+paused it, and outlined dimmed with `NO FIX` while the receiver has
+nothing to report. Click to pause and resume; a user pan pauses follow;
+`gpsd = false` turns GPS follow off entirely and hides the chip. A lock
+still holds the radar while the map follows. `gpsd = true` follows *after*
+we already have a view — it is not a fifth launch source and does not
+touch `resolvePlace()`: the launch one-shot (config centre, remembered
+state, weather, prompt) owns placement, an explicit `center_lat` /
+`center_lon` still wins on launch, and a last fix is remembered like any
+centre, so a relaunch opens where the receiver last was. A lost fix moves
+nothing. Nothing is drawn at the fix: a position marker is its own
+decision, against the overlay's collision layout.
 
 Reuse Omarchy's location when available without requiring its weather plugin.
 Read weather settings only; never write them. Location search is an explicit
