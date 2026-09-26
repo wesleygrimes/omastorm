@@ -319,14 +319,43 @@ function parseState(raw) {
     } catch (e) { return empty; }
 }
 
-function stateObject(viewLat, viewLon, span, lock, name) {
+// The remembered view, plus what is on screen right now (docs/configuration.md,
+// remembered state and view export): `site` is the station shown, `scan` the
+// frame's RFC 3339 time, `live` whether that frame is the live head. Those
+// three are for other programs to read; launch never reads them back.
+function stateObject(viewLat, viewLon, span, lock, name, site, scan, live) {
     var o = {};
     if (validPair(viewLat, viewLon)) { o.lat = viewLat; o.lon = viewLon; }
     if (typeof span === "number" && isFinite(span) && span > 0) o.span = span;
     var parsed = parseLock(lock);
     if (parsed) o.lock = parsed;
     if (name) o.name = name;
+    if (site) o.site = site;
+    if (scan) o.scan = scan;
+    if (site) o.live = live === true;
     return o;
+}
+
+// Overlay the on-screen view (`site` / `scan` / `live` — see `stateObject`
+// above) onto an existing snapshot: only those three fields change, every
+// other key is preserved as-is, in the same order as `existing` whenever
+// possible. The window owns the camera and the lock on disk; the bar owns
+// only the on-screen view. A sweep that arrives after the user pans must
+// not write the bar's stale `lat` / `lon` / `span` / `lock` / `name` over
+// the window's new view, so sweep writes go through this merge and never
+// through a whole-file replace. `existing` may be null on first launch.
+function overlay(existing, site, scan, live) {
+    var out = {};
+    var e = (existing && typeof existing === "object") ? existing : {};
+    for (var k in e) {
+        if (k === "site" || k === "scan" || k === "live") continue;
+        if (e.hasOwnProperty(k)) out[k] = e[k];
+    }
+    if (site) { out.site = site; out.live = live === true; }
+    else { delete out.site; delete out.live; }
+    if (scan) out.scan = scan;
+    else delete out.scan;
+    return out;
 }
 
 // Map centre at launch: explicit config, remembered view, Omarchy weather,

@@ -304,7 +304,7 @@ QtObject {
         }
     }
 
-    // The window and the bar popover are separate processes on one engine and
+// The window and the bar popover are separate processes on one engine and
     // one state.json. Each keeps its own lock intent and re-sends it when the
     // engine comes back, so a restart used to jump to whichever client pushed
     // last, often the bar's launch-time lock. The file is the shared answer:
@@ -318,6 +318,24 @@ QtObject {
         lockWanted = !!next;
         lockSource = lockWanted ? "state" : "nearest";
     }
+    // What the engine shows now, for the view export (docs/configuration.md):
+    // the station, the frame's scan time, and whether that frame is the
+    // live head — the newest of a live timeline.
+    readonly property string shownSite: engine.state ? engine.state.site.id : ""
+    readonly property string shownScan: engine.state && engine.state.frame ? engine.state.frame.scanTime || "" : ""
+    readonly property bool shownLive: {
+        if (!engine.state || !engine.state.frame || engine.state.source !== "live") return false;
+        var t = engine.state.timeline || [];
+        return t.length > 0 && t[t.length - 1].id === engine.state.frame.id;
+    }
+    readonly property string shownKey: shownSite + "|" + shownScan + "|" + shownLive
+    // A sweep changes the on-screen view (docs/configuration.md, view
+    // export). It overlays `site` / `scan` / `live` onto whatever's on disk
+    // and never rewrites the camera or the lock — the window owns those,
+    // and the bar reading them later must see what the user actually
+    // panned to. `Remembered.overlay` dedupes equal trios, so this is also
+    // a no-op when the bar's process happens to see the same broadcast.
+    onShownKeyChanged: if (initialized && hasView) remembered.overlay(shownSite, shownScan, shownLive)
 
     // Same rule as the lock: state.json is the shared camera. A client that
     // still has an older place in memory (a city search, then mise restart)
@@ -349,7 +367,7 @@ QtObject {
 
     function persist() {
         if (!hasView) return;
-        remembered.snapshot(centerLat, centerLon, span, lockWanted ? lock : null, placeName);
+        remembered.snapshot(centerLat, centerLon, span, lockWanted ? lock : null, placeName, shownSite, shownScan, shownLive);
     }
 
     function rememberView(lat, lon, spanKm) {
@@ -505,13 +523,22 @@ QtObject {
 
     function initialize() {
         if (initialized || !engine.state || !ready) return;
+        // An engine restart is this process's reconnect, not a camera move:
+        // whoever panned last owns the camera on disk, and this process may
+        // not have moved since launch (the bar never does). The reconnect
+        // therefore overlays only the on-screen trio; writing the snapshot
+        // here would put this process's stale `lat` / `lon` / `span` back
+        // over the other client's pan. The first start still creates the
+        // file with the view this process resolved.
+        var reconnect = hasView;
         initialized = true;
         resolve();
         adoptRememberedView();
         adoptRememberedLock();
         applyRadar();
         applyMetarConfig();
-        persist();
+        if (reconnect) remembered.overlay(shownSite, shownScan, shownLive);
+        else persist();
     }
 
     function applyTreatment() {
