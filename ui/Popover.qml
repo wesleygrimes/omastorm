@@ -46,6 +46,8 @@ FocusScope {
     Engine { id: connection }
     function step(delta) { if (state) connection.send({type: "step", delta: delta}); }
     function play() { if (state) connection.send({type: state.playing ? "pause" : "play"}); }
+    // Harnesses read this surface's METAR state.
+    readonly property alias metarState: metar
     Metars {
         id: metar
         engine: connection

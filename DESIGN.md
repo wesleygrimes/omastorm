@@ -90,8 +90,9 @@ and is included in the frame count. Mosaic history follows the adapter
 policy; OPERA retains up to 12 complete frames. MRMS retains up to 30 actual
 QC base-reflectivity observations in `(newest − 60 minutes, newest]`, anchored
 to the newest accepted observation. It shows current weather before filling
-history, preserves a selected frame until that frame is evicted, and retains
-the loop during outages. Each tick represents one frame, without extra gap
+history; backfill preserves the displayed frame. The newest position follows
+live arrivals, while a historical selection stays until that frame is evicted.
+Outages retain the loop. Each tick represents one frame, without extra gap
 ticks or a baseline.
 
 ## Location, onboarding, and map

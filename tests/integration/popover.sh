@@ -11,6 +11,7 @@ mkdir -p "$scratch"
 # Runtime/cache are selected and owned by the shared runner.
 export OMASTORM_CONFIG="$scratch/config.toml"
 export OMASTORM_STATE="$scratch/state.json"
+export OMASTORM_METAR_FIXTURE="$PWD/engine/tests/fixtures/metar-ktlx.json"
 # A scratch plugin root, so the update notice can be driven by rewriting its
 # manifest; run.sh there hands off to this checkout's.
 export OMASTORM_ROOT="$scratch/root"
@@ -167,6 +168,18 @@ until_status '.source == "mrms-conus" and .locked'
 "${OMASTORM_ENGINE_BINARY:?selected by mise test integration}" stop
 "${OMASTORM_ENGINE_BINARY:?selected by mise test integration}" ensure
 until_status '.source == "mrms-conus" and .connected and .locked and .lat == 37.5 and .lon == -95'
+# With airport overlays enabled, returning from a mosaic must query in both
+# surfaces after their source/site bindings settle. Fixture replies keep this
+# assertion independent of the airport service and of live radar availability.
+printf 'weak_floor = 20\n[metar]\nshow = true\n' > "$OMASTORM_CONFIG"
+sleep 0.3
+until_status '.metars == 0 and .windowMetars == 0 and (.windowFloorActive | not) and (.windowScanning | not)'
+call expand
+quickshell ipc --pid "$pid" call picker open KTLX
+quickshell ipc --pid "$pid" call picker accept
+# The network is blocked here, so KTLX has no live scan to restore the weak
+# floor on; that it stays off on the mosaic is checked above.
+until_status '.site == "KTLX" and .windowSite == "KTLX" and .metars > 0 and .windowMetars > 0'
 call quit
 wait "$pid"
 pid=

@@ -250,6 +250,8 @@ Item {
     property var focusToggle: null
     readonly property bool focusMode: focusToggle !== null ? focusToggle : configuredFocus
     onFocusSettingChanged: focusToggle = null
+    // Harnesses read this surface's METAR state.
+    readonly property alias metarState: metar
     Metars {
         id: metar
         // `app.connection`: a bare `engine` here names this object's own property.
