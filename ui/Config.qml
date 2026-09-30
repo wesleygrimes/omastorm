@@ -52,6 +52,7 @@ QtObject {
     // comes back every five seconds until it is, or until the key is off.
     readonly property bool gpsd: values.gpsd === true
     property var fix: null
+    property var gpsExitCode: null
     property Process gps: Process {
         command: ["gpspipe", "-w"]
         stdout: SplitParser {
@@ -66,7 +67,7 @@ QtObject {
             }
         }
         running: root.gpsd
-        onExited: { root.fix = null; if (root.gpsd) gpsRetry.restart(); }
+        onExited: function(exitCode) { root.gpsExitCode = exitCode; root.fix = null; if (root.gpsd) gpsRetry.restart(); }
     }
     property Timer gpsRetry: Timer { interval: 5000; onTriggered: if (root.gpsd && !root.gps.running) root.gps.running = true }
     onGpsdChanged: { if (!gpsd) { gps.running = false; fix = null; } }

@@ -303,7 +303,7 @@ Item {
                                    locationSource: app.store.locationSource, needsLocation: app.store.needsLocation, locating: app.store.locating,
                                    site: app.siteId, source: engine.source ? engine.source.id : "", locked: app.locked, lockSource: app.store.lockSource, outsideCoverage: app.outsideCoverage,
                                    gpsEnabled: app.gpsEnabled, gpsFollowing: app.gpsFollowing, gpsPaused: app.gpsPaused, gpsNoFix: app.gpsNoFix,
-                                   gpsFix: config.fix, gpsProcessRunning: config.gps.running, gpsProcessCommand: config.gps.command});
+                                   gpsFix: config.fix, gpsProcessRunning: config.gps.running, gpsProcessCommand: config.gps.command, gpsProcessExitCode: config.gpsExitCode});
         }
     }
     // Site navigation (DESIGN.md, location): the lock pins the radar against
