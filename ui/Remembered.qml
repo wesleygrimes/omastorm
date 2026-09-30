@@ -13,6 +13,8 @@ QtObject {
     readonly property string path: Runtime.state || Quickshell.env("OMASTORM_STATE")
         || (Quickshell.env("OMASTORM_CONFIG") ? "" : (Quickshell.env("XDG_STATE_HOME") || Quickshell.env("HOME") + "/.local/state") + "/omastorm/state.json")
     property var parsed: Location.parseState("")
+    property var lastSnapshot: null
+    property string pendingWrite: ""
     readonly property bool ready: stateRead
     property bool stateRead: false
     property string error: ""
@@ -38,6 +40,7 @@ QtObject {
     function snapshot(viewLat, viewLon, span, lock, name, site, scan, live) {
         var text = JSON.stringify(Location.stateObject(viewLat, viewLon, span, lock, name, site, scan, live));
         parsed = Location.parseState(text);
+        lastSnapshot = parsed;
         // A full snapshot rewrites the camera and the on-screen view in one
         // pass. Set the overlay dedup to whatever trio landed on disk so a
         // sweep that matches it does not reissue the same write.
@@ -46,18 +49,15 @@ QtObject {
         lastOverlayLive = !!site && live === true;
         write(text);
     }
-    // The window owns the camera and lock on disk; the on-screen view
-    // (`site` / `scan` / `live` — see `Location.overlay`) is shared with the
-    // bar, so a sweep here overlays those three only and never rewrites the
-    // rest. `parsed` is kept fresh by the FileView above, so external writes
-    // land here before the next sweep fires. A sweep identical to the one
-    // we last wrote is a no-op — both processes (the window and the bar)
-    // subscribe to the same broadcast and would otherwise double-write on
-    // every tick.
+    // The window owns the camera and lock; the bar shares only the on-screen
+    // view (`site` / `scan` / `live`). Valid camera fields loaded from disk
+    // take precedence over the last snapshot; the snapshot fills gaps caused
+    // by a watcher reload racing its write. Both clients subscribe to the same
+    // broadcast, so identical sweeps are skipped.
     function overlay(site, scan, live) {
         if (!path) return;
         if (site === lastOverlaySite && scan === lastOverlayScan && live === lastOverlayLive) return;
-        var text = JSON.stringify(Location.overlay(parsed, site, scan, live));
+        var text = JSON.stringify(Location.overlay(parsed, site, scan, live, lastSnapshot));
         lastOverlaySite = site || "";
         lastOverlayScan = scan || "";
         lastOverlayLive = !!site && live === true;
@@ -65,6 +65,10 @@ QtObject {
     }
     function write(text) {
         if (!path) return;
+        if (writer.running) { pendingWrite = text; return; }
+        startWrite(text);
+    }
+    function startWrite(text) {
         var slash = path.lastIndexOf("/");
         var dir = slash >= 0 ? path.slice(0, slash) : ".";
         writer.command = ["sh", "-c",
@@ -76,6 +80,11 @@ QtObject {
         command: ["true"]
         onExited: function (exitCode) {
             root.error = exitCode === 0 ? "" : "Could not write state.json";
+            if (root.pendingWrite) {
+                var text = root.pendingWrite;
+                root.pendingWrite = "";
+                root.startWrite(text);
+            }
         }
     }
     Component.onCompleted: { if (!path) stateRead = true; }
