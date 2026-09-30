@@ -354,13 +354,17 @@ function stateObject(viewLat, viewLon, span, lock, name, site, scan, live) {
 // not write the bar's stale `lat` / `lon` / `span` / `lock` / `name` over
 // the window's new view, so sweep writes go through this merge and never
 // through a whole-file replace. `existing` may be null on first launch.
-function overlay(existing, site, scan, live) {
+function overlay(existing, site, scan, live, fallback) {
     var out = {};
     var e = (existing && typeof existing === "object") ? existing : {};
+    var f = (fallback && typeof fallback === "object") ? fallback : {};
     for (var k in e) {
         if (k === "site" || k === "scan" || k === "live") continue;
         if (e.hasOwnProperty(k)) out[k] = e[k];
     }
+    if (!validPair(e.lat, e.lon) && validPair(f.lat, f.lon)) { out.lat = f.lat; out.lon = f.lon; }
+    if (!(typeof e.span === "number" && isFinite(e.span) && e.span > 0)
+        && typeof f.span === "number" && isFinite(f.span) && f.span > 0) out.span = f.span;
     if (site) { out.site = site; out.live = live === true; }
     else { delete out.site; delete out.live; }
     if (scan) out.scan = scan;
