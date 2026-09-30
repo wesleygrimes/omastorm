@@ -91,6 +91,7 @@ panned_lat=37.11; panned_lon=-80.25; panned_span=160
 jq --argjson lat "$panned_lat" --argjson lon "$panned_lon" --argjson span "$panned_span" \
     '.lat = $lat | .lon = $lon | .span = $span' "$check_dir/state.json" > "$check_dir/state.next"
 mv "$check_dir/state.next" "$check_dir/state.json"
+pan_intact() { [[ $(exported lat) == "$panned_lat" && $(exported lon) == "$panned_lon" && $(exported span) == "$panned_span" ]]; }
 sleep 1
 target/debug/omastorm-engine stop
 target/debug/omastorm-engine ensure
