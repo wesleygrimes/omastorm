@@ -25,11 +25,17 @@ fail() { printf '%s\n' "$@" >&2; cat "$check_dir/log" >&2; exit 1; }
 expect() { [[ "$3" == "$2" ]] || fail "$1" "Expected: $2" "Actual:   $3"; }
 # `//` would swallow a JSON false, which is the value this check is after.
 exported() { jq -r --arg k "$1" 'if has($k) then (.[$k] | tostring) else empty end' "$check_dir/state.json" 2>/dev/null; }
-# The station the weather location picks is a live one, so stepping to an
-# older frame waits on a real fetch: allow it the time.
 until_export() { # field, wanted
   for _ in {1..400}; do [[ $(exported "$1") == "$2" ]] && return; sleep .1; done
   fail "state.json $1 never became $2" "$(cat "$check_dir/state.json" 2>/dev/null || echo '(no file)')"
+}
+until_oldest() {
+  for _ in {1..80}; do
+    call run oldest
+    [[ $(exported live) == false ]] && return
+    sleep .5
+  done
+  fail "The oldest frame did not arrive" "$(cat "$check_dir/state.json" 2>/dev/null || echo '(no file)')"
 }
 until_field() { # name, wanted
   for _ in {1..150}; do [[ $(field "$1") == "$2" ]] && return; sleep .1; done
@@ -49,10 +55,8 @@ until_export site "$site"
 until_export live true
 head=$(exported scan)
 [[ $head =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail "The exported scan is not an RFC 3339 instant: $head"
-
-# Stepping to the oldest frame: not the head, and the scan is that frame's.
-call run oldest
-until_export live false
+# The live selection can start with one frame; retry once backfill adds history.
+until_oldest
 older=$(exported scan)
 [[ -n $older && $older != "$head" ]] || fail "The oldest frame's scan did not travel: head $head, now $older"
 
@@ -91,10 +95,8 @@ sleep 1
 target/debug/omastorm-engine stop
 target/debug/omastorm-engine ensure
 until_export site "$site"
-pan_intact() { [[ $(exported lat) == "$panned_lat" && $(exported lon) == "$panned_lon" && $(exported span) == "$panned_span" ]]; }
 pan_intact || fail "The reconnect wrote the launch camera over the other client's pan: $(cat "$check_dir/state.json")"
-call run oldest
-until_export live false
+until_oldest
 pan_intact || fail "A sweep rewrote the camera after the reconnect: $(cat "$check_dir/state.json")"
 call run newest
 until_export live true
