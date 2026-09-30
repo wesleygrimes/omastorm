@@ -53,7 +53,6 @@ QtObject {
     readonly property bool gpsd: values.gpsd === true
     property var fix: null
     property Process gps: Process {
-        running: root.gpsd
         command: ["gpspipe", "-w"]
         stdout: SplitParser {
             onRead: line => {
@@ -66,6 +65,7 @@ QtObject {
                 } catch (e) {}
             }
         }
+        running: root.gpsd
         onExited: { root.fix = null; if (root.gpsd) gpsRetry.restart(); }
     }
     property Timer gpsRetry: Timer { interval: 5000; onTriggered: if (root.gpsd && !root.gps.running) root.gps.running = true }
