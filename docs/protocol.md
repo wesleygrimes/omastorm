@@ -20,6 +20,10 @@ See [grid-adapters.md](grid-adapters.md) for source registry, coverage, and CRS.
 `hello` is sent once on connect, followed immediately by a full `state`.
 Polar sites remain in `hello.sites` with `sourceId` and circle `coverage`.
 Mosaics are compiled sources in `hello.sources`, not site rows.
+`mrms-conus` is NOAA/NSSL MRMS QC base reflectivity, with contiguous-U.S.
+coverage (west −130, east −60, south 20, north 55). It is selectable with
+`select_source` but is excluded from automatic covering-source selection.
+Geographic coverage alone does not imply automatic eligibility.
 
 ```json
 {"type":"hello","v":2,"engine":"0.1.13",
@@ -127,8 +131,8 @@ It is small (a few KB) so clients replace rather than merge.
   While a station's first live sweep loads and nothing is cached, the polar frame is
   a placeholder that draws nothing: `id` `<SITE>-loading`, `status` `partial`,
   `rays` 1, `gates` 1, empty `scanTime` and `sweepEnd`, the station table's
-  coordinates. A live mosaic (`select_source` opera) does the same with
-  `id` `opera-loading`, `kind` `mosaic`, empty `scanTime`, and a 1×1 texture,
+  coordinates. A live mosaic (`select_source` opera or mrms-conus) does the same with
+  `id` `<source>-loading`, `kind` `mosaic`, empty `scanTime`, and a 1×1 texture,
   so legend and tick-strip chrome stay up until the first COMP arrives.
   There is no placeholder with no selection: `frame` is `null`.
 - Paths are relative to `$XDG_RUNTIME_DIR/omastorm/` and have the form
@@ -234,6 +238,11 @@ when `osm` becomes available. `labels` are the tile's places for the overlay.
   to use `select_site`. Unknown ids error against the source table. Used to
   restore a remembered mosaic lock, when the user chooses a live mosaic from
   the radar list, and by tests.
+- MRMS fills `state.timeline` newest-first, with entries kept in chronological
+  order: at most 30 observations in the hour ending at the newest accepted
+  observation (exclusive lower bound). Backfill preserves the displayed frame
+  and newest-observation age. Outages keep the loop; evicting the selected frame
+  moves to the oldest retained entry. Existing playback commands apply unchanged.
 - `view_center` is sent when a pan or zoom settles and the centre moved, not
   per frame. With `follow` on and `lock` off, the engine selects the covering
   source at that centre ([grid-adapters.md](grid-adapters.md), Source

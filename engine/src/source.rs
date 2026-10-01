@@ -9,11 +9,29 @@ use crate::{
         SourceInfo, Station,
     },
 };
-use std::collections::HashSet;
-use tokio::{sync::mpsc::Sender, task::JoinHandle};
+use tokio::{
+    sync::{mpsc, oneshot},
+    task::JoinHandle,
+};
 
 /// Nominal NEXRAD reflectivity footprint (`docs/grid-adapters.md`).
 pub const NEXRAD_RADIUS_KM: f64 = 460.0;
+
+/// History is anchored to accepted observations, never to wall-clock time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistoryPolicy {
+    pub max_frames: usize,
+    pub window_ms: Option<i64>,
+}
+
+impl HistoryPolicy {
+    pub fn contains(self, stamp: i64, newest: i64) -> bool {
+        stamp <= newest
+            && self
+                .window_ms
+                .is_none_or(|window| stamp > newest.saturating_sub(window))
+    }
+}
 /// Following hands off when another covering polar site is closer than this
 /// fraction of the held site's distance, and by at least [`HANDOFF_MARGIN_KM`].
 pub const HANDOFF_RATIO: f64 = 0.8;
@@ -35,13 +53,16 @@ pub struct MosaicMeta<'a> {
     pub coverage: &'a Coverage,
     pub selection_priority: i32,
     /// Follow and gazetteer use this. `select_source` still works when false
-    /// (the synthetic fixture).
+    /// (manual-only live mosaics and the synthetic fixture).
     pub covering: bool,
 }
 
 /// Live-loop events from any GridFamily poller. `source_id` is the adapter
-/// that spawned the task; late events after a switch are dropped.
+/// that spawned the task. The sender also tags every event with its poll session.
 pub enum GridEvent {
+    Online {
+        source_id: String,
+    },
     Frame {
         source_id: String,
         frame: Box<MosaicFrame>,
@@ -64,6 +85,71 @@ pub enum GridEvent {
     },
 }
 
+pub struct GridMessage {
+    pub session: u64,
+    pub event: GridEvent,
+    pub published: Option<oneshot::Sender<bool>>,
+}
+
+impl GridMessage {
+    pub fn matches(&self, session: u64, selection: Option<&Selection>) -> bool {
+        let source_id = match &self.event {
+            GridEvent::Frame { source_id, .. }
+            | GridEvent::Backfill { source_id, .. }
+            | GridEvent::Online { source_id }
+            | GridEvent::Offline { source_id, .. }
+            | GridEvent::Silent { source_id, .. } => source_id,
+        };
+        self.session == session
+            && selection
+                .is_some_and(|s| s.source_id == *source_id && s.target == AdapterTarget::Mosaic)
+    }
+}
+
+/// Session identity travels with frames AND status reports. Reserving the one
+/// queue slot before MRMS work also bounds completed results across restarts.
+#[derive(Clone)]
+pub struct GridSender {
+    sender: mpsc::Sender<GridMessage>,
+    session: u64,
+}
+
+impl GridSender {
+    pub fn new(sender: mpsc::Sender<GridMessage>, session: u64) -> Self {
+        Self { sender, session }
+    }
+    pub fn is_closed(&self) -> bool {
+        self.sender.is_closed()
+    }
+    pub async fn reserve(&self) -> Result<GridPermit<'_>, mpsc::error::SendError<()>> {
+        Ok(GridPermit {
+            permit: self.sender.reserve().await?,
+            session: self.session,
+        })
+    }
+    pub async fn send(&self, event: GridEvent) -> Result<(), mpsc::error::SendError<()>> {
+        drop(self.reserve().await?.send(event));
+        Ok(())
+    }
+}
+
+pub struct GridPermit<'a> {
+    permit: mpsc::Permit<'a, GridMessage>,
+    session: u64,
+}
+
+impl GridPermit<'_> {
+    pub fn send(self, event: GridEvent) -> oneshot::Receiver<bool> {
+        let (published, result) = oneshot::channel();
+        self.permit.send(GridMessage {
+            session: self.session,
+            event,
+            published: Some(published),
+        });
+        result
+    }
+}
+
 /// What `select_source` needs from one grid adapter, copied off the borrow
 /// so the live loop can mutate shared state.
 pub enum MosaicStart {
@@ -84,6 +170,7 @@ pub enum MosaicStartError {
 pub struct SourceRegistry {
     pub nexrad: Nexrad,
     pub opera: crate::opera::Opera,
+    pub mrms: crate::mrms::Mrms,
     pub fixture: crate::grid_fixture::FixtureMosaic,
 }
 
@@ -92,15 +179,17 @@ impl SourceRegistry {
         Self {
             nexrad: Nexrad::new(),
             opera: crate::opera::Opera::new(),
+            mrms: crate::mrms::Mrms::new(),
             fixture: crate::grid_fixture::FixtureMosaic::new(),
         }
     }
 
-    pub fn adapters(&self) -> [AdapterRef<'_>; 3] {
+    pub fn adapters(&self) -> [AdapterRef<'_>; 4] {
         [
             AdapterRef::Nexrad(&self.nexrad),
             AdapterRef::Grid(GridRef::Opera(&self.opera)),
             AdapterRef::Grid(GridRef::FixtureMosaic(&self.fixture)),
+            AdapterRef::Grid(GridRef::Mrms(&self.mrms)),
         ]
     }
 
@@ -146,24 +235,33 @@ impl SourceRegistry {
     pub fn poll_mosaic(
         &self,
         id: &str,
-        events: Sender<GridEvent>,
-        known: HashSet<String>,
+        events: GridSender,
+        retained: Vec<i64>,
     ) -> Option<JoinHandle<()>> {
         match self.get(id)? {
-            AdapterRef::Grid(grid) => grid.poll(events, known),
+            AdapterRef::Grid(grid) => grid.poll(events, retained),
             AdapterRef::Nexrad(_) => None,
         }
     }
 
-    pub fn history_max(&self, id: &str) -> Option<usize> {
+    pub fn history_policy(&self, id: &str) -> Option<HistoryPolicy> {
         match self.get(id)? {
-            AdapterRef::Grid(grid) => grid.history_max(),
+            AdapterRef::Grid(grid) => grid.history_policy(),
             AdapterRef::Nexrad(_) => None,
         }
     }
 
     pub fn polls(&self, id: &str) -> bool {
         matches!(self.get(id), Some(AdapterRef::Grid(grid)) if grid.polls())
+    }
+
+    /// On-disk allowance including retired files, with room reserved separately
+    /// for the single pending encoded result. Existing retirement owns deletion.
+    pub fn texture_bytes_max(&self, id: &str) -> Option<u64> {
+        match self.get(id)? {
+            AdapterRef::Grid(GridRef::Mrms(_)) => Some(crate::mrms::DISK_TEXTURE_MAX),
+            _ => None,
+        }
     }
 }
 
@@ -176,6 +274,7 @@ pub enum AdapterRef<'a> {
 /// a `SourceRegistry` field, and its box in `envelope.rs`.
 pub enum GridRef<'a> {
     Opera(&'a crate::opera::Opera),
+    Mrms(&'a crate::mrms::Mrms),
     FixtureMosaic(&'a crate::grid_fixture::FixtureMosaic),
 }
 
@@ -215,6 +314,7 @@ impl<'a> GridRef<'a> {
     fn id(&self) -> &str {
         match self {
             Self::Opera(a) => a.id,
+            Self::Mrms(a) => a.id,
             Self::FixtureMosaic(a) => a.id,
         }
     }
@@ -222,6 +322,7 @@ impl<'a> GridRef<'a> {
     fn metadata(&self) -> SourceMetadataBorrowed<'a> {
         match self {
             Self::Opera(a) => a.metadata(),
+            Self::Mrms(a) => a.metadata(),
             Self::FixtureMosaic(a) => a.metadata(),
         }
     }
@@ -247,24 +348,32 @@ impl<'a> GridRef<'a> {
             Self::Opera(a) => MosaicStart::Live {
                 placeholder: a.loading_placeholder().map(Box::new),
             },
+            Self::Mrms(a) => MosaicStart::Live {
+                placeholder: a.loading_placeholder().map(Box::new),
+            },
             Self::FixtureMosaic(a) => MosaicStart::Static { frames: a.frames() },
         }
     }
 
-    fn history_max(&self) -> Option<usize> {
+    fn history_policy(&self) -> Option<HistoryPolicy> {
         match self {
-            Self::Opera(_) => Some(crate::opera::HISTORY_MAX),
+            Self::Opera(_) => Some(HistoryPolicy {
+                max_frames: crate::opera::HISTORY_MAX,
+                window_ms: None,
+            }),
+            Self::Mrms(_) => Some(crate::mrms::HISTORY),
             Self::FixtureMosaic(_) => None,
         }
     }
 
     fn polls(&self) -> bool {
-        matches!(self, Self::Opera(_))
+        matches!(self, Self::Opera(_) | Self::Mrms(_))
     }
 
-    fn poll(&self, events: Sender<GridEvent>, known: HashSet<String>) -> Option<JoinHandle<()>> {
+    fn poll(&self, events: GridSender, retained: Vec<i64>) -> Option<JoinHandle<()>> {
         match self {
-            Self::Opera(a) => a.poll(&AdapterTarget::Mosaic, events, known),
+            Self::Opera(a) => a.poll(&AdapterTarget::Mosaic, events, Default::default()),
+            Self::Mrms(a) => Some(a.poll(events, retained)),
             Self::FixtureMosaic(_) => None,
         }
     }
@@ -354,7 +463,7 @@ impl Nexrad {
     pub fn poll(
         &self,
         target: &AdapterTarget,
-        events: Sender<live::Event>,
+        events: mpsc::Sender<live::Event>,
         cached: Vec<i64>,
         skip_known: bool,
     ) -> Option<JoinHandle<()>> {

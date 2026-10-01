@@ -5,6 +5,7 @@ mod grid_fixture;
 mod live;
 mod live_index;
 mod metar;
+mod mrms;
 mod opera;
 mod osm;
 mod protocol;
@@ -269,6 +270,15 @@ impl Timeline {
         self.stored.retain(|e| e.start_ms >= cutoff_ms);
         self.repin()
     }
+    /// Grid adapters can constrain both elapsed observation time and count.
+    /// Only eviction of the selected frame moves the pin.
+    fn retain_history(&mut self, policy: source::HistoryPolicy, newest_ms: i64) -> bool {
+        self.stored
+            .retain(|e| policy.contains(e.start_ms, newest_ms));
+        let excess = self.stored.len().saturating_sub(policy.max_frames);
+        self.stored.drain(..excess);
+        self.repin()
+    }
     /// After frames left: a pin on one of them moves to the oldest. True
     /// when it moved.
     fn repin(&mut self) -> bool {
@@ -504,7 +514,8 @@ struct Shared {
     /// cleanup tick.
     last_live_restart: Instant,
     events: Sender<live::Event>,
-    grid_events: Sender<source::GridEvent>,
+    grid_events: Sender<source::GridMessage>,
+    grid_session: u64,
     /// `scanTime` of the newest complete frame, milliseconds since the
     /// epoch, for `connection.ageSeconds`; `None` while there is none.
     frame_ms: Option<i64>,
@@ -571,6 +582,11 @@ impl Shared {
     /// Publish mosaic PNG bytes once and keep the frame with its path.
     fn store_mosaic(&mut self, mut frame: MosaicFrame, texture: &[u8]) -> io::Result<MosaicFrame> {
         if frame.texture.is_empty() || !self.dir.join(&frame.texture).is_file() {
+            if let Some(id) = self.mosaic_source_id()
+                && let Some(limit) = self.registry.texture_bytes_max(id)
+            {
+                check_texture_budget(&self.dir, id, texture.len() as u64, limit)?;
+            }
             frame.texture = publish(&self.dir, "mosaic", &frame.id, texture)?;
         }
         self.mosaic.retain(|f| f.id != frame.id);
@@ -628,9 +644,7 @@ impl Shared {
         }
         if let Some(site) = self.polar_site_id().map(str::to_owned) {
             eprintln!("{} Live {site}: {why}", iso(now_ms()));
-            if let Some(task) = self.live.take() {
-                task.abort();
-            }
+            self.abort_live();
             let cached: Vec<i64> = self.timeline.stored.iter().map(|e| e.start_ms).collect();
             self.live = self.registry.nexrad.poll(
                 &AdapterTarget::Site {
@@ -644,19 +658,18 @@ impl Shared {
             return;
         }
         if let Some(id) = self.mosaic_source_id().map(str::to_owned)
-            && let Some(task) =
-                self.registry
-                    .poll_mosaic(&id, self.grid_events.clone(), HashSet::new())
+            && self.registry.polls(&id)
         {
+            self.abort_live();
             eprintln!("{} Live {}: {why}", iso(now_ms()), id);
-            if let Some(old) = self.live.take() {
-                old.abort();
-            }
-            self.live = Some(task);
+            let events = source::GridSender::new(self.grid_events.clone(), self.grid_session);
+            let retained = self.timeline.stored.iter().map(|e| e.start_ms).collect();
+            self.live = self.registry.poll_mosaic(&id, events, retained);
             self.last_live_restart = Instant::now();
         }
     }
     fn abort_live(&mut self) {
+        self.grid_session = self.grid_session.wrapping_add(1);
         if let Some(task) = self.live.take() {
             task.abort();
         }
@@ -981,50 +994,63 @@ impl Shared {
         self.broadcast();
         shown
     }
-    /// A live mosaic frame arrived: store it in the mosaic ring and show
-    /// it while following the newest.
-    fn mosaic_arrived(
+    /// Live and backfilled mosaics share admission/retention so late replies
+    /// cannot resurrect expired history or move the observation clock backward.
+    fn accept_mosaic(
         &mut self,
         frame: MosaicFrame,
         texture: Vec<u8>,
         start_ms: i64,
+        live: bool,
     ) -> io::Result<()> {
-        if self.mosaic_source_id().is_none() {
+        let Some(source_id) = self.mosaic_source_id() else {
+            return Ok(());
+        };
+        let newest = self.frame_ms.map_or(start_ms, |ms| ms.max(start_ms));
+        let policy = self.registry.history_policy(source_id);
+        if policy.is_some_and(|p| {
+            !p.contains(start_ms, newest)
+                || (self.timeline.stored.len() >= p.max_frames
+                    && self
+                        .timeline
+                        .stored
+                        .first()
+                        .is_some_and(|e| start_ms < e.start_ms))
+        }) {
             return Ok(());
         }
-        if self.mosaic.iter().any(|f| f.id == frame.id) {
-            if known_sweep_clears_loading(self.state.connection.status) {
+        if self
+            .timeline
+            .stored
+            .iter()
+            .any(|e| e.id == frame.id || e.start_ms == start_ms)
+        {
+            if live && known_sweep_clears_loading(self.state.connection.status) {
                 self.state.connection.status = ConnectionStatus::Ok;
                 self.broadcast();
             }
             return Ok(());
         }
+        let frame = self.store_mosaic(frame, &texture)?;
         let following = self.timeline.following();
-        self.state.connection.status = ConnectionStatus::Ok;
-        self.frame_ms = Some(start_ms);
+        self.frame_ms = Some(newest);
+        if live {
+            self.state.connection.status = ConnectionStatus::Ok;
+        }
         let entry = Entry {
             id: frame.id.clone(),
             scan_time: frame.scan_time.clone(),
             start_ms,
         };
-        let mut dropped = self.timeline.complete(entry);
-        if let Some(max) = self
-            .mosaic_source_id()
-            .and_then(|id| self.registry.history_max(id))
-        {
-            while self.timeline.stored.len() > max {
-                let old_id = self.timeline.stored[0].id.clone();
-                self.timeline.stored.remove(0);
-                self.mosaic.retain(|f| f.id != old_id);
-                dropped = true;
-            }
+        let mut repinned = self.timeline.complete(entry);
+        if let Some(policy) = policy {
+            repinned |= self.timeline.retain_history(policy, newest);
         }
-        let frame = self.store_mosaic(frame, &texture)?;
         self.mosaic
-            .retain(|f| self.timeline.stored.iter().any(|e| e.id == f.id) || f.id == frame.id);
-        let shown = if following {
+            .retain(|f| self.timeline.stored.iter().any(|e| e.id == f.id));
+        let shown = if following && start_ms == newest {
             self.show_mosaic(frame)
-        } else if dropped {
+        } else if repinned {
             self.show_position(0)
         } else {
             Ok(())
@@ -1032,51 +1058,21 @@ impl Shared {
         self.broadcast();
         shown
     }
-    /// An earlier mosaic frame joined the ring: timeline only, like NEXRAD
-    /// backfill — the frame on screen stays put unless its pin fell off
-    /// the ring. Bytes are published once here so playback only swaps paths.
+    fn mosaic_arrived(
+        &mut self,
+        frame: MosaicFrame,
+        texture: Vec<u8>,
+        start_ms: i64,
+    ) -> io::Result<()> {
+        self.accept_mosaic(frame, texture, start_ms, true)
+    }
     fn mosaic_backfilled(
         &mut self,
         frame: MosaicFrame,
         texture: Vec<u8>,
         start_ms: i64,
     ) -> io::Result<()> {
-        if self.mosaic_source_id().is_none() {
-            return Ok(());
-        }
-        if self.mosaic.iter().any(|f| f.id == frame.id) {
-            return Ok(());
-        }
-        if self.frame_ms.is_none_or(|ms| start_ms > ms) {
-            self.frame_ms = Some(start_ms);
-        }
-        let entry = Entry {
-            id: frame.id.clone(),
-            scan_time: frame.scan_time.clone(),
-            start_ms,
-        };
-        let mut dropped = self.timeline.insert(entry);
-        if let Some(max) = self
-            .mosaic_source_id()
-            .and_then(|id| self.registry.history_max(id))
-        {
-            while self.timeline.stored.len() > max {
-                let old_id = self.timeline.stored[0].id.clone();
-                self.timeline.stored.remove(0);
-                self.mosaic.retain(|f| f.id != old_id);
-                dropped = true;
-            }
-        }
-        self.store_mosaic(frame, &texture)?;
-        self.mosaic
-            .retain(|f| self.timeline.stored.iter().any(|e| e.id == f.id));
-        let shown = if dropped {
-            self.show_position(0)
-        } else {
-            Ok(())
-        };
-        self.broadcast();
-        shown
+        self.accept_mosaic(frame, texture, start_ms, false)
     }
     /// An earlier volume's frame joined the catalog: it takes its place in
     /// the timeline without touching the frame on screen, unless the pin
@@ -1226,6 +1222,30 @@ fn runtime() -> io::Result<PathBuf> {
     fs::set_permissions(&dir, fs::Permissions::from_mode(0o700))?;
     Ok(dir)
 }
+/// Include retained and retired textures when checking a source's disk budget.
+fn check_texture_budget(dir: &Path, source: &str, incoming: u64, limit: u64) -> io::Result<()> {
+    let prefix = format!("mosaic-{source}-");
+    let mut total = incoming;
+    match fs::read_dir(dir.join("tex")) {
+        Ok(files) => {
+            for file in files {
+                let file = file?;
+                if file.file_name().to_string_lossy().starts_with(&prefix) {
+                    total = total.saturating_add(file.metadata()?.len());
+                }
+            }
+        }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
+    }
+    if total > limit {
+        return Err(io::Error::other(format!(
+            "{source} runtime texture limit reached; retaining current data"
+        )));
+    }
+    Ok(())
+}
+
 /// Write `bytes` under `tex/` as an immutable revision and return its
 /// protocol path.
 fn publish(dir: &Path, stem: &str, frame: &str, bytes: &[u8]) -> io::Result<String> {
@@ -1431,25 +1451,30 @@ async fn live_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<live::Even
     }
 }
 
-fn grid_selected(shared: &Shared, source_id: &str) -> bool {
-    shared.state.mode == Mode::Live && shared.mosaic_source_id() == Some(source_id)
-}
-
-async fn mosaic_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<source::GridEvent>) {
-    while let Some(event) = events.recv().await {
-        match event {
+async fn mosaic_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<source::GridMessage>) {
+    while let Some(message) = events.recv().await {
+        let mut shared = shared.lock().unwrap();
+        if shared.state.mode != Mode::Live
+            || !message.matches(shared.grid_session, shared.state.selection.as_ref())
+        {
+            continue;
+        }
+        let mut published = true;
+        match message.event {
             source::GridEvent::Frame {
                 source_id,
                 frame,
                 texture,
                 start_ms,
             } => {
-                let mut shared = shared.lock().unwrap();
-                if !grid_selected(&shared, &source_id) {
-                    continue;
-                }
                 if let Err(e) = shared.mosaic_arrived(*frame, texture, start_ms) {
-                    eprintln!("{source_id} frame: {e}");
+                    published = false;
+                    report_grid(
+                        &mut shared,
+                        &source_id,
+                        &e.to_string(),
+                        ConnectionStatus::Offline,
+                    );
                 }
             }
             source::GridEvent::Backfill {
@@ -1458,20 +1483,30 @@ async fn mosaic_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<source::
                 texture,
                 start_ms,
             } => {
-                let mut shared = shared.lock().unwrap();
-                if !grid_selected(&shared, &source_id) {
-                    continue;
-                }
                 if let Err(e) = shared.mosaic_backfilled(*frame, texture, start_ms) {
-                    eprintln!("{source_id} backfill: {e}");
+                    published = false;
+                    eprintln!("Live {source_id} history: {e}; retaining current data");
+                }
+            }
+            source::GridEvent::Online { .. } => {
+                if set(&mut shared.state.connection.status, ConnectionStatus::Ok) {
+                    shared.broadcast();
                 }
             }
             source::GridEvent::Offline { source_id, reason } => {
-                report_grid(&shared, &source_id, &reason, ConnectionStatus::Offline);
+                report_grid(&mut shared, &source_id, &reason, ConnectionStatus::Offline);
             }
             source::GridEvent::Silent { source_id, reason } => {
-                report_grid(&shared, &source_id, &reason, ConnectionStatus::Unavailable);
+                report_grid(
+                    &mut shared,
+                    &source_id,
+                    &reason,
+                    ConnectionStatus::Unavailable,
+                );
             }
+        }
+        if let Some(ack) = message.published {
+            let _ = ack.send(published);
         }
     }
 }
@@ -1491,11 +1526,7 @@ fn report(shared: &Mutex<Shared>, site: &str, reason: &str, condition: Connectio
     }
 }
 
-fn report_grid(shared: &Mutex<Shared>, source_id: &str, reason: &str, condition: ConnectionStatus) {
-    let mut shared = shared.lock().unwrap();
-    if !grid_selected(&shared, source_id) {
-        return;
-    }
+fn report_grid(shared: &mut Shared, source_id: &str, reason: &str, condition: ConnectionStatus) {
     eprintln!("Live {source_id}: {reason}");
     if set(&mut shared.state.connection.status, condition) {
         shared.broadcast();
@@ -2035,7 +2066,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
     // The frame ring buffer; live frames are written here as they complete.
     let catalog = Arc::new(catalog::Catalog::open(osm::cache_root()?.join("frames"))?);
     let (events, event_rx) = mpsc::channel(16);
-    let (grid_events, grid_rx) = mpsc::channel(32);
+    let (grid_events, grid_rx) = mpsc::channel(1);
     let wake = Arc::new(Notify::new());
     let shared = Arc::new(Mutex::new(Shared {
         state: initial_state(frame, osm.info(), mode, status, selection),
@@ -2053,6 +2084,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
         last_live_restart: Instant::now(),
         events,
         grid_events,
+        grid_session: 0,
         frame_ms,
         timeline: Timeline::new(entries),
         pending: None,
@@ -2281,6 +2313,29 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mosaic_budget_counts_retired_and_temporary_files_without_deleting_them() {
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "../target/test-mosaic-budget-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(dir.join("tex")).unwrap();
+        for (name, size) in [
+            ("mosaic-source-old.png", 30),
+            ("mosaic-source-current.png", 20),
+            ("mosaic-source-pending.png.tmp", 20),
+            ("mosaic-other-current.png", 999),
+        ] {
+            fs::write(dir.join("tex").join(name), vec![0; size]).unwrap();
+        }
+        assert!(check_texture_budget(&dir, "source", 31, 100).is_err());
+        assert!(check_texture_budget(&dir, "source", 30, 100).is_ok());
+        assert!(dir.join("tex/mosaic-source-old.png").exists());
+        assert!(dir.join("tex/mosaic-source-current.png").exists());
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     fn set(paths: &[&str]) -> HashSet<PathBuf> {
         paths.iter().map(PathBuf::from).collect()
@@ -2710,3 +2765,6 @@ mod tests {
         assert_eq!(expired, files(&["tex/old.png", "tex/old.png.tmp"]));
     }
 }
+
+#[cfg(test)]
+mod mosaic_tests;
