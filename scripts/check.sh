@@ -170,7 +170,7 @@ if step build "${build_command[@]}"; then
     fi
     # check-picker and check-keys select stations for real, so they run last.
     if [[ $scope != installer ]]; then
-      lane window check-engine-ui check-radar-handoff check-map-sites check-map-network check-location check-picker check-keys & lanes+=($!)
+      lane window check-engine-ui check-radar-handoff check-map-sites check-map-network check-location check-export check-picker check-keys & lanes+=($!)
       wait "${lanes[-1]}" || failed=1
       unset 'lanes[-1]'
     fi
