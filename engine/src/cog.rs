@@ -27,6 +27,7 @@ const TAG_SAMPLE_FORMAT: u16 = 339;
 const TAG_MODEL_PIXEL_SCALE: u16 = 33550;
 const TAG_MODEL_TIEPOINT: u16 = 33922;
 const TAG_GEO_DOUBLE_PARAMS: u16 = 34736;
+const TAG_GDAL_METADATA: u16 = 42112;
 const TAG_GDAL_NODATA: u16 = 42113;
 
 const TYPE_ASCII: u16 = 2;
@@ -57,6 +58,7 @@ pub struct DecodedRaster {
     /// Projection doubles when present (OPERA: lat0, lon0, FE, FN, invF, a, …).
     pub geo_double_params: Vec<f64>,
     pub nodata: Option<f32>,
+    pub undetect_nan: bool,
     /// First sample plane, row-major, length `width * height`.
     pub values: Vec<f32>,
 }
@@ -78,6 +80,7 @@ struct Ifd {
     model_tiepoint: Option<[f64; 6]>,
     geo_double_params: Vec<f64>,
     nodata: Option<f32>,
+    undetect_nan: bool,
 }
 
 /// Decode the first IFD of a Classic little-endian tiled Deflate float TIFF.
@@ -103,8 +106,49 @@ pub fn decode_float_cog(bytes: &[u8]) -> Result<DecodedRaster, String> {
         geotransform,
         geo_double_params: ifd.geo_double_params,
         nodata: ifd.nodata,
+        undetect_nan: ifd.undetect_nan,
         values,
     })
+}
+
+/// Do not silently continue under a changed sample-0 validity encoding.
+fn validate_validity_metadata(metadata: &str) -> Result<bool, String> {
+    use xml::reader::{EventReader, XmlEvent};
+    let mut undetect = false;
+    let mut declared = false;
+    let mut text = String::new();
+    let config = xml::reader::ParserConfig::new()
+        .max_data_length(512 << 10)
+        .max_entity_expansion_length(512 << 10)
+        .max_entity_expansion_depth(4)
+        .max_name_length(128)
+        .max_attributes(32)
+        .max_attribute_length(4096);
+    for event in EventReader::new_with_config(metadata.as_bytes(), config) {
+        match event.map_err(|e| e.to_string())? {
+            XmlEvent::StartElement {
+                name, attributes, ..
+            } if name.local_name == "Item" => {
+                undetect = attributes
+                    .iter()
+                    .any(|a| a.name.local_name == "name" && a.value == "undetect")
+                    && attributes
+                        .iter()
+                        .any(|a| a.name.local_name == "sample" && a.value == "0");
+                text.clear();
+            }
+            XmlEvent::Characters(s) if undetect => text.push_str(&s),
+            XmlEvent::EndElement { name } if name.local_name == "Item" && undetect => {
+                if !text.trim().parse::<f32>().is_ok_and(f32::is_nan) {
+                    return Err("unsupported OPERA sample-0 undetect".into());
+                }
+                declared = true;
+                undetect = false;
+            }
+            _ => {}
+        }
+    }
+    Ok(declared)
 }
 
 fn validate_ifd(ifd: &Ifd) -> Result<(), String> {
@@ -279,6 +323,7 @@ fn parse_ifd(bytes: &[u8], off: usize) -> Result<Ifd, String> {
     let mut model_tiepoint = None;
     let mut geo_double_params = Vec::new();
     let mut nodata = None;
+    let mut undetect_nan = false;
     for _ in 0..n {
         if cursor + 12 > bytes.len() {
             return Err("IFD entry past end".into());
@@ -313,9 +358,13 @@ fn parse_ifd(bytes: &[u8], off: usize) -> Result<Ifd, String> {
                 }
             }
             TAG_GEO_DOUBLE_PARAMS => geo_double_params = read_f64s(bytes, typ, count, value)?,
+            TAG_GDAL_METADATA => {
+                let metadata = read_ascii(bytes, typ, count, value)?;
+                undetect_nan = validate_validity_metadata(&metadata)?;
+            }
             TAG_GDAL_NODATA => {
                 let s = read_ascii(bytes, typ, count, value)?;
-                nodata = s.trim().parse().ok();
+                nodata = Some(s.trim().parse().map_err(|_| "invalid GDAL nodata")?);
             }
             _ => {}
         }
@@ -342,6 +391,7 @@ fn parse_ifd(bytes: &[u8], off: usize) -> Result<Ifd, String> {
         model_tiepoint,
         geo_double_params,
         nodata,
+        undetect_nan,
     })
 }
 
@@ -492,6 +542,8 @@ pub fn write_float_cog(
     let scale = [geotransform[1], -geotransform[5], 0.0];
     let tie = [0.0, 0.0, 0.0, geotransform[0], geotransform[3], 0.0];
     let nodata_ascii = format!("{nodata}\0");
+    let metadata_ascii =
+        "<GDALMetadata><Item name=\"undetect\" sample=\"0\">nan</Item></GDALMetadata>\0";
 
     #[derive(Clone)]
     enum Val {
@@ -570,6 +622,12 @@ pub fn write_float_cog(
             TYPE_DOUBLE,
             geo_doubles.len() as u32,
             Val::Ext(geo_doubles.iter().flat_map(|v| v.to_le_bytes()).collect()),
+        ),
+        (
+            TAG_GDAL_METADATA,
+            TYPE_ASCII,
+            metadata_ascii.len() as u32,
+            Val::Ext(metadata_ascii.as_bytes().to_vec()),
         ),
         (
             TAG_GDAL_NODATA,
@@ -659,6 +717,27 @@ fn deflate(raw: &[u8]) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn undetect_metadata_requires_the_verified_sample_zero_declaration() {
+        assert!(
+            validate_validity_metadata(
+                "<GDALMetadata><Item name=\"undetect\" sample=\"0\">nan</Item></GDALMetadata>"
+            )
+            .unwrap()
+        );
+        assert!(
+            !validate_validity_metadata(
+                "<GDALMetadata><Item name=\"undetect\" sample=\"1\">nan</Item></GDALMetadata>"
+            )
+            .unwrap()
+        );
+        assert!(
+            validate_validity_metadata(
+                "<GDALMetadata><Item name=\"undetect\" sample=\"0\">-8888000</Item></GDALMetadata>"
+            )
+            .is_err()
+        );
+    }
 
     fn set_inline_ifd_value(bytes: &mut [u8], wanted_tag: u16, value: u32) {
         let ifd = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;

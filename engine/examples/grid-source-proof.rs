@@ -475,7 +475,7 @@ fn main() {
                     }
                 }
             }
-            json!({"width":raster.width,"height":raster.height,"nodata":raster.nodata,
+            json!({"width":raster.width,"height":raster.height,"nodata":raster.nodata,"undetectDeclaredNaN":raster.undetect_nan,
                 "geotransform":raster.geotransform,"projection":raster.geo_double_params,
                 "sourceBytes":bytes.len(),"counts":counts,"odimCompared":odim.is_some(),
                 "odimDisagreements":disagreements})

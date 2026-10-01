@@ -71,3 +71,13 @@ verification. `scripts/extract-fixtures.sh` never hits those live URLs.
 The [wire protocol](../docs/protocol.md#texture-files) defines radar codes,
 palette lookup, and sampling; the [engine guide](../engine/README.md#verification)
 explains verification against the golden files.
+
+## ECCC selection metadata
+
+`engine/data/eccc-selection.json` freezes the verified 2026-10-01T13:36:00Z
+`RADAR_COVERAGE_RRAI` GeoJSON from #128 for selection only. Its four disconnected
+polygons and three interior holes are clipped to RRAI's advertised service box;
+803 closed-ring vertices remain, without simplification. The adjacent provenance
+JSON records the source SHA256, TIME, clipping operation and ECCC licence.
+This is stable source metadata, never a drawable coverage outline or a current
+contributor mask. Provider rasters remain runtime or ignored review inputs.

@@ -127,6 +127,7 @@ impl Opera {
             attribution: ATTRIBUTION,
             mosaic: Some(MosaicMeta {
                 coverage: &self.coverage,
+                selection_footprint: None,
                 selection_priority: SELECTION_PRIORITY,
                 covering: true,
             }),
@@ -171,7 +172,7 @@ impl Opera {
     }
 
     pub fn loading_texture() -> Result<Vec<u8>, String> {
-        sweep::png(1, 1, &[0, 0, 0, 0]).map_err(|e| format!("encoding OPERA placeholder: {e}"))
+        sweep::png(1, 1, &[0, 8, 0, 255]).map_err(|e| format!("encoding OPERA placeholder: {e}"))
     }
 
     pub fn poll(
@@ -243,24 +244,31 @@ pub fn prefix_for(day: NaiveDate) -> String {
 }
 
 /// Classify OPERA DBZH floats into the grid texture encoding.
-pub fn classify(values: &[f32], nodata: Option<f32>, bounds: &[f64], classes: usize) -> Vec<u8> {
+pub fn classify(
+    values: &[f32],
+    nodata: Option<f32>,
+    bounds: &[f64],
+    classes: usize,
+) -> Result<Vec<u8>, String> {
     let classes = classes.max(1);
     let fill = nodata.unwrap_or(FILL);
     let mut pixels = Vec::with_capacity(values.len() * 4);
     for &v in values {
-        let (r, g) = if v.is_nan() {
-            (0, 2) // undetect
-        } else if (v - fill).abs() < 1.0 || v <= fill / 2.0 {
+        let (r, g) = if v == fill || (v.is_nan() && fill.is_nan()) {
             // Missing / nodata (G bit 0). Grid shader draws transparent —
             // nodata draws nothing; oceans must not use the polar folded hatch.
             (0, 1)
+        } else if v.is_nan() {
+            (0, 2) // verified OPERA sample-0 undetect
+        } else if !v.is_finite() {
+            return Err("OPERA nonfinite measured value".into());
         } else {
             let class = class_of(v as f64, bounds, classes);
             (class + 1, 0)
         };
         pixels.extend_from_slice(&[r, g, 0, 255]);
     }
-    pixels
+    Ok(pixels)
 }
 
 fn class_of(value: f64, bounds: &[f64], classes: usize) -> u8 {
@@ -338,7 +346,7 @@ fn finish_frame(
     decode: Duration,
 ) -> Result<(MosaicFrame, Vec<u8>, i64, CpuStages), String> {
     let started = Instant::now();
-    let pixels = classify(&raster.values, raster.nodata, bounds, palette.len());
+    let pixels = classify(&raster.values, raster.nodata, bounds, palette.len())?;
     let width = raster.width;
     let height = raster.height;
     let geotransform = raster.geotransform;
@@ -511,6 +519,9 @@ where
 }
 
 fn validate_opera_georef(raster: &DecodedRaster) -> Result<(), String> {
+    if !raster.undetect_nan {
+        return Err("OPERA sample-0 undetect declaration missing".into());
+    }
     if raster.geo_double_params.len() >= 4 {
         let (lat0, lon0, fe, fnorth) = (
             raster.geo_double_params[0],
@@ -837,6 +848,21 @@ pub fn synthetic_fixture_cog() -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn declared_nan_nodata_precedes_undetect_and_infinite_measurements_fail() {
+        let bounds = [-32., 0., 10.];
+        assert_eq!(
+            classify(&[f32::NAN], Some(f32::NAN), &bounds, 2).unwrap(),
+            [0, 1, 0, 255]
+        );
+        assert_eq!(
+            classify(&[f32::NAN], Some(FILL), &bounds, 2).unwrap(),
+            [0, 2, 0, 255]
+        );
+        assert!(classify(&[f32::INFINITY], Some(FILL), &bounds, 2).is_err());
+        assert!(classify(&[f32::NEG_INFINITY], Some(FILL), &bounds, 2).is_err());
+        assert!(classify(&[FILL + 2.], Some(FILL), &bounds, 2).unwrap()[0] > 0);
+    }
     use crate::protocol::{AdapterTarget, GeoPoint, Selection};
     use crate::source::{Candidate, SourceRegistry, covering_selection};
 
@@ -908,7 +934,8 @@ mod tests {
             Some(FILL),
             &opera.bounds,
             opera.palette.len(),
-        );
+        )
+        .unwrap();
         assert_eq!(pixels[1], 0); // measured G
         assert!(pixels[0] >= 1);
         assert_eq!(pixels[4], 0);

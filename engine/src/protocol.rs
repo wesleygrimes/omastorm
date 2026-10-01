@@ -106,6 +106,7 @@ pub struct Hello {
     pub engine: &'static str,
     pub pid: u32,
     pub build: String,
+    pub grid_view: bool,
     pub sites: Vec<Station>,
     pub sources: Vec<SourceInfo>,
     pub sites_source: String,
@@ -127,6 +128,36 @@ pub struct SourceInfo {
     pub selection_priority: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub coverage: Option<Coverage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_footprint: Option<SelectionFootprint>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Clone, Debug)]
+pub struct SelectionFootprint {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub coordinates: Vec<Vec<Vec<[f64; 2]>>>,
+}
+impl SelectionFootprint {
+    pub fn contains(&self, point: GeoPoint) -> bool {
+        fn ring(ring: &[[f64; 2]], point: GeoPoint) -> bool {
+            let mut inside = false;
+            for pair in ring.windows(2) {
+                let [a, b] = pair else { unreachable!() };
+                if (a[1] > point.lat) != (b[1] > point.lat)
+                    && point.lon < (b[0] - a[0]) * (point.lat - a[1]) / (b[1] - a[1]) + a[0]
+                {
+                    inside = !inside;
+                }
+            }
+            inside
+        }
+        self.coordinates.iter().any(|polygon| {
+            polygon.first().is_some_and(|exterior| {
+                ring(exterior, point) && !polygon.iter().skip(1).any(|hole| ring(hole, point))
+            })
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Debug)]
@@ -695,6 +726,10 @@ pub enum Command {
     ViewCenter {
         lat: f64,
         lon: f64,
+        #[serde(default)]
+        bounds: Option<crate::grid_view::Bounds>,
+        #[serde(default, rename = "viewId")]
+        view_id: Option<String>,
     },
     /// Rank gazetteer places for the location picker. Answered with
     /// `places` to the sender; optional `lat`/`lon` bias nearer matches.

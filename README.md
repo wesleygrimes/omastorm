@@ -315,7 +315,10 @@ Canada fallback: Environment and Climate Change Canada / NOAA via
 [ECCC Data Services End-use Licence](https://eccc-msc.github.io/open-data/licence/readme_en/).
 ECCC supplies discrete rain-rate estimates in mm/h, decoded from its fixed
 WMS palette; these are not raw reflectivity. NEXRAD remains preferred where
-it covers. ECCC history holds up to 30 six-minute frames.
+it covers. ECCC history holds up to 30 six-minute frames, reduced to fit its
+runtime byte budget. Panning to a new regional window resets that history.
+A stable radar footprint guides automatic selection; actual contributor
+availability belongs to each observation and may change independently.
 Basemap: ©
 OpenStreetMap contributors, [ODbL](https://opendatacommons.org/licenses/odbl/1-0/),
 tiles by [OpenFreeMap](https://openfreemap.org); Natural Earth, public domain.
