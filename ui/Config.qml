@@ -5,7 +5,7 @@ import "Toml.js" as Toml
 
 // ~/.config/omastorm/config.toml (docs/protocol.md, configuration):
 // deliberate preferences — an explicit map centre, a locked radar, the
-// treatment, the weak-return floor, `[metar]` (show, pick, count,
+// treatment, the weak-return floor, focus mode, `[metar]` (show, pick, count,
 // always_on_when_in_view, mark), and the `[keys]` table. Watched like
 // the theme files, so an edit applies to the running window. OMASTORM_CONFIG
 // names another file for checks and captures; a missing file is no config.
@@ -32,6 +32,8 @@ QtObject {
     readonly property var treatment: values.treatment
     // The raw value; the window judges it: a dBZ number, false, or unset.
     readonly property var weakFloor: values.weak_floor
+    // The raw value; the window judges it: true, false, or unset.
+    readonly property var focusMode: values.focus_mode
     // The `[keys]` table as action id -> value, for Keys.resolve.
     readonly property var keys: {
         var table = {};

@@ -8,8 +8,8 @@
 // Bindings are Qt key sequences separated by spaces: "h Left" binds both.
 // Shift+L is the lock because lowercase l pans; `m` jumps to the approximate
 // location; the digit keys pick a treatment; `w` toggles the weak-return floor;
-// `a` is aviation mode (METAR chips); `?` opens the sheet; Escape with
-// nothing open closes the window.
+// `a` is aviation mode (METAR chips); `f` is focus mode; `?` opens the
+// sheet; Escape with nothing open closes the window.
 var ACTIONS = [
     { id: "search", keys: "/ s" },
     { id: "nearest", keys: "n" },
@@ -32,6 +32,7 @@ var ACTIONS = [
     { id: "stipple", keys: "3" },
     { id: "weak", keys: "w" },
     { id: "aviation", keys: "a" },
+    { id: "focus", keys: "f" },
     { id: "help", keys: "?" },
     { id: "close", keys: "Escape" }
 ];
@@ -44,7 +45,8 @@ var ROWS = [
      { label: "my location", actions: ["locate"] },
      { label: "pan", actions: ["pan_left", "pan_down", "pan_up", "pan_right"] },
      { label: "zoom", actions: ["zoom_in", "zoom_out"] },
-     { label: "reset to location", actions: ["reset"] }],
+     { label: "reset to location", actions: ["reset"] },
+     { label: "focus mode: on / off", actions: ["focus"] }],
     [{ label: "previous frame", actions: ["previous_frame"] },
      { label: "next frame", actions: ["next_frame"] },
      { label: "play / pause", actions: ["play"] },
@@ -121,6 +123,25 @@ function envFloor(text) {
     if (String(text).toLowerCase() === "off") return null;
     var n = Number(text);
     return isFinite(n) ? n : undefined;
+}
+
+// The window's layout (DESIGN.md, window chrome): FOCUS while focus mode
+// is on, else FULL where every row fits, else LEAN. FULL needs FULL_HEIGHT
+// logical pixels of height and FULL_WIDTH of width; both scale with the
+// theme's base font, like the window's minimum size.
+var FULL_WIDTH = 560, FULL_HEIGHT = 620;
+function layout(width, height, baseSize, focus) {
+    if (focus) return "FOCUS";
+    var scale = Math.max(1, baseSize / 12);
+    return width >= FULL_WIDTH * scale && height >= FULL_HEIGHT * scale ? "FULL" : "LEAN";
+}
+// The focus_mode setting: true or false, false when unset; anything else
+// is reported and leaves it off.
+function focusMode(value, errors) {
+    if (value === undefined) return false;
+    if (typeof value === "boolean") return value;
+    errors.push("focus_mode = " + JSON.stringify(value) + ": true or false");
+    return false;
 }
 
 // A sequence as the sheet's key cap shows it: letters in their case,

@@ -2,7 +2,8 @@
 # The keyboard map (DESIGN.md, keyboard map as built) in the real window,
 # driven through its IPC handler against the fixture daemon: the `[keys]`
 # table laid over the defaults with every kind of mistake reported in the
-# status slot and the defaults kept, the treatment and weak-floor settings,
+# status slot and the defaults kept, the treatment, weak-floor, and focus
+# settings,
 # each action's effect on the camera, the treatment, the sheet, the menu,
 # and the picker, the fix applied live through the file watch, and the
 # current-location home from a weather.json with the header naming it. Run
@@ -23,6 +24,7 @@ printf '{\n  "name": "Stokesdale",\n  "latitude": 36.23708,\n  "longitude": -79.
 cat > "$check_dir/config.toml" <<'TOML'
 treatment = "neon"
 weak_floor = true
+focus_mode = "yes"
 [keys]
 pan_left = "e Left"
 zoom_in = "foo"
@@ -61,13 +63,14 @@ b=$(call bindings)
 [[ $b == *'"reset":["0"]'* ]] || fail "A numeric reset did not keep its default: $b"
 [[ $b == *'"search":["/","S"]'* && $b == *'"nearest":["N"]'* ]] || fail "The conflict on s did not stay with search: $b"
 e=$(call errors)
-for wanted in 'treatment = \"neon\": not PIXELS, GLYPHS, or STIPPLE' 'weak_floor = true: a dBZ number or false' '[keys] zoom_in = \"foo\": foo is not a key' "[keys] nearest = \\\"s\\\": S is search's key" '[keys] bogus is not an action' '[keys] reset must be a quoted string'; do
+for wanted in 'treatment = \"neon\": not PIXELS, GLYPHS, or STIPPLE' 'weak_floor = true: a dBZ number or false' 'focus_mode = \"yes\": true or false' '[keys] zoom_in = \"foo\": foo is not a key' "[keys] nearest = \\\"s\\\": S is search's key" '[keys] bogus is not an action' '[keys] reset must be a quoted string'; do
   [[ $e == *"$wanted"* ]] || fail "Missing report: $wanted" "Reported: $e"
 done
-expect 'Six mistakes' 6 "$(grep -o '\[keys\]\|treatment =\|weak_floor =' <<< "$e" | wc -l)"
-expect 'The status slot names the first and counts the rest' 'TREATMENT = "NEON": NOT PIXELS, GLYPHS, OR STIPPLE (+5 MORE)' "$(field error)"
+expect 'Seven mistakes' 7 "$(grep -o '\[keys\]\|treatment =\|weak_floor =\|focus_mode =' <<< "$e" | wc -l)"
+expect 'The status slot names the first and counts the rest' 'TREATMENT = "NEON": NOT PIXELS, GLYPHS, OR STIPPLE (+6 MORE)' "$(field error)"
 expect 'A bad treatment leaves Glyphs' GLYPHS "$(field treatment)"
 expect 'A bad weak_floor leaves the default floor' 5 "$(field weakFloor)"
+expect 'A bad focus_mode leaves the window FULL' FULL "$(field layout)"
 expect 'The header names the weather location' weather "$(field locationSource)"
 
 # Each action's effect, through the same function the shortcuts call.
@@ -90,6 +93,10 @@ call run weak
 expect 'w shows every measured return' off "$(field weakFloor)"
 call run weak
 expect 'w again restores the floor' 5 "$(field weakFloor)"
+call run focus
+expect 'f turns focus mode on' FOCUS "$(field layout)"
+call run focus
+expect 'f again returns to the layout that fits' FULL "$(field layout)"
 call run help
 expect '? opens the sheet' true "$(field sheet)"
 call run help
@@ -122,6 +129,7 @@ center_lat = 35.333
 center_lon = -97.277
 treatment = "pixels"
 weak_floor = 10
+focus_mode = true
 [keys]
 zoom_in = "z"
 search = ""
@@ -132,6 +140,10 @@ b=$(call bindings)
 [[ $b == *'"zoom_in":["Z"]'* && $b == *'"search":[]'* ]] || fail "The fixed table did not apply: $b"
 expect 'The treatment setting applies' PIXELS "$(field treatment)"
 expect 'The weak_floor setting applies' 10 "$(field weakFloor)"
+until_field layout FOCUS
+call run focus
+expect 'f overrides focus_mode until the window closes' FULL "$(field layout)"
+grep -q 'focus_mode = true' "$check_dir/config.toml" || fail "The focus key rewrote config.toml"
 until_field locationSource config
 until_field lat 35.333
 until_field lon -97.277
