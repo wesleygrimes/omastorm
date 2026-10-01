@@ -383,7 +383,77 @@ below-threshold codes are never weak, and the legend names the hidden range.
 
 **Mosaic texture (`frame.texture` when `kind` is `mosaic`):** PNG, RGBA,
 width × height as published. R is palette class + 1 (0 draws nothing), G bit
-0 is missing, G bit 1 is undetect, B is 0, A is 255. No `azimuthLut`.
+0 is missing, G bit 1 is undetect, G bit 2 is verified outside observed
+coverage at the frame's time, and G bit 3 is unknown. Non-measured flags
+are mutually exclusive; measured cells have G=0. Legacy R=0/G=0 is unknown.
+B is 0, A is 255. No `azimuthLut`. An out-of-raster coordinate is unfetched,
+not verified outside coverage. See [grid-adapters.md](grid-adapters.md) for
+provider semantics and loading placeholders.
+
+### Bounded regional grids and validity (additive v2 contract)
+
+`hello` advertises `gridView: true` when the engine supports the following
+view extension and viewport validity reply. Its absence means centre-only
+requests. Existing clients ignore these optional fields and keep rendering
+the same classified R channel; all non-measured cells remain blank.
+
+`hello.sources[].coverage` remains the service/selection box or polygon.
+An optional `selectionFootprint` refines it for selection and lock checks:
+GeoJSON `{"type":"MultiPolygon","coordinates":[...]}` in WGS84 lon/lat,
+with closed exterior rings and interior holes. It is stable source metadata,
+not the current frame mask, and is never drawn as an actual-coverage boundary.
+Limit it to 4096 vertices total and a 512 KiB metadata payload. If present,
+engine follow and capable-client lock checks use it; older clients retain
+their coarse box lock indication. Source generation does not mutate this
+footprint as current contributors change.
+
+Extend `view_center` with optional `bounds` and `viewId`:
+
+```json
+{"type":"view_center","lat":51.25,"lon":-91.9,"viewId":"window-17",
+ "bounds":{"west":-94,"south":49,"east":-89,"north":53}}
+```
+
+Bounds are the settled visible WGS84 viewport, including zoom/aspect ratio,
+with finite `-180 <= west < east <= 180` and
+`-85.05112878 <= south < north <= 85.05112878`. Reject invalid bounds and
+view IDs longer than 64 bytes; retain the previous valid view. A pan, zoom,
+resize, reconnection or visible-surface change refreshes this command.
+`viewId` identifies the sender's current view; it is not a frame/history ID.
+`follow` and `lock` retain their existing meanings. Updating bounds with an
+unchanged centre still refreshes grid requests. At most two clients may
+register bounds, for the shared window/popover frame; disconnect unregisters
+them, and centre-only status connections register none. Use their union
+when fitting the active ECCC extent. Selection remains global. A command
+without bounds uses the bounded centre-only fallback in grid-adapters.md.
+
+An engine sends the following only to clients with registered bounds, after
+a displayed frame/view change, including seek and playback:
+
+```json
+{"type":"grid_validity","v":2,"sourceId":"eccc",
+ "frameId":"eccc-RATE-dis14-3857-d2048-x-5632-y2560-20261001T133600Z",
+ "viewId":"window-17","unfetched":false,
+ "counts":{"measured":100,"noEcho":500,"missing":0,
+           "outside":40,"unknown":2}}
+```
+
+Counts refer to classified raster-cell centres inside that client's visible
+bounds for the frame actually on screen, not the newest observation or the
+entire downloaded extent. They are nonnegative integers, not intensities or
+fractions of screen pixels. `unfetched` means part of the requested view is
+outside this frame's raster extent. With no dated frame, report unknown
+loading validity instead of a verified outside boundary. The client discards
+a reply unless source, frame ID and view ID still match; clear the old notice
+immediately on any mismatch/disconnect. Covered no echo produces no missing
+notice. Missing/outside/unknown have distinct labels and no map fill/outline.
+
+Use one bounded worker and one latest pending query per registered client.
+Read classified flags with bounded row/work buffers, rather than retain a
+second full-size OPERA mask. Late results also require the engine source
+generation and region key to match. These optional v2 additions require mock
+client and candidate/current-client compatibility checks before shipment;
+the contract alone does not advertise a capability in a running engine.
 
 **Grid lookup (`ui/shaders/grid.frag`):** each 3 px screen cell becomes WGS84
 longitude and latitude from the same Web Mercator camera, then the grid CRS
