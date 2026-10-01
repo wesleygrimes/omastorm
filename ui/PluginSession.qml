@@ -48,6 +48,12 @@ QtObject {
     property string lastConfigLock: ""
     property bool pendingLocationPicker: false
     property var appliedExplicit: null
+    // GPS follow (DESIGN.md, gpsd follow as built). followPaused is a user
+    // choice — a settled pan pauses follow so the camera stays where the
+    // user put it; the crosshair chip on the map resumes it. The flag only
+    // skips the centring step inside followFix(); the receiver's fix is
+    // kept so a resume re-centres on the latest position.
+    property bool followPaused: false
     signal viewChanged()
     signal locationPickerRequested()
 
@@ -368,12 +374,14 @@ QtObject {
         }
         span = next;
         hasView = true;
+        if (config.fix && !followPaused) followPaused = true;
         persistTimer.restart();
     }
 
     function setPlace(lat, lon, name) {
         if (!Location.validPair(lat, lon)) return;
         cancelIpLocation();
+        if (config.fix) followPaused = true;
         placeName = name || "";
         locationSource = "state";
         needsLocation = false;
@@ -408,6 +416,7 @@ QtObject {
             requestLocationPicker();
             return;
         }
+        if (config.fix) followPaused = true;
         span = Location.DEFAULT_SPAN;
         hasView = true;
         persist();
@@ -420,6 +429,7 @@ QtObject {
         lon = Number(lon);
         if (!lockObj || !Location.validPair(lat, lon)) return;
         cancelIpLocation();
+        if (config.fix) followPaused = true;
         placeName = name || Location.lockKey(lockObj);
         locationSource = "state";
         needsLocation = false;
@@ -456,6 +466,44 @@ QtObject {
         }
         persist();
         applyRadar();
+    }
+
+    // A GPS fix (DESIGN.md, gpsd follow as built) is a view centre that
+    // moves on its own: the map goes to it, and the engine's ordinary
+    // hand-off — nearest radar to the centre, with its own hysteresis —
+    // picks the station, exactly as a pan would. A lock still holds: the
+    // chaser who pinned a radar keeps it while the map follows the car.
+    // A parked receiver's jitter is under the 100 m floor; nothing moves
+    // for it. Follow starts only once a view exists: the launch one-shot
+    // (config centre, remembered state, weather, prompt) owns placement,
+    // and `gpsd = true` follows after it, never instead of it.
+    property var appliedFix: null
+    function followFix(fix) {
+        if (!fix) { appliedFix = null; return; }
+        appliedFix = fix;
+        if (followPaused) return;
+        if (!hasView || needsLocation) return;
+        if (Location.distanceKm(fix.lat, fix.lon, centerLat, centerLon) < 0.1) return;
+        placeName = "GPS";
+        locationSource = "gps";
+        centerLat = fix.lat;
+        centerLon = fix.lon;
+        persist();
+        viewChanged();
+        applyRadar();
+    }
+    // A user pan pauses follow; the chip resumes it. A resume with the
+    // receiver's current fix in hand re-centres on it right away, through
+    // the same persist / viewChanged / applyRadar path a pan takes.
+    function pauseFollow() { if (!followPaused) followPaused = true; }
+    function resumeFollow() { if (followPaused) { followPaused = false; if (config.fix) followFix(config.fix); } }
+    function setFollowPaused(paused) { if (paused) pauseFollow(); else resumeFollow(); }
+    // The config key flipped. Turning gpsd back on starts following again
+    // and clears any pause that carried over; turning it off clears the
+    // GPS-only state. The fix itself lives in Config and is cleared there.
+    function applyGpsdChange() {
+        if (config.gpsd && config.fix && followPaused) followPaused = false;
+        if (!config.gpsd) { appliedFix = null; followPaused = false; }
     }
 
     function nav() {
@@ -512,6 +560,9 @@ QtObject {
         applyRadar();
         applyMetarConfig();
         persist();
+        // A receiver that already has a fix follows once the view above
+        // exists; without one (the prompt is up) the fix waits.
+        if (config.fix) followFix(config.fix);
     }
 
     function applyTreatment() {
@@ -532,8 +583,10 @@ QtObject {
     property Connections configEvents: Connections {
         target: session.config
         function onReadyChanged() { session.resolve(); session.initialize(); }
-        function onValuesChanged() { if (session.initialized) { session.resolve(); session.applyRadar(); session.applyMetarConfig(); } }
+        function onValuesChanged() { if (session.initialized) { session.resolve(); session.applyRadar(); session.applyMetarConfig(); session.applyGpsdChange(); } }
         function onLocationChanged() { if (!session.hasView) session.resolve(); if (session.initialized) session.applyRadar(); }
+        function onFixChanged() { if (session.initialized) session.followFix(session.config.fix); }
+        function onGpsdChanged() { if (session.initialized) session.applyGpsdChange(); }
         function onTreatmentChanged() { session.applyTreatment(); }
         function onWeakFloorChanged() { session.applyTreatment(); }
     }
