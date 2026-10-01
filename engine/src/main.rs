@@ -3,6 +3,8 @@ mod cog;
 mod eccc;
 mod envelope;
 mod grid_fixture;
+mod grid_validity;
+mod grid_view;
 mod live;
 mod live_index;
 mod metar;
@@ -106,6 +108,7 @@ fn hello_from(registry: &source::SourceRegistry) -> Hello {
         engine: env!("CARGO_PKG_VERSION"),
         pid: std::process::id(),
         build: build_id().to_owned(),
+        grid_view: true,
         sites: registry.hello_sites(),
         sources: registry.hello_sources(),
         sites_source: table.source,
@@ -491,6 +494,7 @@ struct Shared {
     registry: source::SourceRegistry,
     /// Last settled map centre, so unlock can reselect without a new pan.
     last_center: Option<(f64, f64)>,
+    grid_views: std::collections::BTreeMap<u64, (grid_view::Bounds, String)>,
     /// In-memory mosaic frames (fixture or live grid adapters). Each entry's
     /// `texture` path is published once on insert; playback only swaps paths.
     mosaic: Vec<MosaicFrame>,
@@ -506,6 +510,7 @@ struct Shared {
     last_live_restart: Instant,
     events: Sender<live::Event>,
     grid_events: Sender<source::GridEvent>,
+    grid_generation: u64,
     /// `scanTime` of the newest complete frame, milliseconds since the
     /// epoch, for `connection.ageSeconds`; `None` while there is none.
     frame_ms: Option<i64>,
@@ -644,10 +649,14 @@ impl Shared {
             self.last_live_restart = Instant::now();
             return;
         }
+        self.grid_generation = self.grid_generation.wrapping_add(1);
         if let Some(id) = self.mosaic_source_id().map(str::to_owned)
-            && let Some(task) =
-                self.registry
-                    .poll_mosaic(&id, self.grid_events.clone(), HashSet::new())
+            && let Some(task) = self.registry.poll_mosaic(
+                &id,
+                self.grid_events.clone(),
+                self.mosaic.iter().map(|f| f.id.clone()).collect(),
+                self.grid_generation,
+            )
         {
             eprintln!("{} Live {}: {why}", iso(now_ms()), id);
             if let Some(old) = self.live.take() {
@@ -658,6 +667,7 @@ impl Shared {
         }
     }
     fn abort_live(&mut self) {
+        self.grid_generation = self.grid_generation.wrapping_add(1);
         if let Some(task) = self.live.take() {
             task.abort();
         }
@@ -887,6 +897,7 @@ impl Shared {
             );
         }
         self.last_center = Some((lat, lon));
+        self.update_eccc_region();
         if !self.state.navigation.follow || self.state.navigation.locked {
             return (false, None);
         }
@@ -895,6 +906,25 @@ impl Shared {
             self.state.selection.as_ref(),
         );
         self.apply_covering(wanted)
+    }
+    fn update_eccc_region(&mut self) {
+        let (lat, lon) = self.last_center.unwrap_or((53.5461, -113.4938));
+        let bounds = self
+            .grid_views
+            .values()
+            .map(|(bounds, _)| *bounds)
+            .reduce(grid_view::Bounds::union);
+        let region = grid_view::Region::choose(
+            protocol::GeoPoint { lat, lon },
+            bounds,
+            Some(self.registry.eccc.region),
+        );
+        if region != self.registry.eccc.region {
+            self.registry.eccc.region = region;
+            if self.mosaic_source_id() == Some(eccc::ID) {
+                self.restart_live("regional view changed", false);
+            }
+        }
     }
     fn set_lock(&mut self, enabled: bool) -> (bool, Option<String>) {
         if enabled && self.state.selection.is_none() {
@@ -992,6 +1022,22 @@ impl Shared {
     ) -> io::Result<()> {
         if self.mosaic_source_id().is_none() {
             return Ok(());
+        }
+        if self.mosaic_source_id() == Some(eccc::ID) {
+            if !frame
+                .id
+                .starts_with(&format!("{}-", self.registry.eccc.region.key()))
+            {
+                return Ok(());
+            }
+            let same_region = self.mosaic.iter().any(|f| {
+                f.id.starts_with(&format!("{}-", self.registry.eccc.region.key()))
+            });
+            if !same_region {
+                self.timeline = Timeline::default();
+                self.mosaic.clear();
+                self.state.playing = false;
+            }
         }
         if self.mosaic.iter().any(|f| f.id == frame.id) {
             if known_sweep_clears_loading(self.state.connection.status) {
@@ -1154,6 +1200,8 @@ impl Shared {
         // Never let a stalled UI hold up other clients. Its writer closes on EOF.
         self.clients
             .retain(|(_, client)| client.try_send(message.clone()).is_ok());
+        let connected: HashSet<_> = self.clients.iter().map(|(id, _)| *id).collect();
+        self.grid_views.retain(|id, _| connected.contains(id));
     }
     /// Carry the fetch path's condition into `state.basemap.osm`; a change
     /// is broadcast like any other.
@@ -1172,7 +1220,7 @@ impl Shared {
             Command::SelectSource { id } => self.select_source(&id),
             Command::Follow { enabled } => (set(&mut self.state.navigation.follow, enabled), None),
             Command::Lock { enabled } => self.set_lock(enabled),
-            Command::ViewCenter { lat, lon } => self.view_center(lat, lon),
+            Command::ViewCenter { lat, lon, .. } => self.view_center(lat, lon),
             Command::Seek { id } => self.navigate(|timeline| {
                 timeline.seek(&id).map_err(
                     |()| "Requested frame is not in the timeline; keeping the current frame.",
@@ -1247,13 +1295,19 @@ fn publish(dir: &Path, stem: &str, frame: &str, bytes: &[u8]) -> io::Result<Stri
         .write(true)
         .create_new(true)
         .open(&temporary)?;
-    file.write_all(bytes)?;
+    if let Err(error) = file.write_all(bytes) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
     // Polar sweeps are small; mosaic COMP PNGs are multi‑MB. fsync on every
     // publish stalls the daemon under the shared lock during backfill/play.
     if stem != "mosaic" {
         file.sync_all()?;
     }
-    fs::rename(temporary, dir.join(&name))?;
+    if let Err(error) = fs::rename(&temporary, dir.join(&name)) {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
     Ok(name)
 }
 /// Publish a frame's sweep texture and azimuth lookup under `tex/` and set
@@ -1438,15 +1492,23 @@ fn grid_selected(shared: &Shared, source_id: &str) -> bool {
 
 async fn mosaic_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<source::GridEvent>) {
     while let Some(event) = events.recv().await {
-        match event {
+        let source::GridEvent::Tagged { generation, event } = event else {
+            continue;
+        };
+        let mut current = shared.lock().unwrap();
+        if current.grid_generation != generation {
+            continue;
+        }
+        match *event {
+            source::GridEvent::Tagged { .. } => continue,
             source::GridEvent::Frame {
                 source_id,
                 frame,
                 texture,
                 start_ms,
             } => {
-                let mut shared = shared.lock().unwrap();
-                if !grid_selected(&shared, &source_id) {
+                let shared = &mut current;
+                if !grid_selected(shared, &source_id) {
                     continue;
                 }
                 if let Err(e) = shared.mosaic_arrived(*frame, texture, start_ms) {
@@ -1459,8 +1521,8 @@ async fn mosaic_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<source::
                 texture,
                 start_ms,
             } => {
-                let mut shared = shared.lock().unwrap();
-                if !grid_selected(&shared, &source_id) {
+                let shared = &mut current;
+                if !grid_selected(shared, &source_id) {
                     continue;
                 }
                 if let Err(e) = shared.mosaic_backfilled(*frame, texture, start_ms) {
@@ -1468,10 +1530,18 @@ async fn mosaic_events(shared: Arc<Mutex<Shared>>, mut events: Receiver<source::
                 }
             }
             source::GridEvent::Offline { source_id, reason } => {
-                report_grid(&shared, &source_id, &reason, ConnectionStatus::Offline);
+                if grid_selected(&current, &source_id) {
+                    current.state.connection.status = ConnectionStatus::Offline;
+                    eprintln!("Live {source_id}: {reason}");
+                    current.broadcast();
+                }
             }
             source::GridEvent::Silent { source_id, reason } => {
-                report_grid(&shared, &source_id, &reason, ConnectionStatus::Unavailable);
+                if grid_selected(&current, &source_id) {
+                    current.state.connection.status = ConnectionStatus::Unavailable;
+                    eprintln!("Live {source_id}: {reason}");
+                    current.broadcast();
+                }
             }
         }
     }
@@ -1492,14 +1562,87 @@ fn report(shared: &Mutex<Shared>, site: &str, reason: &str, condition: Connectio
     }
 }
 
-fn report_grid(shared: &Mutex<Shared>, source_id: &str, reason: &str, condition: ConnectionStatus) {
-    let mut shared = shared.lock().unwrap();
-    if !grid_selected(&shared, source_id) {
-        return;
-    }
-    eprintln!("Live {source_id}: {reason}");
-    if set(&mut shared.state.connection.status, condition) {
-        shared.broadcast();
+/// One worker for both visible clients. The shared view map is the latest
+/// pending query, so pan floods never allocate a queue or detached workers.
+async fn validity_worker(shared: Arc<Mutex<Shared>>) {
+    let mut completed = std::collections::BTreeMap::<u64, String>::new();
+    let mut last_client = 0;
+    loop {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let work = {
+            let current = shared.lock().unwrap();
+            completed.retain(|id, _| current.grid_views.contains_key(id));
+            if let (Some(source), Some(FrameWire::Mosaic(frame))) =
+                (current.mosaic_source_id(), &current.state.frame)
+            {
+                let mut views: Vec<_> = current.grid_views.iter().collect();
+                views.sort_by_key(|(id, _)| (**id <= last_client, **id));
+                views.into_iter().find_map(|(id, (bounds, view_id))| {
+                    let key = format!(
+                        "{}:{}:{}:{bounds:?}:{view_id}",
+                        current.grid_generation, source, frame.id
+                    );
+                    if completed.get(id) == Some(&key) {
+                        return None;
+                    }
+                    Some((
+                        *id,
+                        key,
+                        current.grid_generation,
+                        source.to_string(),
+                        frame.clone(),
+                        *bounds,
+                        view_id.clone(),
+                        current.dir.join(&frame.texture),
+                    ))
+                })
+            } else {
+                None
+            }
+        };
+        let Some((id, key, generation, source, frame, bounds, view_id, path)) = work else {
+            continue;
+        };
+        last_client = id;
+        let frame_id = frame.id.clone();
+        let result =
+            tokio::task::spawn_blocking(move || grid_validity::count(&path, &frame, bounds)).await;
+        let current = shared.lock().unwrap();
+        if current.grid_generation != generation
+            || current.mosaic_source_id() != Some(&source)
+            || current.state.frame.as_ref().map(FrameWire::id) != Some(&frame_id)
+            || current.grid_views.get(&id) != Some(&(bounds, view_id.clone()))
+        {
+            continue;
+        }
+        let (counts, unfetched) = match result {
+            Ok(Ok(value)) => value,
+            _ => (
+                grid_validity::Counts {
+                    unknown: 1,
+                    ..Default::default()
+                },
+                true,
+            ),
+        };
+        let reply = grid_validity::Reply {
+            v: VERSION,
+            source_id: source,
+            frame_id,
+            view_id,
+            unfetched,
+            counts,
+        };
+        let mut value = serde_json::to_value(reply).unwrap();
+        value["type"] = "grid_validity".into();
+        if let Some((_, tx)) = current
+            .clients
+            .iter()
+            .find(|(client_id, _)| *client_id == id)
+            && tx.try_send(format!("{}\n", value)).is_ok()
+        {
+            completed.insert(id, key);
+        }
     }
 }
 /// Playback: woken by `play`, it advances the timeline one frame per
@@ -1572,7 +1715,30 @@ impl Retirement {
     }
 }
 fn cleanup(dir: &Path, shared: &Mutex<Shared>, retirement: &mut Retirement) -> io::Result<()> {
-    let shared = shared.lock().unwrap();
+    let mut shared = shared.lock().unwrap();
+    if shared.mosaic_source_id() == Some(eccc::ID) {
+        let displayed = shared.state.frame.as_ref().map(|f| f.id().to_owned());
+        let mut bytes: u64 = shared
+            .mosaic
+            .iter()
+            .map(|f| fs::metadata(dir.join(&f.texture)).map_or(0, |m| m.len()))
+            .sum();
+        let mut dropped = HashSet::new();
+        for frame in &shared.mosaic {
+            if bytes <= (24 << 20) {
+                break;
+            }
+            if displayed.as_deref() == Some(&frame.id) {
+                continue;
+            }
+            bytes =
+                bytes.saturating_sub(fs::metadata(dir.join(&frame.texture)).map_or(0, |m| m.len()));
+            dropped.insert(frame.id.clone());
+        }
+        shared.mosaic.retain(|f| !dropped.contains(&f.id));
+        shared.timeline.stored.retain(|f| !dropped.contains(&f.id));
+        shared.timeline.repin();
+    }
     // Current state plus every mosaic still in the playback ring. Polar
     // republishes each tick (new revision); mosaics publish once, so the
     // ring paths must stay referenced or play steps onto deleted files.
@@ -1588,7 +1754,11 @@ fn cleanup(dir: &Path, shared: &Mutex<Shared>, retirement: &mut Retirement) -> i
     }
     drop(shared);
     let mut present = Vec::new();
-    for entry in fs::read_dir(dir.join("tex"))? {
+    let tex = dir.join("tex");
+    if !tex.exists() {
+        return Ok(());
+    }
+    for entry in fs::read_dir(tex)? {
         let entry = entry?;
         if entry.file_type()?.is_file() {
             present.push(entry.path());
@@ -1613,6 +1783,7 @@ fn receive(
     metars: &Arc<metar::Service>,
     metar_seq: &Arc<AtomicU64>,
     bytes: &[u8],
+    client_id: u64,
 ) {
     let value = match serde_json::from_slice::<Value>(bytes) {
         Ok(value) if value.is_object() => value,
@@ -1632,6 +1803,46 @@ fn receive(
                     return;
                 }
                 Err(reason) => format!("Invalid tiles_needed command: {reason}."),
+            }
+        }
+        Ok(Command::ViewCenter {
+            lat,
+            lon,
+            bounds,
+            view_id,
+        }) => {
+            let mut shared = shared.lock().unwrap();
+            let validation = if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lon) {
+                Err("view_center needs valid lat/lon".into())
+            } else if view_id.as_ref().is_some_and(|v| v.len() > 64) {
+                Err("viewId exceeds 64 bytes".into())
+            } else if bounds.is_some()
+                && !shared.grid_views.contains_key(&client_id)
+                && shared.grid_views.len() >= 2
+            {
+                Err("at most two visible grid views may register".into())
+            } else {
+                bounds.map_or(Ok(()), |b| b.validate().map(|_| ()))
+            };
+            if let Err(reason) = validation {
+                reason
+            } else {
+                if let Some(bounds) = bounds {
+                    shared
+                        .grid_views
+                        .insert(client_id, (bounds, view_id.unwrap_or_default()));
+                } else {
+                    shared.grid_views.remove(&client_id);
+                }
+                let (changed, error) = shared.view_center(lat, lon);
+                if changed {
+                    shared.broadcast();
+                }
+                if let Some(error) = error {
+                    error
+                } else {
+                    return;
+                }
             }
         }
         Ok(Command::SearchPlaces { query, lat, lon }) => {
@@ -1781,13 +1992,12 @@ fn client(
             {
                 break;
             }
-            receive(&shared, &tx, &tiles_tx, &metars, &metar_seq, &bytes);
+            receive(&shared, &tx, &tiles_tx, &metars, &metar_seq, &bytes, id);
         }
-        shared
-            .lock()
-            .unwrap()
-            .clients
-            .retain(|(client_id, _)| *client_id != id);
+        let mut shared = shared.lock().unwrap();
+        shared.clients.retain(|(client_id, _)| *client_id != id);
+        shared.grid_views.remove(&id);
+        shared.update_eccc_region();
         // `tx` drops here; with the clone in `clients` gone, the writer's
         // queue closes and it shuts the socket down.
     });
@@ -2036,7 +2246,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
     // The frame ring buffer; live frames are written here as they complete.
     let catalog = Arc::new(catalog::Catalog::open(osm::cache_root()?.join("frames"))?);
     let (events, event_rx) = mpsc::channel(16);
-    let (grid_events, grid_rx) = mpsc::channel(32);
+    let (grid_events, grid_rx) = mpsc::channel(1);
     let wake = Arc::new(Notify::new());
     let shared = Arc::new(Mutex::new(Shared {
         state: initial_state(frame, osm.info(), mode, status, selection),
@@ -2047,6 +2257,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
         sites,
         registry,
         last_center: None,
+        grid_views: std::collections::BTreeMap::new(),
         mosaic: Vec::new(),
         dir: dir.clone(),
         catalog,
@@ -2054,6 +2265,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
         last_live_restart: Instant::now(),
         events,
         grid_events,
+        grid_generation: 0,
         frame_ms,
         timeline: Timeline::new(entries),
         pending: None,
@@ -2070,6 +2282,7 @@ fn serve(dir: PathBuf) -> io::Result<()> {
     let listener = UnixListener::bind(&socket)?;
     runtime.spawn(live_events(shared.clone(), event_rx));
     runtime.spawn(mosaic_events(shared.clone(), grid_rx));
+    runtime.spawn(validity_worker(shared.clone()));
     runtime.spawn(player(shared.clone(), wake));
     let cleanup_shared = shared.clone();
     runtime.spawn(async move {

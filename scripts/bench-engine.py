@@ -124,6 +124,12 @@ def run(binary, archive, switches, settle, output, index):
 
 
 def main():
+    import sys
+    if "--eccc" in sys.argv:
+        import runpy
+        sys.argv.remove("--eccc")
+        runpy.run_path(str(ROOT / "scripts/bench-eccc.py"), run_name="__main__")
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=ROOT / "target/debug/omastorm-engine")
     parser.add_argument("--archive", type=Path, default=ROOT / "data/raw/KTLX20130520_201643_V06.gz")

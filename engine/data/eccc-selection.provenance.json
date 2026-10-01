@@ -1,0 +1,16 @@
+{
+  "provider": "Environment and Climate Change Canada / NOAA",
+  "observationTime": "2026-10-01T13:36:00Z",
+  "layer": "RADAR_COVERAGE_RRAI",
+  "format": "GeoJSON GetFeatureInfo",
+  "sourceSha256": "52f0f8223bdcd2123284aa40366ee238f2b55fcc530e91d1caaa084ddddc4faf",
+  "serviceBox": [
+    -170.32,
+    16.93,
+    -50,
+    67.19
+  ],
+  "operation": "Clip each exterior and interior ring to the RRAI service box; retain all four disconnected polygons and three holes. No simplification.",
+  "selectionOnly": true,
+  "licence": "https://eccc-msc.github.io/open-data/licence/readme_en/"
+}

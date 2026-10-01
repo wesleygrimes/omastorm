@@ -109,7 +109,17 @@ product is a rain rate estimate in mm/h, with up to 30 complete frames at
 six-minute intervals. The newest frame loads first; history loads serially
 with bounded requests, and switching sources cancels the poller. Unknown
 colours reject a frame; transparency is missing data, never measured zero.
-The grid is the requested geographic raster, not the original 1 km data.
+The grid is one padded 1024² spherical Mercator window, chosen from settled
+visible bounds (at most two clients). Centre-only clients get a bounded
+2048 m projected-pixel window. Regional switches replace the entire frame and
+reset its history; their identities include extent, tier, style and TIME.
+Coverage comes from the matching inverse-coverage mask, with ambiguous edges
+left unknown. Known precipitation survives mask failures. The stable selection
+footprint preserves disconnected areas and holes independently of outages.
+Files share a 64 MiB reservation budget, including atomic and retiring revisions;
+history also trims to fit bytes. The decode permit survives blocking-worker
+cancellation. No ECCC archive is written to the polar catalog. The raster is
+GeoMet's requested resampling, not recovered native numerical precision.
 NEXRAD keeps priority wherever it covers. The source box comes from GeoMet
 metadata and does not guarantee measured coverage throughout Canada.
 
