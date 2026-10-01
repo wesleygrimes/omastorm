@@ -432,7 +432,12 @@ contributor loss, G=8 unknown and a coordinate outside the affine. Include
 all fourteen ECCC bins and an antialiased mask edge; source rasters remain
 in ignored scratch. The offline `grid-source-proof` Cargo example compares
 PNG recovery, overlap and same-time OPERA TIFF/ODIM evidence without fetching
-or embedding provider data. Dated findings and delivery gates stay in #128.
+or embedding provider data. Its `band` mode checks four-connected measured
+cells within the union of two nominal 240 km DPQPE footprints from ECCC's
+published site coordinates, counting each exclusive area, the overlap and
+the matching inverse-mask alpha. Nominal site circles are evidence for the
+adjacent-footprint check, not actual coverage or per-pixel contributor identity.
+Dated findings and delivery gates stay in #128.
 
 ## Protocol v2
 

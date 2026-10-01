@@ -323,6 +323,123 @@ fn main() {
                 });
             json!({"lat":lat,"lon":lon,"covered":contains})
         }
+        Some("band") => {
+            let image = load(&args[2]);
+            let mask = load(&args[9]);
+            assert_eq!((image.width, image.height), (mask.width, mask.height));
+            let west: f64 = args[4].parse().unwrap();
+            let north: f64 = args[5].parse().unwrap();
+            let step: f64 = args[6].parse().unwrap();
+            let sites: Vec<_> = fs::read_to_string(&args[3])
+                .unwrap()
+                .lines()
+                .filter_map(|line| {
+                    let words: Vec<_> = line.split_whitespace().collect();
+                    let id = words
+                        .iter()
+                        .find(|s| s.len() == 5 && s.starts_with("CAS"))?;
+                    let numbers: Vec<f64> = words.iter().filter_map(|s| s.parse().ok()).collect();
+                    if numbers.len() < 2 {
+                        return None;
+                    }
+                    Some((
+                        id.to_string(),
+                        numbers[0].to_radians(),
+                        numbers[1].to_radians(),
+                    ))
+                })
+                .filter(|(id, _, _)| id == &args[7] || id == &args[8])
+                .collect();
+            assert_eq!(sites.len(), 2);
+            let wet: Vec<bool> = image
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| p[3] == 255 && RAIN.iter().any(|c| p[..3] == c[..]))
+                .collect();
+            let mut zones = vec![0u8; wet.len()];
+            for (i, &is_wet) in wet.iter().enumerate() {
+                if !is_wet {
+                    continue;
+                }
+                let x = i % image.width as usize;
+                let y = i / image.width as usize;
+                let lon = (west + (x as f64 + 0.5) * step) / 6378137.0;
+                let lat = 2.0 * ((north - (y as f64 + 0.5) * step) / 6378137.0).exp().atan()
+                    - std::f64::consts::FRAC_PI_2;
+                for (n, (_, slat, slon)) in sites.iter().enumerate() {
+                    let h = ((lat - slat) / 2.0).sin().powi(2)
+                        + lat.cos() * slat.cos() * ((lon - slon) / 2.0).sin().powi(2);
+                    if 2.0 * 6371.0 * h.sqrt().asin() <= 240.0 {
+                        zones[i] |= 1 << n;
+                    }
+                }
+            }
+            let mut seen = vec![false; wet.len()];
+            let mut bands = Vec::new();
+            for start in 0..wet.len() {
+                if zones[start] == 0 || seen[start] {
+                    continue;
+                }
+                let mut stack = vec![start];
+                seen[start] = true;
+                let mut cells = Vec::new();
+                while let Some(i) = stack.pop() {
+                    let x = i % image.width as usize;
+                    let y = i / image.width as usize;
+                    let lon = (west + (x as f64 + 0.5) * step) / 6378137.0;
+                    let lat = 2.0 * ((north - (y as f64 + 0.5) * step) / 6378137.0).exp().atan()
+                        - std::f64::consts::FRAC_PI_2;
+                    cells.push((x, y, zones[i], lat.to_degrees(), lon.to_degrees()));
+                    for dy in -1isize..=1 {
+                        for dx in -1isize..=1 {
+                            if dx.abs() + dy.abs() != 1 {
+                                continue;
+                            }
+                            let xx = x as isize + dx;
+                            let yy = y as isize + dy;
+                            if xx < 0
+                                || yy < 0
+                                || xx >= image.width as isize
+                                || yy >= image.height as isize
+                            {
+                                continue;
+                            }
+                            let j = yy as usize * image.width as usize + xx as usize;
+                            if zones[j] != 0 && !seen[j] {
+                                seen[j] = true;
+                                stack.push(j);
+                            }
+                        }
+                    }
+                }
+                if cells.len() < 100 {
+                    continue;
+                }
+                let mut counts = [0usize; 3];
+                let mut mask_alpha = BTreeMap::<u8, usize>::new();
+                let mut samples = [None, None, None];
+                for &(x, y, c, lat, lon) in &cells {
+                    let i = (y * image.width as usize + x) * 4;
+                    *mask_alpha.entry(mask.rgba[i + 3]).or_default() += 1;
+                    let z = match c {
+                        1 => 0,
+                        3 => 1,
+                        2 => 2,
+                        _ => unreachable!(),
+                    };
+                    counts[z] += 1;
+                    if samples[z].is_none() {
+                        samples[z].get_or_insert(json!({"x":x,"y":y,"lat":lat,"lon":lon}));
+                    }
+                }
+                if counts.iter().all(|&n| n >= 10) {
+                    bands.push(json!({"a":sites[0].0,"b":sites[1].0,"componentCells":cells.len(),"aOnly":counts[0],"overlap":counts[1],"bOnly":counts[2],"maskAlpha":mask_alpha,"samples":samples}));
+                }
+            }
+            json!({"radiusKm":240,"connectivity":4,"restrictedToFootprintUnion":true,"sites":sites.len(),"bands":bands})
+        }
         Some("cog") => {
             let bytes = fs::read(&args[2]).unwrap();
             let raster = cog::decode_float_cog(&bytes).expect("OPERA COG");
@@ -364,7 +481,7 @@ fn main() {
                 "odimDisagreements":disagreements})
         }
         _ => panic!(
-            "png IMAGE | pair RAIN INVERSE | compare A B DX DY | cog TIFF [ODIM_F64_LE] | stress | footprint GEOJSON LAT LON"
+            "png IMAGE | pair RAIN INVERSE | compare A B DX DY | cog TIFF [ODIM_F64_LE] | stress | footprint GEOJSON LAT LON | band RAIN SITES_TEXT WEST NORTH STEP SITE_A SITE_B INVERSE"
         ),
     };
     println!("{}", serde_json::to_string_pretty(&result).unwrap());
