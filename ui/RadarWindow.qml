@@ -18,6 +18,7 @@ Item {
     property bool opened: session === null
     function open(payload) {
         opened = true;
+        focusToggle = null;
         if (session) session.windowOpen = true;
         applyView();
         if (store.pendingLocationPicker) Qt.callLater(() => locationPicker.show(""));
@@ -213,7 +214,8 @@ Item {
     // `[keys]` table over the defaults, asking Qt whether each sequence
     // parses; a bad value or a key bound twice keeps the default and is
     // named in the status slot, like a rejection, until the file is fixed.
-    // The treatment and weak_floor settings are judged the same way.
+    // The treatment, weak_floor, and focus_mode settings are judged the
+    // same way.
     // OMASTORM_STYLE and OMASTORM_WEAK, set by the capture scripts, outrank
     // the file.
     property var bindings: ({})
@@ -224,6 +226,7 @@ Item {
     function applySettings() {
         var errors = Location.configErrors(config.values);
         var wanted = KeyMap.treatment(config.treatment, errors), floor = KeyMap.weakFloor(config.weakFloor, errors);
+        KeyMap.focusMode(config.focusMode, errors);
         var resolved = KeyMap.resolve(config.keys, canon);
         bindings = resolved.bindings;
         configErrors = errors.concat(resolved.errors);
@@ -232,6 +235,13 @@ Item {
     }
     Component.onCompleted: applySettings()
     readonly property bool overlayOpen: locationPicker.open || sheet.open
+    // Focus mode (DESIGN.md, window chrome): config.toml's focus_mode when
+    // the window opens and whenever that value changes; the focus key
+    // overrides it until the window closes and never writes the file.
+    readonly property bool configuredFocus: KeyMap.focusMode(config.focusMode, [])
+    property var focusToggle: null
+    readonly property bool focusMode: focusToggle !== null ? focusToggle : configuredFocus
+    onConfiguredFocusChanged: focusToggle = null
     property var metars: []
     property var selectedMetar: null
     function toggleMetar() {
@@ -298,6 +308,7 @@ Item {
         case "pixels": case "glyphs": case "stipple": treatment = action.toUpperCase(); treatmentMenu.close(); break;
         case "weak": weakFloor = weakFloor === null ? configuredFloor : null; break;
         case "aviation": toggleMetar(); break;
+        case "focus": focusToggle = !focusMode; break;
         case "help": treatmentMenu.close(); if (sheet.open) sheet.close(); else sheet.show(); break;
         case "close": if (app.selectedMetar) app.selectedMetar = null; else dismiss(); break;
         }
@@ -312,7 +323,7 @@ Item {
         function menu(open: bool): void { if (open) treatmentMenu.show(); else treatmentMenu.close(); }
         function field(name: string): string { var value = JSON.parse(status())[name]; return value === undefined ? "" : String(value); }
         function status(): string {
-            return JSON.stringify({sheet: sheet.open, menu: treatmentMenu.opened, treatment: app.treatment, weakFloor: app.weakFloor === null ? "off" : app.weakFloor, error: app.configError,
+            return JSON.stringify({sheet: sheet.open, menu: treatmentMenu.opened, treatment: app.treatment, weakFloor: app.weakFloor === null ? "off" : app.weakFloor, error: app.configError, layout: win.layout,
                                    span: Math.round(map.span * 10) / 10, lat: Math.round(map.centerLat * 1000) / 1000, lon: Math.round(map.centerLon * 1000) / 1000,
                                    locationSource: app.store.locationSource, needsLocation: app.store.needsLocation, locating: app.store.locating,
                                    site: app.siteId, source: engine.source ? engine.source.id : "", locked: app.locked, lockSource: app.store.lockSource, outsideCoverage: app.outsideCoverage});
@@ -449,6 +460,7 @@ Item {
         minimumSize: Qt.size(360 * Math.max(1, app.theme.baseSize/12), 360 * Math.max(1, app.theme.baseSize/12))
         color: app.theme.background
         property bool compact: width < 560
+        readonly property string layout: KeyMap.layout(width, height, app.theme.baseSize, app.focusMode)
 
         component LabelText: Text {
             color: app.theme.foreground
@@ -593,6 +605,10 @@ Item {
             anchors.fill: parent
             anchors.margins: win.compact ? 12 : 20
             spacing: 10
+            // Layouts (DESIGN.md, window chrome): FULL shows every row; LEAN,
+            // chosen when FULL does not fit, drops the brand row and the
+            // legend and puts a small mark in the site row; FOCUS is the map
+            // stage alone with the focus stamp on it.
             // Chrome names (use these when tweaking):
             //   brand row     — mark, OMASTORM, status light, LIVE/ARCHIVED
             //   site row      — station title, radar lock (yellow when outside coverage)
@@ -608,9 +624,11 @@ Item {
             //   tick strip    — frame ticks
             //   strip stamp   — date/time/zone above the tick strip
             //   frame index   — N / available frames above the strip
+            //   focus stamp   — scan time and age or ARCHIVED, on the map in FOCUS
             RowLayout {
                 id: brandRow
                 Layout.fillWidth: true
+                visible: win.layout === "FULL"
                 RadarMark { ink: app.theme.accent; size: 20; Layout.rightMargin: 8 }
                 LabelText { text: "OMASTORM"; font.bold: true; font.letterSpacing: 2.5; font.pixelSize: app.theme.baseSize + 5 }
                 Item { Layout.fillWidth: true }
@@ -634,10 +652,11 @@ Item {
                     LabelText { text: app.sourceBadge; color: app.theme.accent; font.letterSpacing: 1.5 }
                 }
             }
-            Rectangle { Layout.fillWidth: true; height: 1; color: Qt.alpha(app.theme.foreground, .25) }
+            Rectangle { Layout.fillWidth: true; height: 1; color: Qt.alpha(app.theme.foreground, .25); visible: brandRow.visible }
             RowLayout {
                 id: siteRow
                 Layout.fillWidth: true
+                visible: win.layout !== "FOCUS"
                 // Fixed height: polar↔mosaic product/age changes must not
                 // resize the map (a source hand-off is not a layout event).
                 Layout.preferredHeight: 30
@@ -647,6 +666,14 @@ Item {
                 // pick a station; the padlock beside it pins that radar (not
                 // the map — the crosshair on the map is place-follow).
                 // No border or hover fill on the title — it reads as text.
+                // LEAN keeps the brand as a small mark ahead of it.
+                RadarMark {
+                    visible: win.layout === "LEAN"
+                    ink: app.theme.accent
+                    size: 14
+                    Layout.alignment: Qt.AlignVCenter
+                    Layout.rightMargin: 4
+                }
                 Button {
                     id: siteTitle
                     implicitHeight: 30
@@ -731,9 +758,11 @@ Item {
                         id: metaLine
                         Layout.alignment: Qt.AlignRight
                         Layout.minimumHeight: 12
-                        text: app.ageText
+                        // Without the brand row its badge moves here, so an
+                        // archived frame is still labelled.
+                        text: app.ageText || (!brandRow.visible && app.state && app.state.mode === "archived" ? app.sourceBadge : "")
                         color: app.alert && app.condition !== "loading" ? app.conditionColor : app.theme.foreground
-                        opacity: app.ageText === "" ? 0 : (app.alert && app.condition !== "loading" ? 1 : .75)
+                        opacity: text === "" ? 0 : (app.alert && app.condition !== "loading" ? 1 : .75)
                     }
                 }
             }
@@ -970,6 +999,36 @@ Item {
                         }
                     }
                 }
+                // Focus stamp: with every row hidden the radar's age stays on
+                // the map (DESIGN.md, show actual scan times): the status
+                // light, the strip stamp, then the age or ARCHIVED.
+                Rectangle {
+                    id: focusStamp
+                    anchors.bottom: parent.bottom; anchors.right: parent.right
+                    anchors.rightMargin: 10; anchors.bottomMargin: 30
+                    width: focusRow.implicitWidth + 16; height: 22
+                    color: Qt.alpha(app.theme.background, .9)
+                    visible: win.layout === "FOCUS" && !!app.scan && !!app.scan.scanTime && !app.selectedMetar
+                    RowLayout {
+                        id: focusRow
+                        anchors.centerIn: parent
+                        spacing: 6
+                        Rectangle { width: 6; height: 6; radius: 3; color: app.statusLightColor }
+                        LabelText {
+                            text: app.scan && app.scan.scanTime ? app.stamp(app.scan.scanTime) : ""
+                            font.pixelSize: 10; opacity: .75
+                        }
+                        LabelText {
+                            readonly property string tail: app.state && app.state.mode === "archived" ? app.sourceBadge : app.ageText
+                            text: tail ? "· " + tail : ""
+                            visible: text !== ""
+                            font.pixelSize: 10
+                            color: app.state && app.state.mode === "archived" ? app.theme.accent
+                                : app.alert && app.condition !== "loading" ? app.conditionColor : app.theme.foreground
+                            opacity: app.alert || (app.state && app.state.mode === "archived") ? 1 : .75
+                        }
+                    }
+                }
                 // OSM ODbL safe harbour: short credit in a map corner. Full
                 // catalogue (NOAA, Natural Earth, GeoNames, …) stays in README.
                 LabelText {
@@ -1035,6 +1094,7 @@ Item {
             ColumnLayout {
                 id: legend
                 Layout.fillWidth: true
+                visible: win.layout === "FULL"
                 Layout.preferredHeight: 22
                 Layout.minimumHeight: 22
                 Layout.maximumHeight: 22
@@ -1091,6 +1151,7 @@ Item {
             RowLayout {
                 id: playbackRow
                 Layout.fillWidth: true
+                visible: win.layout !== "FOCUS"
                 // Empty timestamps and the first tick reserve the same space.
                 Layout.minimumHeight: 32
                 Layout.preferredHeight: 32

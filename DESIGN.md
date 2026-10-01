@@ -49,6 +49,18 @@ the ids and comments in `ui/RadarWindow.qml`.
 | **tick strip** | Frame ticks on the timeline |
 | **strip stamp** | Date / time / zone above the tick strip |
 | **frame index** | `N / total` above the strip, right-aligned; counts available frames only |
+| **focus stamp** | Focus mode only: status light, strip stamp, then age or ARCHIVED, on the map bottom-right above the OSM credit |
+
+**Layouts.** The window picks its layout from its size and follows a
+resize. **FULL** shows every row and needs 620 logical pixels of height and
+560 of width (`FULL_HEIGHT`, `FULL_WIDTH` in `ui/Keys.js`), scaled by the
+theme's base font like the minimum size. **LEAN**, below either, drops the
+brand row and the legend; a small mark leads the site row and the meta line
+reads ARCHIVED for an archived frame. **Focus mode** (`focus_mode`, the
+`focus` key) is the map stage alone with its overlays, scale bar, help chip,
+and the focus stamp, so radar age stays visible. It outranks the size; turned
+off, the window returns to whichever layout fits. The key lasts until the
+window closes and never writes the file.
 
 **Bottom chrome order.** Map stage, then legend, then transport + tick
 strip, with the strip stamp left-aligned and frame index right-aligned

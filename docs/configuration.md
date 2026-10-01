@@ -89,6 +89,7 @@ center_lon = -79.97948
 
 treatment = "GLYPHS" # PIXELS, GLYPHS, or STIPPLE at launch; Glyphs when omitted
 weak_floor = 5       # dBZ; false draws every measured return
+focus_mode = false   # true opens on the map alone; `f` toggles until the window closes
 
 [metar]
 show = false                         # ICAO chips on the map; omit or false is off
@@ -145,6 +146,12 @@ the machine's own state and weather files are not read unless
   toggles between off and this floor afterwards without writing the file.
   `OMASTORM_WEAK` (`off` or a number), set by the capture scripts, outranks
   it. Anything else is reported like a bad `treatment` and leaves the default.
+- `focus_mode`: optional, `false` when omitted. `true` opens the window in
+  focus mode, the map stage alone with a scan time and age stamp on it
+  (DESIGN.md, window chrome). The `focus` key (`f`) toggles it until the
+  window closes without writing the file; reopening, or an edit of this
+  value, uses the file again. Anything else is reported like a bad
+  `treatment` and leaves it off.
 - `[metar] show`: optional. `true` seeds the METAR overlay on (ICAO chips
   replace city names around the selected live NEXRAD radar). Omit or
   `false` is off. US and Canada only; on OPERA Europe the overlay and the
@@ -179,13 +186,13 @@ the machine's own state and weather files are not read unless
   `pan_down` `pan_up` `pan_right` (`h j k l` and the arrows), `zoom_in`
   (`+ =`), `zoom_out` (`-`), `reset` (`0`, the resolved location), `previous_frame` (`[`),
   `next_frame` (`]`), `play` (`Space`), `oldest` (`Home`), `newest` (`End`),
-  `pixels` `glyphs` `stipple` (`1 2 3`), `weak` (`w`), `aviation` (`a`), `help` (`?`), `close`
+  `pixels` `glyphs` `stipple` (`1 2 3`), `weak` (`w`), `aviation` (`a`), `focus` (`f`), `help` (`?`), `close`
   (`Escape`).
   A value that is not a quoted string, a sequence Qt cannot parse, an
   unknown action, or a key another action already holds leaves that action
   on its default and is named in the status slot (`[KEYS] ZOOM_IN = "FOO":
   FOO IS NOT A KEY`, with a count of any further mistakes) until the file is
-  fixed; a bad `treatment`, `weak_floor`, centre, or `locked_radar` is
+  fixed; a bad `treatment`, `weak_floor`, `focus_mode`, centre, or `locked_radar` is
   reported the same way. `home_site` and `follow` are unused and named if
   present.
 
