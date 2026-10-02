@@ -243,10 +243,13 @@ Item {
     // Focus mode (DESIGN.md, window chrome): config.toml's focus_mode when
     // the window opens and whenever that value changes; the focus key
     // overrides it until the window closes and never writes the file.
+    // The reset follows the raw value, so removing the key or making it
+    // invalid also drops the override; edits to other settings keep it.
     readonly property bool configuredFocus: KeyMap.focusMode(config.focusMode, [])
+    readonly property string focusSetting: String(JSON.stringify(config.focusMode))
     property var focusToggle: null
     readonly property bool focusMode: focusToggle !== null ? focusToggle : configuredFocus
-    onConfiguredFocusChanged: focusToggle = null
+    onFocusSettingChanged: focusToggle = null
     property var metars: []
     property var selectedMetar: null
     function toggleMetar() {
@@ -1008,14 +1011,16 @@ Item {
                 }
                 // Focus stamp: with every row hidden the radar's age stays on
                 // the map (DESIGN.md, show actual scan times): the status
-                // light, the strip stamp, then the age or ARCHIVED.
+                // light, the strip stamp, then the age or ARCHIVED. A METAR
+                // card takes this corner, so the stamp sits above it.
                 Rectangle {
                     id: focusStamp
                     anchors.bottom: parent.bottom; anchors.right: parent.right
-                    anchors.rightMargin: 10; anchors.bottomMargin: 30
+                    anchors.rightMargin: metarCard.visible ? metarCard.anchors.rightMargin : 10
+                    anchors.bottomMargin: metarCard.visible ? metarCard.anchors.bottomMargin + metarCard.height + 6 : 30
                     width: focusRow.implicitWidth + 16; height: 22
                     color: Qt.alpha(app.theme.background, .9)
-                    visible: win.layout === "FOCUS" && !!app.scan && !!app.scan.scanTime && !app.selectedMetar
+                    visible: win.layout === "FOCUS" && !!app.scan && !!app.scan.scanTime
                     RowLayout {
                         id: focusRow
                         anchors.centerIn: parent
