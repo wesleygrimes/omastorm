@@ -140,6 +140,22 @@ until_field layout FOCUS
 call run focus
 expect 'f overrides focus_mode until the window closes' FULL "$(field layout)"
 grep -q 'focus_mode = true' "$check_dir/config.toml" || fail "The focus key rewrote config.toml"
+# The override survives an edit to another setting and drops when
+# focus_mode itself changes: to a reported value, or removed while the
+# normalized setting stays off. Rewritten in place, as the file watch sees.
+edit_config() { local text; text=$(sed "$1" "$check_dir/config.toml"); printf '%s\n' "$text" > "$check_dir/config.toml"; }
+edit_config 's/^weak_floor = 10$/weak_floor = 12/'
+until_field weakFloor 12
+expect 'An unrelated edit keeps the focus override' FULL "$(field layout)"
+call run focus
+expect 'f turns focus back on' FOCUS "$(field layout)"
+edit_config 's/^focus_mode = true$/focus_mode = "yes"/'
+until_field layout FULL
+call run focus
+expect 'f turns focus on over a reported focus_mode' FOCUS "$(field layout)"
+edit_config '/^focus_mode = /d'
+until_field layout FULL
+until_field error ''
 until_field locationSource config
 until_field lat 35.333
 until_field lon -97.277
