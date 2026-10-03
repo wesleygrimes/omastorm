@@ -432,7 +432,7 @@ a displayed frame/view change, including seek and playback:
 
 ```json
 {"type":"grid_validity","v":2,"sourceId":"eccc",
- "frameId":"eccc-RATE-dis14-3857-d2048-x-5632-y2560-20261001T133600Z",
+ "frameId":"eccc-RATE-dis14-3857-l1-x-19-y13-20261001T133600Z",
  "viewId":"window-17","unfetched":false,
  "counts":{"measured":100,"noEcho":500,"missing":0,
            "outside":40,"unknown":2}}
