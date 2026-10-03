@@ -1,4 +1,4 @@
-# Eight public commands. Exact arguments: mise <command> --help.
+# Nine public commands. Exact arguments: mise <command> --help.
 
 [tools]
 rust = { version = "1.98", profile = "minimal", components = "rustfmt,clippy" }
@@ -35,6 +35,10 @@ run = "python3 scripts/tooling/cli.py build"
 [tasks.check]
 description = "Complete applicable verification; explicit GPU option"
 run = "python3 scripts/tooling/cli.py check"
+
+[tasks.bench]
+description = "Isolated engine benchmarks and the live ECCC smoke; reports under target/"
+run = "python3 scripts/tooling/cli.py bench"
 
 [tasks.release]
 description = "Engine/plugin stages; no stage shows help without mutation"
