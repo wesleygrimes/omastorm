@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Omastorm's eight public commands; argument definitions also generate help."""
+"""Omastorm's nine public commands; argument definitions also generate help."""
 import argparse
 import os
 from pathlib import Path
@@ -7,6 +7,8 @@ import subprocess
 import sys
 
 from runtime import ROOT, run, Interrupted, handle_interruptions
+
+BENCH = {'recorded': 'scripts/bench-engine.py', 'eccc': 'scripts/bench-eccc.py', 'eccc-live': 'scripts/smoke-eccc.py'}
 
 
 def parser():
@@ -38,6 +40,9 @@ def parser():
     check.add_argument('--changed', action='store_true', help='Select complete branch diff plus staged, unstaged and untracked paths')
     check.add_argument('--base', default='origin/main', help='Base for changed-path mode; defaults to origin/main')
     check.add_argument('--gpu', action='store_true', help='Add desktop OpenGL sampling/camera checks')
+    bench = commands.add_parser('bench', help='Isolated engine benchmarks; eccc-live alone contacts GeoMet')
+    bench.add_argument('harness', nargs='?', choices=tuple(BENCH), default='recorded', help='Recorded NEXRAD baseline, ECCC replay or live ECCC smoke')
+    bench.add_argument('options', nargs=argparse.REMAINDER, help='Harness arguments; mise bench -- <harness> --help lists them')
     release = commands.add_parser('release', help='Show release stages without mutation when no stage is supplied')
     stages = release.add_subparsers(dest='product')
     for name in ('engine', 'plugin'):
@@ -124,6 +129,9 @@ def main():
         elif args.command == 'check':
             from suite import check
             check(args)
+        elif args.command == 'bench':
+            # Replays wait through real retirement grace; no wall-clock cap.
+            run('python3', ROOT / BENCH[args.harness], *args.options, timeout=None)
         else:
             from release import execute
             execute(args)

@@ -1,4 +1,4 @@
-# Eight public commands. Exact arguments: mise <command> --help.
+# Nine public commands. Exact arguments: mise <command> --help.
 
 [tools]
 rust = { version = "1.98", profile = "minimal", components = "rustfmt,clippy" }
@@ -77,6 +77,16 @@ flag "--base <base>" help="Base for changed-path mode; defaults to origin/main" 
 flag "--gpu" help="Add desktop OpenGL sampling/camera checks"
 '''
 run = "python3 scripts/tooling/cli.py check"
+
+[tasks.bench]
+description = "Isolated engine benchmarks and the live ECCC smoke; reports under target/"
+usage = '''
+arg "[harness]" help="Recorded NEXRAD baseline, ECCC replay or live ECCC smoke" default="recorded" {
+  choices "recorded" "eccc" "eccc-live"
+}
+arg "[options]..." var=#true help="Harness arguments; mise bench -- <harness> --help lists them"
+'''
+run = "python3 scripts/tooling/cli.py bench"
 
 [tasks.release]
 description = "Engine/plugin stages; no stage shows help without mutation"

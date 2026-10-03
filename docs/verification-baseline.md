@@ -80,10 +80,10 @@ to resolve conflicts created by an extraction.
 
 ```sh
 mise build
-python3 scripts/bench-engine.py
+mise bench
 # Compare optimized code separately, with the same fixture and run parameters:
 mise exec -- cargo build --release --offline --locked
-python3 scripts/bench-engine.py --binary target/release/omastorm-engine --output target/bench-engine-release
+mise bench recorded --binary target/release/omastorm-engine --output target/bench-engine-release
 ```
 
 The baseline writes JSON and per-run engine stderr under `target/bench-engine/`.
