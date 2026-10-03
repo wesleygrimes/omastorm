@@ -24,9 +24,11 @@ for _ in {1..100}; do call status > /dev/null 2>&1 && break; sleep .1; done
 call status > /dev/null || fail "The window's picker IPC never answered"
 call open ""
 for _ in {1..50}; do [[ $(call matches) != '[]' ]] && break; sleep .1; done
-# The fixture's home view centres north-west of KTLX: KTLX first, the Norman pair next.
+# The fixture's home view centres north-west of KTLX: KTLX first, the Norman
+# pair next. An engine publishing ECCC lists its covering mosaic ahead of them.
 m=$(call matches)
-[[ $m == '["KTLX","K'* && $m == *KOUN* && $m == *KCRI* ]] || fail "Empty query did not list the nearest stations first: $m"
+stations=${m/#'["eccc",'/'['}
+[[ $stations == '["KTLX","K'* && $m == *KOUN* && $m == *KCRI* ]] || fail "Empty query did not list the nearest stations first: $m"
 expect 'Empty query counts the whole table' '{"open":true,"query":"","selected":0,"total":163,"focused":true}' "$(call status)"
 call open opera
 m=$(call matches)

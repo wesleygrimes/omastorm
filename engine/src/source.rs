@@ -33,6 +33,7 @@ pub struct SourceMetadataBorrowed<'a> {
 
 pub struct MosaicMeta<'a> {
     pub coverage: &'a Coverage,
+    pub selection_footprint: Option<&'a crate::protocol::SelectionFootprint>,
     pub selection_priority: i32,
     /// Follow and gazetteer use this. `select_source` still works when false
     /// (the synthetic fixture).
@@ -42,6 +43,10 @@ pub struct MosaicMeta<'a> {
 /// Live-loop events from any GridFamily poller. `source_id` is the adapter
 /// that spawned the task; late events after a switch are dropped.
 pub enum GridEvent {
+    Tagged {
+        generation: u64,
+        event: Box<GridEvent>,
+    },
     Frame {
         source_id: String,
         frame: Box<MosaicFrame>,
@@ -84,6 +89,7 @@ pub enum MosaicStartError {
 pub struct SourceRegistry {
     pub nexrad: Nexrad,
     pub opera: crate::opera::Opera,
+    pub eccc: crate::eccc::Eccc,
     pub fixture: crate::grid_fixture::FixtureMosaic,
 }
 
@@ -92,14 +98,16 @@ impl SourceRegistry {
         Self {
             nexrad: Nexrad::new(),
             opera: crate::opera::Opera::new(),
+            eccc: crate::eccc::Eccc::new(),
             fixture: crate::grid_fixture::FixtureMosaic::new(),
         }
     }
 
-    pub fn adapters(&self) -> [AdapterRef<'_>; 3] {
+    pub fn adapters(&self) -> [AdapterRef<'_>; 4] {
         [
             AdapterRef::Nexrad(&self.nexrad),
             AdapterRef::Grid(GridRef::Opera(&self.opera)),
+            AdapterRef::Grid(GridRef::Eccc(&self.eccc)),
             AdapterRef::Grid(GridRef::FixtureMosaic(&self.fixture)),
         ]
     }
@@ -125,13 +133,13 @@ impl SourceRegistry {
         center: GeoPoint,
         held: Option<&Selection>,
     ) -> Option<Selection> {
-        covering_selection(center, held, &self.candidates())
+        covering_selection(center, held, &self.candidates(center))
     }
 
-    pub fn candidates(&self) -> Vec<Candidate> {
+    pub fn candidates(&self, center: GeoPoint) -> Vec<Candidate> {
         self.adapters()
             .into_iter()
-            .flat_map(|a| a.covering_candidates())
+            .flat_map(|a| a.covering_candidates(center))
             .collect()
     }
 
@@ -148,11 +156,34 @@ impl SourceRegistry {
         id: &str,
         events: Sender<GridEvent>,
         known: HashSet<String>,
+        generation: u64,
     ) -> Option<JoinHandle<()>> {
-        match self.get(id)? {
-            AdapterRef::Grid(grid) => grid.poll(events, known),
-            AdapterRef::Nexrad(_) => None,
+        let AdapterRef::Grid(grid) = self.get(id)? else {
+            return None;
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let task = grid.poll(tx, known)?;
+        struct AbortOnDrop(JoinHandle<()>);
+        impl Drop for AbortOnDrop {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
         }
+        Some(tokio::spawn(async move {
+            let _task = AbortOnDrop(task);
+            while let Some(event) = rx.recv().await {
+                if events
+                    .send(GridEvent::Tagged {
+                        generation,
+                        event: Box::new(event),
+                    })
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
+        }))
     }
 
     pub fn history_max(&self, id: &str) -> Option<usize> {
@@ -176,6 +207,7 @@ pub enum AdapterRef<'a> {
 /// a `SourceRegistry` field, and its box in `envelope.rs`.
 pub enum GridRef<'a> {
     Opera(&'a crate::opera::Opera),
+    Eccc(&'a crate::eccc::Eccc),
     FixtureMosaic(&'a crate::grid_fixture::FixtureMosaic),
 }
 
@@ -198,15 +230,16 @@ impl<'a> AdapterRef<'a> {
                 attribution: a.attribution.to_owned(),
                 selection_priority: None,
                 coverage: None,
+                selection_footprint: None,
             },
             Self::Grid(grid) => grid_source_info(grid.metadata()),
         }
     }
 
-    fn covering_candidates(&self) -> Vec<Candidate> {
+    fn covering_candidates(&self, center: GeoPoint) -> Vec<Candidate> {
         match self {
             Self::Nexrad(a) => a.site_candidates(),
-            Self::Grid(grid) => grid.covering_candidate().into_iter().collect(),
+            Self::Grid(grid) => grid.covering_candidate(center).into_iter().collect(),
         }
     }
 }
@@ -215,6 +248,7 @@ impl<'a> GridRef<'a> {
     fn id(&self) -> &str {
         match self {
             Self::Opera(a) => a.id,
+            Self::Eccc(a) => a.id,
             Self::FixtureMosaic(a) => a.id,
         }
     }
@@ -222,13 +256,20 @@ impl<'a> GridRef<'a> {
     fn metadata(&self) -> SourceMetadataBorrowed<'a> {
         match self {
             Self::Opera(a) => a.metadata(),
+            Self::Eccc(a) => a.metadata(),
             Self::FixtureMosaic(a) => a.metadata(),
         }
     }
 
-    fn covering_candidate(&self) -> Option<Candidate> {
+    fn covering_candidate(&self, center: GeoPoint) -> Option<Candidate> {
         let meta = self.metadata();
         let mosaic = meta.mosaic.filter(|m| m.covering)?;
+        if mosaic
+            .selection_footprint
+            .is_some_and(|footprint| !footprint.contains(center))
+        {
+            return None;
+        }
         Some(Candidate {
             selection: Selection {
                 source_id: meta.id.to_owned(),
@@ -247,6 +288,9 @@ impl<'a> GridRef<'a> {
             Self::Opera(a) => MosaicStart::Live {
                 placeholder: a.loading_placeholder().map(Box::new),
             },
+            Self::Eccc(a) => MosaicStart::Live {
+                placeholder: a.loading_placeholder().map(Box::new),
+            },
             Self::FixtureMosaic(a) => MosaicStart::Static { frames: a.frames() },
         }
     }
@@ -254,24 +298,26 @@ impl<'a> GridRef<'a> {
     fn history_max(&self) -> Option<usize> {
         match self {
             Self::Opera(_) => Some(crate::opera::HISTORY_MAX),
+            Self::Eccc(_) => Some(crate::eccc::HISTORY_MAX),
             Self::FixtureMosaic(_) => None,
         }
     }
 
     fn polls(&self) -> bool {
-        matches!(self, Self::Opera(_))
+        matches!(self, Self::Opera(_) | Self::Eccc(_))
     }
 
     fn poll(&self, events: Sender<GridEvent>, known: HashSet<String>) -> Option<JoinHandle<()>> {
         match self {
             Self::Opera(a) => a.poll(&AdapterTarget::Mosaic, events, known),
+            Self::Eccc(a) => Some(a.poll(events, known)),
             Self::FixtureMosaic(_) => None,
         }
     }
 }
 
 fn grid_source_info(meta: SourceMetadataBorrowed<'_>) -> SourceInfo {
-    let (coverage, priority) = match meta.mosaic {
+    let (coverage, priority) = match &meta.mosaic {
         Some(m) => (Some(m.coverage.clone()), Some(m.selection_priority)),
         None => (None, None),
     };
@@ -283,6 +329,7 @@ fn grid_source_info(meta: SourceMetadataBorrowed<'_>) -> SourceInfo {
         name: meta.name.to_owned(),
         attribution: meta.attribution.to_owned(),
         selection_priority: priority,
+        selection_footprint: meta.mosaic.and_then(|m| m.selection_footprint.cloned()),
         coverage,
     }
 }
@@ -851,6 +898,63 @@ mod tests {
             registry.mosaic_start("no-such"),
             Err(MosaicStartError::Unknown)
         ));
+    }
+
+    #[test]
+    fn canada_falls_back_to_eccc_but_keeps_covering_nexrad() {
+        let registry = SourceRegistry::compiled();
+        assert!(registry.polls("eccc"));
+        assert_eq!(registry.history_max("eccc"), Some(30));
+        assert!(matches!(
+            registry.mosaic_start("eccc"),
+            Ok(MosaicStart::Live {
+                placeholder: Some(_)
+            })
+        ));
+        let edmonton = GeoPoint {
+            lat: 53.5461,
+            lon: -113.4938,
+        };
+        let selection = registry.covering_selection(edmonton, None).unwrap();
+        assert_eq!(selection.source_id, "eccc");
+        assert_eq!(selection.target, AdapterTarget::Mosaic);
+        for center in [
+            GeoPoint {
+                lat: 52.8,
+                lon: -118.5,
+            },
+            GeoPoint {
+                lat: 62.454,
+                lon: -114.377,
+            },
+        ] {
+            assert_eq!(registry.covering_selection(center, Some(&selection)), None);
+        }
+        for center in [
+            GeoPoint {
+                lat: 43.6532,
+                lon: -79.3832,
+            },
+            GeoPoint {
+                lat: 51.0447,
+                lon: -114.0719,
+            },
+        ] {
+            let next = registry
+                .covering_selection(center, Some(&selection))
+                .unwrap();
+            assert_eq!(next.source_id, "nexrad");
+        }
+        assert_eq!(
+            registry.covering_selection(
+                GeoPoint {
+                    lat: 75.0,
+                    lon: -100.0
+                },
+                Some(&selection)
+            ),
+            None
+        );
     }
 
     #[test]

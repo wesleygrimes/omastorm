@@ -35,8 +35,17 @@ pub const OPERA: LatLonBox = LatLonBox {
     west: -30.0,
 };
 
+/// ECCC RADAR_1KM_RRAI GetCapabilities geographic bounds (2026-09-25).
+/// A service envelope, not a promise of radar returns at every point.
+pub const ECCC: LatLonBox = LatLonBox {
+    north: 67.19,
+    south: 16.93,
+    east: -50.0,
+    west: -170.32,
+};
+
 /// Live GridFamily boxes. Polar NEXRAD uses [`nexrad_network`].
-pub const LIVE_MOSAICS: &[LatLonBox] = &[OPERA];
+pub const LIVE_MOSAICS: &[LatLonBox] = &[OPERA, ECCC];
 
 /// Coarse NEXRAD network clip (CONUS / AK / HI / Guam), not per-dish circles.
 pub fn nexrad_network(lon: f64, lat: f64) -> bool {

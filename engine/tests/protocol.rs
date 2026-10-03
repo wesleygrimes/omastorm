@@ -122,6 +122,77 @@ fn state(client: &mut BufReader<UnixStream>, predicate: impl Fn(&Value) -> bool)
     panic!("expected state not received");
 }
 #[test]
+fn grid_views_are_targeted_bounded_and_tied_to_displayed_frames() {
+    let _serial = serial();
+    let engine = Engine::start_lean();
+    let mut first = engine.connect();
+    assert_eq!(read(&mut first)["gridView"], true);
+    read(&mut first);
+    send(&mut first, json!({"type":"follow","enabled":false}));
+    state(&mut first, |s| s["navigation"]["follow"] == false);
+    send(
+        &mut first,
+        json!({"type":"select_source","id":"fixture-mosaic"}),
+    );
+    let initial = state(&mut first, |s| {
+        s["selection"]["sourceId"] == "fixture-mosaic"
+    });
+    let command = |id: &str| {
+        json!({"type":"view_center","lat":0.5,"lon":0.5,"viewId":id,
+        "bounds":{"west":0,"south":0,"east":1,"north":1}})
+    };
+    send(&mut first, command("first"));
+    let reply = read(&mut first);
+    assert_eq!(reply["type"], "grid_validity");
+    assert_eq!(reply["viewId"], "first");
+    assert_eq!(reply["frameId"], initial["frame"]["id"]);
+    assert_eq!(reply["unfetched"], false);
+    let mut second = engine.connect();
+    read(&mut second);
+    read(&mut second);
+    send(&mut second, command("second"));
+    assert_eq!(read(&mut second)["viewId"], "second");
+    let mut third = engine.connect();
+    read(&mut third);
+    read(&mut third);
+    send(&mut third, command("third"));
+    assert_eq!(read(&mut third)["type"], "error");
+    let mut bad = command("bad");
+    bad["bounds"]["east"] = (-1).into();
+    send(&mut first, bad);
+    assert_eq!(read(&mut first)["type"], "error");
+    let mut bad = command(&"x".repeat(65));
+    bad["lat"] = 91.into();
+    send(&mut first, bad);
+    assert_eq!(read(&mut first)["type"], "error");
+    send(&mut first, command("zoom"));
+    assert_eq!(read(&mut first)["viewId"], "zoom");
+    send(&mut first, json!({"type":"step","delta":-1}));
+    let stepped = state(&mut first, |s| s["frame"]["id"] != initial["frame"]["id"]);
+    let validity = read(&mut first);
+    assert_eq!(validity["type"], "grid_validity");
+    assert_eq!(validity["frameId"], stepped["frame"]["id"]);
+    drop(second);
+    // A centre-only command removes the first registration without affecting
+    // selection. The previously rejected third client can then register.
+    send(
+        &mut first,
+        json!({"type":"view_center","lat":0.5,"lon":0.5}),
+    );
+    send(&mut third, command("third-registered"));
+    let reply = state_or_validity(&mut third);
+    assert_eq!(reply["viewId"], "third-registered");
+}
+fn state_or_validity(client: &mut BufReader<UnixStream>) -> Value {
+    for _ in 0..8 {
+        let v = read(client);
+        if v["type"] == "grid_validity" {
+            return v;
+        }
+    }
+    panic!("no targeted validity");
+}
+#[test]
 fn fixture_transport_and_shared_commands() {
     let _serial = serial();
     let engine = Engine::start();
@@ -146,7 +217,7 @@ fn fixture_transport_and_shared_commands() {
         assert!(ids.contains(id));
     }
     let sources = hello["sources"].as_array().unwrap();
-    assert_eq!(sources.len(), 3);
+    assert_eq!(sources.len(), 4);
     assert_eq!(sources[0]["id"], "nexrad");
     assert_eq!(sources[0]["family"], "polar");
     assert_eq!(sources[0]["kind"], "site");
@@ -156,11 +227,18 @@ fn fixture_transport_and_shared_commands() {
     assert_eq!(sources[1]["selectionPriority"], 10);
     assert_eq!(sources[1]["attribution"], "EUMETNET OPERA");
     assert_eq!(sources[1]["coverage"]["kind"], "box");
-    assert_eq!(sources[2]["id"], "fixture-mosaic");
-    assert_eq!(sources[2]["family"], "grid");
-    assert_eq!(sources[2]["kind"], "mosaic");
-    assert_eq!(sources[2]["selectionPriority"], 100);
-    assert_eq!(sources[2]["coverage"]["kind"], "box");
+    assert_eq!(sources[2]["id"], "eccc");
+    assert_eq!(sources[2]["defaultProductClass"], "precipitationRate");
+    assert_eq!(
+        sources[2]["attribution"],
+        "Environment and Climate Change Canada / NOAA"
+    );
+    assert_eq!(sources[2]["coverage"]["north"], 67.19);
+    assert_eq!(sources[3]["id"], "fixture-mosaic");
+    assert_eq!(sources[3]["family"], "grid");
+    assert_eq!(sources[3]["kind"], "mosaic");
+    assert_eq!(sources[3]["selectionPriority"], 100);
+    assert_eq!(sources[3]["coverage"]["kind"], "box");
     let initial = read(&mut first);
     assert_eq!(initial["frame"]["scanTime"], "2013-05-20T20:16:43Z");
     assert_eq!(initial["mode"], "archived");
@@ -748,6 +826,31 @@ fn view_center_idles_without_a_covering_source() {
     assert_eq!(s["frame"], json!(null));
     assert_eq!(s["timeline"], json!([]));
     assert_eq!(s["playing"], false);
+}
+
+#[test]
+fn canada_selection_publishes_rate_placeholder_and_hands_back_to_nexrad() {
+    let _serial = serial();
+    let engine = Engine::start_lean();
+    let mut client = engine.connect();
+    read(&mut client);
+    read(&mut client);
+    send(
+        &mut client,
+        json!({"type":"view_center","lat":53.5461,"lon":-113.4938}),
+    );
+    let s = state(&mut client, |s| s["selection"]["sourceId"] == "eccc");
+    assert_eq!(s["selection"]["target"]["kind"], "mosaic");
+    assert_eq!(s["frame"]["kind"], "mosaic");
+    assert_eq!(s["frame"]["units"], "mm/h");
+    assert_eq!(s["frame"]["bounds"][0], 0.1);
+    assert!(s["frame"].get("elevationDeg").is_none());
+    send(
+        &mut client,
+        json!({"type":"view_center","lat":43.6532,"lon":-79.3832}),
+    );
+    let s = state(&mut client, |s| s["selection"]["sourceId"] == "nexrad");
+    assert_eq!(s["selection"]["target"]["kind"], "site");
 }
 
 #[test]
