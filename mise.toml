@@ -10,22 +10,56 @@ gh = "2"
 
 [tasks.setup]
 description = "Fetch locked dependencies and verified fixtures/pin"
+usage = '''
+flag "--profile <profile>" help="Prerequisite boundary" default="desktop" {
+  choices "desktop" "engine" "ui"
+}
+flag "--install-tools" help="Install mise-managed tooling; no privileged packages"
+'''
 run = "python3 scripts/tooling/cli.py setup"
 
 [tasks.dev]
 description = "Temporary isolated bar plugin; reload saves and clean exit"
+usage = '''
+flag "--engine <engine>" help="Development engine selection" default="pin" {
+  choices "pin" "candidate"
+}
+'''
 run = "python3 scripts/tooling/cli.py dev"
 
 [tasks.test]
 description = "Fast unit tests; integration supports focused selection"
+usage = '''
+arg "[mode]" help="Verification mode" default="unit" {
+  choices "unit" "integration"
+}
+flag "--scope <scope>" help="Applicable test boundary" default="all" {
+  choices "all" "engine" "protocol" "ui" "installer" "tooling"
+}
+flag "--engine <engine>" help="Integration engine selection" default="pin" {
+  choices "pin" "candidate"
+}
+flag "--binary <binary>" help="Explicit engine path; pin mode verifies the committed checksum"
+flag "--case <case>" var=#true help="Repeat UI/installer scenario names for focused integration"
+'''
 run = "python3 scripts/tooling/cli.py test"
 
 [tasks.lint]
 description = "Rust format/Clippy, QML/JS syntax and shell checks"
+usage = '''
+flag "--scope <scope>" help="Language boundary" default="all" {
+  choices "all" "engine" "ui" "tooling"
+}
+'''
 run = "python3 scripts/tooling/cli.py lint"
 
 [tasks.format]
 description = "Apply rustfmt"
+usage = '''
+flag "--scope <scope>" help="Language boundary" default="all" {
+  choices "all" "engine" "ui" "tooling"
+}
+'''
 run = "python3 scripts/tooling/cli.py format"
 
 [tasks.build]
@@ -34,8 +68,33 @@ run = "python3 scripts/tooling/cli.py build"
 
 [tasks.check]
 description = "Complete applicable verification; explicit GPU option"
+usage = '''
+flag "--scope <scope>" help="Verification boundary" default="all" {
+  choices "all" "engine" "protocol" "ui" "installer" "tooling" "rendering"
+}
+flag "--changed" help="Select complete branch diff plus staged, unstaged and untracked paths"
+flag "--base <base>" help="Base for changed-path mode; defaults to origin/main" default="origin/main"
+flag "--gpu" help="Add desktop OpenGL sampling/camera checks"
+'''
 run = "python3 scripts/tooling/cli.py check"
 
 [tasks.release]
 description = "Engine/plugin stages; no stage shows help without mutation"
+usage = '''
+cmd "engine" help="Engine release stages" {
+  cmd "prepare" help="Write version locally on a working branch; no commit/push" {
+    arg "<version>"
+  }
+  cmd "tag" help="Validate clean current main; push matching tag and draft release"
+  cmd "pin" help="Verify public release assets before atomic local pin write" {
+    arg "<tag>"
+  }
+}
+cmd "plugin" help="Plugin release stages" {
+  cmd "prepare" help="Write version locally on a working branch; no commit/push" {
+    arg "<version>"
+  }
+  cmd "tag" help="Validate clean current main; push matching tag and draft release"
+}
+'''
 run = "python3 scripts/tooling/cli.py release"

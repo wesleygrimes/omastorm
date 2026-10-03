@@ -13,6 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts/tooling'))
 import cli
 import dev
+import usage
 
 
 class Commands(unittest.TestCase):
@@ -39,6 +40,39 @@ class Commands(unittest.TestCase):
         with self.assertRaises(SystemExit) as error:
             p.parse_args(['dev', '--unknown'])
         self.assertEqual(error.exception.code, 2)
+
+
+class MiseUsage(unittest.TestCase):
+    def test_mise_task_usage_is_generated_from_the_cli(self):
+        text = usage.MISE.read_text()
+        self.assertEqual(usage.render(cli.parser(), text), text, 'Regenerate with mise format --scope tooling')
+        import tomllib
+        self.assertEqual(set(tomllib.loads(text)['tasks']), set(usage.specs(cli.parser())))
+
+    def test_usage_values_rebuild_the_cli_argv(self):
+        top = cli.parser()
+        cases = [
+            ('test', {'usage_mode': 'integration', 'usage_scope': 'ui', 'usage_case': "'a b' popover"},
+             ['test', 'integration', '--scope', 'ui', '--case', 'a b', '--case', 'popover']),
+            ('check', {'usage_scope': 'all', 'usage_base': 'origin/main', 'usage_gpu': 'true'},
+             ['check', '--scope', 'all', '--base', 'origin/main', '--gpu']),
+            ('setup', {'usage_profile': 'ui', 'usage_install_tools': 'true'}, ['setup', '--profile', 'ui', '--install-tools']),
+            ('release', {'usage_cmd': 'engine pin', 'usage_tag': 'engine-0.1.12'}, ['release', 'engine', 'pin', 'engine-0.1.12']),
+            ('release', {}, ['release']),
+            ('build', {}, ['build']),
+        ]
+        for command, env, expected in cases:
+            argv = usage.argv(top, command, env)
+            self.assertEqual(argv, expected)
+            top.parse_args(argv)
+
+    def test_bare_mise_task_reads_usage_and_raw_arguments_win(self):
+        env = {'MISE_TASK_NAME': 'lint', 'usage_scope': 'tooling'}
+        for argv, scope in ((['lint'], 'tooling'), (['lint', '--scope', 'engine'], 'engine')):
+            with patch.dict(os.environ, env), patch('sys.argv', ['cli.py', *argv]), patch.object(cli, 'run') as run:
+                self.assertEqual(cli.main(), 0)
+                self.assertNotIn('usage_scope', os.environ)
+            self.assertEqual(run.call_args.args[0], 'shellcheck' if scope == 'tooling' else 'bash')
 
 
 class Lifecycle(unittest.TestCase):

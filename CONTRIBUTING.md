@@ -96,9 +96,11 @@ The Python and shell scripts underneath are implementation helpers; `mise exec`
 selects a toolchain without selecting a verification workflow.
 
 The eight public tasks are setup, dev, test, lint, format, build, check, and
-release. `mise <command> --help` generates exact argument help. Setup prepares
-verified fixtures and a checksum-verified published engine under ignored
-`target/pinned-data/`; subsequent development and tests run offline.
+release. `mise <command> --help` shows exact argument help, generated from
+`scripts/tooling/cli.py` into each task's `usage`; after changing arguments,
+run `mise format --scope tooling`. Arguments after `--` pass through unparsed.
+Setup prepares verified fixtures and a checksum-verified published engine under
+ignored `target/pinned-data/`; subsequent development and tests run offline.
 
 `mise dev` installs `com.omastorm.radar-dev` beside the production plugin,
 marked with a D and a dev name in the left bar. Open its popover and expand

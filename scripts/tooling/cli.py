@@ -30,7 +30,7 @@ def parser():
     test.add_argument('--case', action='append', default=[], help='Repeat UI/installer scenario names for focused integration')
     for name in ('lint', 'format'):
         command = commands.add_parser(name, help='Rust formatting/Clippy, QML/JS syntax and shell checks' if name == 'lint'
-                                      else 'Apply rustfmt; QML/JS has no committed formatter baseline')
+                                      else 'Apply rustfmt and regenerate mise task usage; QML/JS has no committed formatter baseline')
         command.add_argument('--scope', choices=('all', 'engine', 'ui', 'tooling'), default='all', help='Language boundary')
     commands.add_parser('build', help='Incremental offline engine and baked shader build')
     check = commands.add_parser('check', help='Complete applicable checks; focused scopes or changed paths')
@@ -41,7 +41,7 @@ def parser():
     release = commands.add_parser('release', help='Show release stages without mutation when no stage is supplied')
     stages = release.add_subparsers(dest='product')
     for name in ('engine', 'plugin'):
-        product = stages.add_parser(name)
+        product = stages.add_parser(name, help=f'{name.title()} release stages')
         actions = product.add_subparsers(dest='stage', required=True)
         prepare = actions.add_parser('prepare', help='Write version locally on a working branch; no commit/push')
         prepare.add_argument('version')
@@ -73,7 +73,15 @@ def setup(args):
 def main():
     os.chdir(ROOT)
     top = parser()
-    args = top.parse_args()
+    argv = sys.argv[1:]
+    # A bare mise task run carries its parsed usage values in the environment.
+    task = os.environ.pop('MISE_TASK_NAME', None)
+    if task and argv == [task]:
+        import usage
+        argv = usage.argv(top, task, os.environ)
+    for key in [key for key in os.environ if key.startswith('usage_')]:
+        del os.environ[key]
+    args = top.parse_args(argv)
     if args.command == 'release' and not args.product:
         top.parse_args(['release', '--help'])
     if args.command != 'dev':
@@ -104,6 +112,9 @@ def main():
                 for file in sorted(list((ROOT / 'ui').glob('*.qml')) + list((ROOT / 'ui').glob('*.js'))):
                     run('/usr/lib/qt6/bin/qmlformat', file, stdout=subprocess.DEVNULL)
                 run('/usr/lib/qt6/bin/qmllint', *sorted((ROOT / 'ui').glob('*.js')))
+            if args.command == 'format' and args.scope in ('all', 'tooling'):
+                import usage
+                usage.write(top)
             if args.scope in ('all', 'engine'):
                 run('bash', ROOT / 'scripts/cargo.sh', 'fmt', *(['--check'] if args.command == 'lint' else []))
                 if args.command == 'lint':
