@@ -38,6 +38,8 @@ class SelectionTests(unittest.TestCase):
             (("ui/RadarMap.qml",), {"ui", "rendering"}),
             (("ui/RadarWindow.qml",), {"ui", "rendering"}),
             (("scripts/capture-demo.sh",), {"shell"}),
+            (("tests/eccc-contract.py",), {"engine"}),
+            (("scripts/bench-eccc.py", "scripts/smoke-eccc.py"), {"engine", "ui"}),
             (("mise.toml",), set(changes.GROUPS)),
             ((".github/workflows/engine.yml",), set(changes.GROUPS)),
             (("new-runtime-file",), set(changes.GROUPS)),

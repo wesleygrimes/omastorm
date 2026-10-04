@@ -25,6 +25,8 @@ def classify(paths, full=False):
         elif path in ('run.sh', 'manifest.json', 'scripts/fetch-engine.sh', 'scripts/engine-pin.sh', 'scripts/write-desktop-entry.sh'):
             selected.add('installer')
             if path in ('run.sh', 'manifest.json'): selected.add('ui')
+        elif path == 'tests/eccc-contract.py':
+            selected.add('engine')  # runs with the protocol scope, not UI
         elif path.startswith(('ui/', 'tests/')):
             selected.add('ui')
             if path.endswith('_test.py'): selected.update(GROUPS)
@@ -32,7 +34,8 @@ def classify(paths, full=False):
                 selected.add('rendering')
             if path.startswith('tests/integration/') and Path(path).stem in ('bind', 'launcher', 'pin'):
                 selected.add('installer')
-        elif path in ('scripts/extract-fixtures.sh', 'scripts/refresh-fixtures.sh', 'scripts/bench-engine.py'):
+        elif path in ('scripts/extract-fixtures.sh', 'scripts/refresh-fixtures.sh', 'scripts/bench-engine.py',
+                      'scripts/bench-eccc.py', 'scripts/smoke-eccc.py'):
             selected.update(('engine', 'ui'))
             if path == 'scripts/extract-fixtures.sh': selected.add('release')
         elif path == 'scripts/build-shader.sh':

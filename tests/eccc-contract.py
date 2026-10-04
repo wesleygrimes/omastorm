@@ -2,25 +2,24 @@
 """Local WMS/daemon contract checks; generated inputs only."""
 import contextlib
 import datetime as dt
-import importlib.util
-import json
 import os
 from pathlib import Path
 import signal
+import sys
 import subprocess
 import tempfile
 import threading
 import time
 
 ROOT=Path(__file__).resolve().parent.parent
-spec=importlib.util.spec_from_file_location('replay',ROOT/'scripts/bench-eccc.py')
-replay=importlib.util.module_from_spec(spec);spec.loader.exec_module(replay)
+sys.path.insert(0,str(ROOT/'scripts/tooling'))
+import eccc_mock as mock  # noqa: E402
 
 
 def main():
     binary=ROOT/'target/debug/omastorm-engine'
-    rain,mask=replay.inputs()
-    provider=replay.Provider(rain,mask)
+    rain,mask=mock.inputs()
+    provider=mock.Provider(rain,mask)
     thread=threading.Thread(target=provider.serve_forever,daemon=True);thread.start()
     def interrupt(signum,frame):raise KeyboardInterrupt
     signal.signal(signal.SIGTERM,interrupt)
@@ -34,7 +33,7 @@ def main():
                 engine=subprocess.Popen([str(binary),'serve'],env=env,stdout=subprocess.DEVNULL,stderr=log)
             client=None
             try:
-                client=replay.Client(runtime/'omastorm/engine.sock')
+                client=mock.Client(runtime/'omastorm/engine.sock')
                 assert client.hello['gridView']
                 client.send({'type':'follow','enabled':False})
                 client.next(lambda m:m['type']=='state' and not m['navigation']['follow'])
@@ -58,7 +57,7 @@ def main():
                 assert u['counts']['unknown']>0 and u['counts']['noEcho']==u['counts']['outside']==0
                 provider.mask=mask
                 # Palette ambiguity and malformed TIME reject the rain frame.
-                for body in [b'<ServiceException>NoMatch</ServiceException>',replay.png(bytes([1,2,3,255])*1024**2),replay.png(bytes([153,204,255,128])*1024**2)]:
+                for body in [b'<ServiceException>NoMatch</ServiceException>',mock.png(bytes([1,2,3,255])*1024**2),mock.png(bytes([153,204,255,128])*1024**2)]:
                     fixture();provider.rain=body;provider.stamp+=dt.timedelta(minutes=6);select()
                     failed=client.next(lambda m:m['type']=='state' and m['connection']['status']=='offline')
                     assert not failed['frame']['scanTime']

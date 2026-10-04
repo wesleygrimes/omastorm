@@ -8,13 +8,16 @@ import json
 import os
 from pathlib import Path
 import signal
+import sys
 import subprocess
 import tempfile
 import time
 
 ROOT=Path(__file__).resolve().parent.parent
-spec=importlib.util.spec_from_file_location('replay',ROOT/'scripts/bench-eccc.py')
-replay=importlib.util.module_from_spec(spec);spec.loader.exec_module(replay)
+sys.path.insert(0,str(ROOT/'scripts/tooling'))
+import eccc_mock as mock  # noqa: E402
+spec=importlib.util.spec_from_file_location('bench',ROOT/'scripts/bench-eccc.py')
+bench=importlib.util.module_from_spec(spec);spec.loader.exec_module(bench)
 
 
 def main():
@@ -32,7 +35,7 @@ def main():
             engine=subprocess.Popen([str(args.binary.resolve()),'serve'],env=env,stdout=subprocess.DEVNULL,stderr=log)
         client=None
         try:
-            client=replay.Client(runtime/'omastorm/engine.sock')
+            client=mock.Client(runtime/'omastorm/engine.sock')
             client.send({'type':'follow','enabled':False})
             client.next(lambda m:m['type']=='state' and not m['navigation']['follow'])
             view={'type':'view_center','lat':51.25,'lon':-91.9,'viewId':'live-131',
@@ -48,7 +51,7 @@ def main():
                     'first_frame_ms':latency,'texture_bytes':texture.stat().st_size,
                     'texture_sha256':hashlib.sha256(texture.read_bytes()).hexdigest(),
                     'view':view,'state':state,'validity':validity,
-                    'resources':replay.sample(engine.pid,runtime,'live-first-frame')}
+                    'resources':bench.sample(engine.pid,runtime,'live-first-frame')}
             (args.output/'live.json').write_text(json.dumps(report,indent=2)+'\n')
             (args.output/'wire.json').write_text(json.dumps({'hello':client.hello,'view':view,'state':state,'validity':validity},indent=2)+'\n')
             print(json.dumps({k:report[k] for k in ('scope','first_frame_ms','texture_bytes')}))

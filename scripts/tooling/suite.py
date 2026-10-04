@@ -134,7 +134,7 @@ def integration(args):
                     env = isolated_environment(Path(scratch), tiles)
                     report.step('protocol', cargo('test', '--test', 'protocol'), env)
                     # Loopback WMS only; uses the debug binary the protocol tests built.
-                    report.step('eccc-contract', ['python3', 'scripts/test-eccc.py'], env, timeout=180)
+                    report.step('eccc-contract', ['python3', 'tests/eccc-contract.py'], env, timeout=180)
 
             if args.scope == 'tooling':
                 report.step('tooling', ['python3', '-m', 'unittest', 'discover', '-s', 'tests', '-p', '*_test.py'])
