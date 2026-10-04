@@ -237,10 +237,50 @@ def previous_tag(product, current, repo, head):
     return None
 
 
+# The paths behind what each product ships; a PR appears in that product's
+# notes only when it changed one. Engine tests and docs ship nothing.
+def ships(product, path):
+    if product == 'engine':
+        return (path.startswith('engine/') and not path.startswith('engine/tests/')
+                and not path.endswith('.md') and path != 'engine/release.pin') or path in ('Cargo.toml', 'Cargo.lock')
+    return path.startswith(('ui/', 'scripts/hooks/')) or path in (
+        'manifest.json', 'run.sh', 'engine/release.pin',
+        'scripts/fetch-engine.sh', 'scripts/engine-pin.sh', 'scripts/write-desktop-entry.sh')
+
+
+ENTRY = re.compile(r'^\* (.*) by @\S+ in https://github\.com/\S+/pull/(\d+)$')
+CONTRIBUTOR = re.compile(r'^\* @\S+ made their first contribution in https://github\.com/\S+/pull/(\d+)$')
+
+
+def product_notes(product, body, repo):
+    # GitHub lists every PR between two tags. Keep those that changed what this
+    # product ships, less any PR reverted in the same range and its revert.
+    lines = body.split('\n')
+    titles = {int(m[2]): m[1] for line in lines if (m := ENTRY.match(line))}
+    keep = {n for n in titles if any(ships(product, f['filename'])
+            for page in gh('--paginate', '--slurp', f'repos/{repo}/pulls/{n}/files') for f in page)}
+    for n, pr_title in titles.items():
+        reverted = re.search(r'\(#(\d+)\)', pr_title)
+        if pr_title.lower().startswith('revert') and reverted and int(reverted[1]) in titles:
+            keep -= {n, int(reverted[1])}
+    lines = [line for line in lines if not (m := ENTRY.match(line) or CONTRIBUTOR.match(line)) or int(m[m.lastindex]) in keep]
+    out = []
+    for i, line in enumerate(lines):
+        level = len(line) - len(line.lstrip('#'))
+        if level >= 2:
+            end = next((j for j in range(i + 1, len(lines)) if lines[j].startswith('**Full Changelog')
+                        or 0 < len(lines[j]) - len(lines[j].lstrip('#')) <= level), len(lines))
+            if not any(entry.startswith('* ') for entry in lines[i + 1:end]):
+                continue
+        out.append(line)
+    return re.sub(r'\n{3,}', '\n\n', '\n'.join(out))
+
+
 def release_notes(product, name, repo, head):
     previous = previous_tag(product, name, repo, head)
     if previous:
-        return gh(f'repos/{repo}/releases/generate-notes', '-f', f'tag_name={name}', '-f', f'target_commitish={head}', '-f', f'previous_tag_name={previous}')['body']
+        body = gh(f'repos/{repo}/releases/generate-notes', '-f', f'tag_name={name}', '-f', f'target_commitish={head}', '-f', f'previous_tag_name={previous}')['body']
+        return product_notes(product, body, repo)
     # Never let GitHub implicitly compare the first tag with another family.
     return f'Initial {product} release {name}.\n\nSource commit: {head}\n'
 

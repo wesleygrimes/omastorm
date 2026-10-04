@@ -185,6 +185,31 @@ class ReleaseTests(unittest.TestCase):
         with patch.object(release,'git',side_effect=['https://github.com/fixture/omastorm.git','https://github.com/fork/omastorm.git']),self.assertRaisesRegex(RuntimeError,'push destination'):
             release.origin_repo()
 
+    def test_notes_keep_only_what_each_product_ships(self):
+        url='https://github.com/fixture/omastorm/pull/'
+        body='\n'.join(['<!-- generated -->','','## What\'s Changed','### Fixes',
+            f'* fix(engine): cap bodies by @a in {url}1',f'* fix(ui): chip clicks by @b in {url}2',
+            '### Features',f'* feat(engine): fallback (#4) by @a in {url}3',f'* revert(engine): drop the fallback (#3) by @a in {url}4',
+            '### Other changes',f'* refactor: tooling by @a in {url}5',f'* chore: pin engine-1.2.3 by @a in {url}6','',
+            '## New Contributors',f'* @b made their first contribution in {url}2','',
+            '**Full Changelog**: https://github.com/fixture/omastorm/compare/a...b'])
+        files={1:['engine/src/live.rs'],2:['ui/Popover.qml','engine/README.md'],3:['engine/src/eccc.rs'],
+               4:['engine/src/eccc.rs'],5:['scripts/tooling/cli.py','engine/tests/protocol.rs'],6:['engine/release.pin']}
+        def endpoint(*args):
+            return [[{'filename':name} for name in files[int(args[-1].split('/')[-2])]]]
+        with patch.object(release,'gh',side_effect=endpoint):
+            engine=release.product_notes('engine',body,'fixture/omastorm')
+            plugin=release.product_notes('plugin',body,'fixture/omastorm')
+        self.assertIn(url+'1',engine)
+        for absent in (url+'2',url+'3',url+'4',url+'5',url+'6','### Features','### Other changes','New Contributors'):
+            self.assertNotIn(absent,engine)
+        self.assertIn('### Fixes',engine);self.assertIn('**Full Changelog**',engine)
+        for present in (url+'2',url+'6','## New Contributors','@b made their first'):
+            self.assertIn(present,plugin)
+        for absent in (url+'1',url+'3',url+'4',url+'5','### Features'):
+            self.assertNotIn(absent,plugin)
+        self.assertNotIn('\n\n\n',engine+plugin)
+
     def test_draft_refuses_existing_draft_and_published_releases_before_mutation(self):
         for draft in (True,False):
             def endpoint(path,*args):

@@ -83,6 +83,10 @@ credit the reporter.
 
 Generated notes use an older ancestor tag from the same family, queried from remote
 state: engine tags compare with engine tags, plugin tags with plugin tags.
+GitHub lists every PR in that range, so the tooling keeps only PRs that changed
+what the release ships: engine source and Cargo files for the engine; `ui/`,
+the manifest, the installer scripts and the pin for the plugin. A PR reverted
+in the same range is dropped along with its revert.
 The first release in a family gets explicit initial-release notes. GitHub's
 [release categories](../.github/release.yml) use PR labels; follow the
 [contributor label guidance](../CONTRIBUTING.md#labels).
