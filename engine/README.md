@@ -71,7 +71,9 @@ only the matching dated generation. Independently, the engine
 respawns a poller whose task has exited, or whose newest radial is thirty
 minutes old and has not been rediscovered since. A rediscovery that finds
 only a sweep already in the catalog does not republish it or clear
-unavailable. Reselecting the live station is a no-op while the poller is
+unavailable. The poller remembers at most the newest 60 sweep start times
+for replay deduplication, matching the catalog's frame cap.
+Reselecting the live station is a no-op while the poller is
 running; if the task has ended, the reselect starts it again. A reachable
 feed becomes stale at ten minutes and unavailable at thirty minutes without
 new radials; an empty station is
