@@ -4,6 +4,11 @@ import Quickshell.Io
 import "Location.js" as Location
 ShellRoot {
     id: test
+    // Quickshell 0.3.2 destroys root children before singletons, so hand the
+    // session back its own engine before quitting rather than the fake.
+    property var ownEngine: null
+    Component.onCompleted: ownEngine = PluginSession.engine
+    function finish() { PluginSession.engine = ownEngine; Qt.quit(); }
     Engine {
         id: fake
         socketFactory: Component { MockSocket {} }
@@ -60,7 +65,7 @@ ShellRoot {
             var s = PluginSession;
             if (s.locationPending || s.locator.running || s.locator.queued) return;
             stop();
-            try { next(); } catch (e) { console.error(e); Qt.quit(); }
+            try { next(); } catch (e) { console.error(e); finish(); }
         }
     }
     Timer {
@@ -112,7 +117,7 @@ ShellRoot {
                 s.requestIpLocation();
                 assertThat(s.locationPending, "duplicate lookup ignored while pending");
                 waitSettled(afterFirstLookup);
-            } catch (e) { console.error(e); Qt.quit(); }
+            } catch (e) { console.error(e); finish(); }
         }
     }
     function afterFirstLookup() {
@@ -239,6 +244,6 @@ ShellRoot {
         assertThat(s.placeName === "ABERDEEN", "reconnect adopts remembered name");
 
         console.log("IP_LOCATION_PASSED");
-        Qt.quit();
+        finish();
     }
 }
