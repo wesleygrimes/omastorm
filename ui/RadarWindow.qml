@@ -250,6 +250,8 @@ Item {
     property var focusToggle: null
     readonly property bool focusMode: focusToggle !== null ? focusToggle : configuredFocus
     onFocusSettingChanged: focusToggle = null
+    // Harnesses read this surface's METAR state.
+    readonly property alias metarState: metar
     Metars {
         id: metar
         // `app.connection`: a bare `engine` here names this object's own property.
@@ -946,7 +948,18 @@ Item {
                         color: app.theme.accent
                     }
                 }
-                LabelText { anchors.centerIn: parent; width: parent.width-24; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter; text: map.error || engine.error; visible: text.length > 0 }
+                Rectangle {
+                    anchors.centerIn: parent; width: parent.width - 24
+                    height: errorNotice.implicitHeight + 16
+                    color: app.theme.background
+                    visible: errorNotice.text.length > 0
+                    LabelText {
+                        id: errorNotice
+                        anchors.centerIn: parent; width: parent.width - 16; wrapMode: Text.Wrap
+                        horizontalAlignment: Text.AlignHCenter
+                        text: map.error || engine.error
+                    }
+                }
                 // Rejections and update copy sit on the map. A layout row
                 // here used to grow the chrome and shift the stage whenever
                 // OPERA loaded, a place was accepted, or the feed rejected.

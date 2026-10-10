@@ -77,5 +77,24 @@ wait_saved_view "$OMASTORM_STATE" "$want_lat" "$want_lon" "$want_span" \
 until_field site KAMX
 until_field locked true
 [[ $(lock_in_file) == KAMX ]] || fail "The reconnect rewrote the lock: $(cat "$OMASTORM_STATE")"
+
+# The same remembered-lock path restores a manual mosaic without centering
+# on its domain. Panning while locked and reconnecting preserve this camera.
+jq '.lock = {sourceId:"mrms-conus",target:{kind:"mosaic"}}' "$OMASTORM_STATE" > "$scratch/state.next"
+mv "$scratch/state.next" "$OMASTORM_STATE"
+sleep 0.5
+before_lat=$(field lat); before_lon=$(field lon); before_span=$(field span)
+"${OMASTORM_ENGINE_BINARY:?selected by mise test integration}" stop
+"${OMASTORM_ENGINE_BINARY:?selected by mise test integration}" ensure
+until_field source mrms-conus
+until_field locked true
+until_field lat "$before_lat"
+until_field lon "$before_lon"
+until_field span "$before_span"
+call run pan_left
+sleep 0.5
+until_field source mrms-conus
+until_field locked true
+[[ $(jq -r '.lock.sourceId' "$OMASTORM_STATE") == mrms-conus ]] || fail 'MRMS lock was not persisted'
 check_qml_log "$scratch/log"
 echo "RECONNECT_PASSED"
