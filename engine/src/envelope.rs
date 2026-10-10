@@ -35,8 +35,17 @@ pub const OPERA: LatLonBox = LatLonBox {
     west: -30.0,
 };
 
-/// Live GridFamily boxes. Polar NEXRAD uses [`nexrad_network`].
-pub const LIVE_MOSAICS: &[LatLonBox] = &[OPERA];
+/// Verified native MRMS footprint, already inside the coarse NEXRAD clip.
+pub const MRMS_CONUS: LatLonBox = LatLonBox {
+    north: 55.0,
+    south: 20.0,
+    east: -60.0,
+    west: -130.0,
+};
+
+/// Live GridFamily boxes, including manual-only sources. Polar NEXRAD uses
+/// [`nexrad_network`]; geographic clipping does not imply follow eligibility.
+pub const LIVE_MOSAICS: &[LatLonBox] = &[OPERA, MRMS_CONUS];
 
 /// Coarse NEXRAD network clip (CONUS / AK / HI / Guam), not per-dish circles.
 pub fn nexrad_network(lon: f64, lat: f64) -> bool {

@@ -5,7 +5,7 @@ use crate::{
     cog::{self, DecodedRaster},
     live_index,
     protocol::{Coverage, Crs, Ellipsoid, Family, FrameStatus, Kind, MosaicFrame, ProductClass},
-    source::{GridEvent, MosaicMeta, SourceMetadataBorrowed},
+    source::{GridEvent, GridSender, MosaicMeta, SourceMetadataBorrowed},
     sweep,
 };
 use chrono::{NaiveDate, NaiveDateTime, Utc};
@@ -16,7 +16,7 @@ use std::{
     time::{Duration, Instant},
 };
 use tokio::{
-    sync::{Semaphore, mpsc::Sender},
+    sync::Semaphore,
     task::{JoinHandle, spawn_blocking},
     time::{sleep, timeout},
 };
@@ -56,7 +56,8 @@ const BACKFILL_DELAY: Duration = Duration::from_secs(3);
 const BACKFILL_IN_FLIGHT: usize = 2;
 const FILL: f32 = -9_999_000.0;
 
-pub use crate::source::GridEvent as Event;
+#[cfg(test)]
+use crate::source::GridEvent as Event;
 
 fn ev_frame(frame: MosaicFrame, texture: Vec<u8>, start_ms: i64) -> GridEvent {
     GridEvent::Frame {
@@ -171,7 +172,7 @@ impl Opera {
         sweep::png(1, 1, &[0, 0, 0, 0]).map_err(|e| format!("encoding OPERA placeholder: {e}"))
     }
 
-    pub fn poll(&self, events: Sender<Event>, known_keys: HashSet<String>) -> JoinHandle<()> {
+    pub fn poll(&self, events: GridSender, known_keys: HashSet<String>) -> JoinHandle<()> {
         let palette = self.palette.clone();
         let bounds = self.bounds.clone();
         tokio::spawn(async move {
@@ -586,7 +587,7 @@ where
 /// already delivered. Failures on one object skip it; a listing failure
 /// ends the backfill.
 async fn backfill_loop(
-    events: Sender<Event>,
+    events: GridSender,
     known: HashSet<String>,
     palette: Arc<Vec<String>>,
     bounds: Arc<Vec<f64>>,
@@ -608,7 +609,7 @@ async fn backfill_loop(
 /// `Event::Backfill` oldest-first. Aborting this task (or a closed
 /// receiver) aborts every child, including the one currently joined.
 async fn fill_history<G, GF>(
-    events: Sender<Event>,
+    events: GridSender,
     targets: Vec<CompObject>,
     get: G,
     palette: Arc<Vec<String>>,
@@ -699,7 +700,7 @@ async fn get_http(key: String) -> Result<Vec<u8>, String> {
 }
 
 async fn poll_loop(
-    events: Sender<Event>,
+    events: GridSender,
     mut known: HashSet<String>,
     palette: Vec<String>,
     bounds: Vec<f64>,
@@ -1168,6 +1169,7 @@ mod tests {
         let inflight = Arc::new(AtomicUsize::new(0));
         let peak = Arc::new(AtomicUsize::new(0));
         let (tx, mut rx) = mpsc::channel(8);
+        let tx = GridSender::new(tx, 1);
         let got = current_thread().block_on(async {
             let get_inflight = Arc::clone(&inflight);
             let get_peak = Arc::clone(&peak);
@@ -1199,7 +1201,7 @@ mod tests {
             fill.await;
             let mut stamps = Vec::new();
             while let Ok(event) = rx.try_recv() {
-                let Event::Backfill { frame, .. } = event else {
+                let Event::Backfill { frame, .. } = event.event else {
                     panic!("expected backfill");
                 };
                 stamps.push(frame.scan_time.clone());
@@ -1235,6 +1237,7 @@ mod tests {
         ];
         current_thread().block_on(async {
             let (tx, rx) = mpsc::channel(1);
+            let tx = GridSender::new(tx, 1);
             let fill = tokio::spawn(fill_history(
                 tx,
                 targets,
@@ -1282,6 +1285,7 @@ mod tests {
         ];
         current_thread().block_on(async {
             let (tx, mut rx) = mpsc::channel(8);
+            let tx = GridSender::new(tx, 1);
             let get_started = Arc::clone(&started);
             let get_dropped = Arc::clone(&dropped);
             let get_finished = Arc::clone(&finished);
