@@ -117,6 +117,16 @@ function liveMosaics(sources) {
     return out;
 }
 
+// Manual-only mosaics are found by search or Shift+N but left out of empty
+// browsing: MRMS loops a 7000×3500 texture, far costlier than one station.
+var MANUAL_ONLY = { "mrms-conus": true };
+// The live mosaic whose coverage holds the point.
+function coveringMosaic(sources, lat, lon) {
+    for (var s of liveMosaics(sources))
+        if (containsCoverage(s.coverage, lat, lon)) return s;
+    return null;
+}
+
 function hitRange(from, count) {
     var out = [];
     for (var i = 0; i < count; i++) out.push(from + i);
@@ -162,7 +172,7 @@ function rankMosaics(sources, query, lat, lon, browse, selectedId, limit, metric
         if (!c) continue;
         var covering = containsCoverage(s.coverage, lat, lon);
         var selected = selectedId && s.id === selectedId;
-        if (!q && !covering && !selected) continue;
+        if (!q && (!covering || MANUAL_ONLY[s.id]) && !selected) continue;
         var m = matchSource(s, q);
         if (q && !m) continue;
         rows.push({

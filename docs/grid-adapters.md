@@ -81,8 +81,8 @@ centre.
 
 Manual-only live sources keep their real geographic coverage but set the
 adapter's `MosaicMeta.covering` eligibility to false. NOAA MRMS (`mrms-conus`)
-uses this policy: it is found by `mrms` or name and appears in empty browsing
-inside its domain or while selected. Startup follow, pan/zoom, unlock, and
+uses this policy: it is found by `mrms`, name, or `Shift+N`, and appears in
+empty browsing only while selected. Startup follow, pan/zoom, unlock, and
 place changes never select it automatically. It currently shows the newest
 valid QC base-reflectivity observation; its decoder and bounded live-fetch
 contract are in [mrms-decoder.md](mrms-decoder.md).
@@ -378,6 +378,18 @@ temporarily appear or disappear.
 Grids sample their native CRS in the shader: lon/lat, then the grid's
 CRS, then `inverse(geotransform)` to a pixel. One resample, from
 provider pixels. The engine does not warp rasters to Mercator.
+
+Before presenting a mosaic wider or taller than 4096 px, `TextureCheck.qml` compares the decoded PNG size
+with the frame's width/height, then checks the uploaded sampler's `textureSize`
+in a small shader. Qt may otherwise silently downscale a texture that exceeds
+the backend's limit. Only a 16×16 pass/fail result is read back; radar pixels
+stay on the GPU. A mismatch or an unavailable verification shader/readback
+withholds radar and produces a visible error in both surfaces. A size that
+passes is remembered until the scene graph is recreated, so playback does not
+wait on a readback per frame; superseded asynchronous results are discarded.
+Smaller grids such as OPERA skip the check, since every supported GPU uploads
+4096 px natively and the checker would refuse GLES2 backends. The checker requires texture-size queries (OpenGL ES 3 or the
+corresponding desktop/RHI capability); it fails closed on older backends.
 
 A CRS ships only when its forward projection is implemented in the grid
 shader. Geographic lon/lat, Mercator, transverse Mercator, polar

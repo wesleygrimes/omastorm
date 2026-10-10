@@ -8,7 +8,7 @@ check_dir=$(mktemp -d "${TMPDIR:?}/omastorm-check-map-tiles.XXXXXX")
 trap 'rm -rf "$check_dir"' EXIT
 mkdir -p review
 rm -f review/zoom-held-before.png review/zoom-held-partial.png review/zoom-ready.png
-cp ui/RadarMap.qml ui/Metar.js "$check_dir/"
+cp ui/RadarMap.qml ui/TextureCheck.qml ui/Metar.js "$check_dir/"
 cp tests/map-tiles.qml "$check_dir/shell.qml"
 ln -sfn "$PWD/ui/shaders" "$check_dir/shaders"
 magick -size 512x512 xc:'rgba(255,0,0,1)' "$check_dir/old.png"

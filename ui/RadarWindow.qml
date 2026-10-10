@@ -250,6 +250,8 @@ Item {
     property var focusToggle: null
     readonly property bool focusMode: focusToggle !== null ? focusToggle : configuredFocus
     onFocusSettingChanged: focusToggle = null
+    // Harnesses read this surface's METAR state.
+    readonly property alias metarState: metar
     Metars {
         id: metar
         // `app.connection`: a bare `engine` here names this object's own property.
@@ -261,6 +263,7 @@ Item {
         switch (action) {
         case "search": treatmentMenu.close(); locationPicker.show(""); break;
         case "nearest": nearest(); break;
+        case "mosaic": coveringMosaic(); break;
         case "lock": toggleLock(); break;
         case "locate": locateMe(); break;
         case "pan_left": map.pan(-1, 0); break;
@@ -329,6 +332,15 @@ Item {
         var s = map.nearest();
         if (!state || !s) return;
         store.followNearest(s.id);
+    }
+    // Shift+N toggles like focus mode: lock the mosaic covering the center,
+    // camera staying put, or hand a mosaic back to the nearest station.
+    function coveringMosaic() {
+        if (!state) return;
+        if (engine.source && engine.source.kind === "mosaic") { nearest(); return; }
+        var m = Location.coveringMosaic(engine.sources, map.centerLat, map.centerLon);
+        if (!m) { flashMap("No mosaic covers this area"); return; }
+        store.setLock(Location.mosaicLock(m.id), true);
     }
     function locateMe() {
         if (!store.hasView || store.needsLocation) return;
@@ -946,7 +958,18 @@ Item {
                         color: app.theme.accent
                     }
                 }
-                LabelText { anchors.centerIn: parent; width: parent.width-24; wrapMode: Text.Wrap; horizontalAlignment: Text.AlignHCenter; text: map.error || engine.error; visible: text.length > 0 }
+                Rectangle {
+                    anchors.centerIn: parent; width: parent.width - 24
+                    height: errorNotice.implicitHeight + 16
+                    color: app.theme.background
+                    visible: errorNotice.text.length > 0
+                    LabelText {
+                        id: errorNotice
+                        anchors.centerIn: parent; width: parent.width - 16; wrapMode: Text.Wrap
+                        horizontalAlignment: Text.AlignHCenter
+                        text: map.error || engine.error
+                    }
+                }
                 // Rejections and update copy sit on the map. A layout row
                 // here used to grow the chrome and shift the stage whenever
                 // OPERA loaded, a place was accepted, or the feed rejected.

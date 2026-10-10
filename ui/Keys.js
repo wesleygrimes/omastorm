@@ -6,13 +6,15 @@
 // sequence parses (an empty string means it does not).
 
 // Bindings are Qt key sequences separated by spaces: "h Left" binds both.
-// Shift+L is the lock because lowercase l pans; `m` jumps to the approximate
+// Shift+L is the lock because lowercase l pans; Shift+N toggles the covering
+// mosaic, paired with `n`; `m` jumps to the approximate
 // location; the digit keys pick a treatment; `w` toggles the weak-return floor;
 // `a` is aviation mode (METAR chips); `f` is focus mode; `?` opens the
 // sheet; Escape with nothing open closes the window.
 var ACTIONS = [
     { id: "search", keys: "/ s" },
     { id: "nearest", keys: "n" },
+    { id: "mosaic", keys: "Shift+N" },
     { id: "lock", keys: "Shift+L" },
     { id: "locate", keys: "m" },
     { id: "pan_left", keys: "h Left" },
@@ -41,6 +43,7 @@ var ACTIONS = [
 var ROWS = [
     [{ label: "search", actions: ["search"] },
      { label: "nearest radar", actions: ["nearest"] },
+     { label: "all radars: on / off", actions: ["mosaic"] },
      { label: "lock / release radar", actions: ["lock"] },
      { label: "my location", actions: ["locate"] },
      { label: "pan", actions: ["pan_left", "pan_down", "pan_up", "pan_right"] },

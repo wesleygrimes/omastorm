@@ -47,9 +47,12 @@ ShellRoot {
         function play(): void { popover.play(); }
         function status(): string {
             return JSON.stringify({site: popover.engine.selectedSiteId, frame: popover.scan ? popover.scan.id : "",
+                source: popover.engine.source ? popover.engine.source.id : "", locked: session.nav().locked,
                 playing: popover.state ? popover.state.playing : false, treatment: session.treatment,
                 connected: popover.engine.socket.connected, retry: popover.engine.reconnect.running, transport: popover.engine.error, condition: popover.condition, text: popover.statusText, expanded: harness.expanded,
                 window: panel.opened, windowSite: panel.siteId, windowFrame: panel.scan ? panel.scan.id : "",
+                metars: popover.metarState.metars.length, windowMetars: panel.metarState.metars.length,
+                windowFloorActive: panel.floorActive, windowScanning: panel.scanning,
                 windowPlaying: panel.playing, windowTreatment: panel.treatment, error: session.startupError,
                 needsLocation: session.needsLocation, lat: session.centerLat, lon: session.centerLon,
                 updatePending: session.updatePending, updateNotice: session.updateNotice});

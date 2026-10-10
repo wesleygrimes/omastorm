@@ -20,13 +20,40 @@ call() { quickshell ipc --pid "$pid" call picker "$@"; }
 fail_log="$check_dir/log"
 for _ in {1..100}; do call status > /dev/null 2>&1 && break; sleep .1; done
 call status > /dev/null || fail "The window's picker IPC never answered"
+key() { quickshell ipc --pid "$pid" call keys "$@"; }
 call open ""
 for _ in {1..50}; do [[ $(call matches) != '[]' ]] && break; sleep .1; done
-# The fixture's home view centres north-west of KTLX: KTLX first among
-# stations, the Norman pair next. Live mosaics may precede station rows.
+# The fixture's home view centres north-west of KTLX: KTLX first, the Norman pair next.
+# Manual-only MRMS stays out of empty browsing.
 m=$(call matches)
-[[ $m == *'"KTLX","K'* && $m == *KOUN* && $m == *KCRI* ]] || fail "Empty query did not list the nearest stations first: $m"
-expect 'Empty query counts the whole table' '{"open":true,"query":"","selected":0,"total":163,"focused":true}' "$(call status)"
+[[ $m == '["KTLX","K'* && $m == *KOUN* && $m == *KCRI* && $m != *mrms-conus* ]] || fail "Empty query did not list the nearest stations first without MRMS: $m"
+# This IPC field counts the station table; mosaic matches are checked above.
+expect 'Empty query counts the station table' '{"open":true,"query":"","selected":0,"total":163,"focused":true}' "$(call status)"
+call open mrms
+m=$(call matches)
+[[ $m == *mrms-conus* ]] || fail "mrms did not list the NOAA mosaic: $m"
+call accept
+for _ in {1..50}; do
+  src=$(quickshell ipc --pid "$pid" call keys field source)
+  locked=$(quickshell ipc --pid "$pid" call keys field locked)
+  lat=$(quickshell ipc --pid "$pid" call keys field lat)
+  lon=$(quickshell ipc --pid "$pid" call keys field lon)
+  [[ $src == mrms-conus && $locked == true && $lat == 37.5 && $lon == -95 ]] && break
+  sleep .1
+done
+[[ $src == mrms-conus && $locked == true && $lat == 37.5 && $lon == -95 ]] || fail "MRMS selection did not center and lock: $src $locked $lat $lon"
+# n hands back to a station; Shift+N locks the covering mosaic without moving the camera.
+key run nearest
+for _ in {1..50}; do [[ $(key field source) != mrms-conus && $(key field locked) == false ]] && break; sleep .1; done
+[[ $(key field source) != mrms-conus ]] || fail "n did not hand MRMS back to a station"
+key run mosaic
+for _ in {1..50}; do [[ $(key field source) == mrms-conus && $(key field locked) == true ]] && break; sleep .1; done
+expect 'Shift+N locks MRMS in place' 'mrms-conus true 37.5 -95' "$(key field source) $(key field locked) $(key field lat) $(key field lon)"
+key run mosaic
+for _ in {1..50}; do [[ $(key field source) != mrms-conus && $(key field locked) == false ]] && break; sleep .1; done
+[[ $(key field source) != mrms-conus && $(key field locked) == false ]] || fail "Shift+N again did not hand MRMS back to a station"
+key run mosaic
+for _ in {1..50}; do [[ $(key field source) == mrms-conus ]] && break; sleep .1; done
 call open opera
 m=$(call matches)
 [[ $m == *opera* ]] || fail "opera did not list the EUMETNET mosaic: $m"

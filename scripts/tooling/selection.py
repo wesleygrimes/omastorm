@@ -28,7 +28,7 @@ def classify(paths, full=False):
         elif path.startswith(('ui/', 'tests/')):
             selected.add('ui')
             if path.endswith('_test.py'): selected.update(GROUPS)
-            if path.startswith('ui/shaders/') or path in ('ui/RadarMap.qml', 'ui/RadarWindow.qml', 'ui/PluginSession.qml', 'tests/map-tiles.qml'):
+            if path.startswith('ui/shaders/') or path in ('ui/RadarMap.qml', 'ui/TextureCheck.qml', 'ui/RadarWindow.qml', 'ui/PluginSession.qml', 'tests/map-tiles.qml'):
                 selected.add('rendering')
             if path.startswith('tests/integration/') and Path(path).stem in ('bind', 'launcher', 'pin'):
                 selected.add('installer')

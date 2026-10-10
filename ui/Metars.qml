@@ -28,7 +28,9 @@ QtObject {
         else engine.send(Metar.command(engine.site, view.viewBbox(), session.config.values));
     }
     readonly property string siteId: engine.selectedSiteId
-    onSiteIdChanged: { clear(); request(); }
+    // Source, site, and state bindings can update after selectedSiteId.
+    // Query once the complete selection is available to the eligibility check.
+    onSiteIdChanged: { clear(); Qt.callLater(request); }
     property Connections engineReplies: Connections {
         target: metar.engine
         function onMetarsReady(message) { metar.metars = message.results || []; }

@@ -11,7 +11,7 @@ harness=$(mktemp -d "${TMPDIR:-/tmp}/omastorm-capture-harness.XXXXXX")
 trap 'rm -rf -- "$harness"' EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
-cp ui/shell.qml ui/RadarWindow.qml ui/RadarMark.qml ui/RadarMap.qml ui/Sites.js ui/KeysSheet.qml ui/Keys.js ui/Theme.qml ui/Config.qml ui/Toml.js ui/Location.js ui/Metar.js ui/Metars.qml ui/LocationPicker.qml ui/LocationPrompt.qml ui/Remembered.qml ui/PluginSession.qml ui/qmldir "$harness/"
+cp ui/shell.qml ui/RadarWindow.qml ui/RadarMark.qml ui/RadarMap.qml ui/TextureCheck.qml ui/Sites.js ui/KeysSheet.qml ui/Keys.js ui/Theme.qml ui/Config.qml ui/Toml.js ui/Location.js ui/Metar.js ui/Metars.qml ui/LocationPicker.qml ui/LocationPrompt.qml ui/Remembered.qml ui/PluginSession.qml ui/qmldir "$harness/"
 ln -sfn "$PWD/ui/shaders" "$harness/shaders"
 perl -pe 's/^(\s+)state = message;$/$1var override = JSON.parse(Quickshell.env("OMASTORM_STATE_OVERRIDE") || "{}");\n$1for (var key in override) message[key] = override[key] && typeof override[key] === "object" && !Array.isArray(override[key]) && message[key] ? Object.assign(message[key], override[key]) : override[key];\n$1state = message;/' ui/Engine.qml > "$harness/Engine.qml"
 grep -q OMASTORM_STATE_OVERRIDE "$harness/Engine.qml"

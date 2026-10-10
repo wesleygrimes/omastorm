@@ -28,7 +28,7 @@ unset OMASTORM_ARCHIVE
 rm -rf "$demo_dir"
 mkdir -p "$XDG_RUNTIME_DIR" "$XDG_CACHE_HOME" "$demo_dir/shaders" "$demo_dir/frames"
 jq -r --arg id "$site" '.sites[] | select(.id==$id) | "center_lat = \(.lat)\ncenter_lon = \(.lon)\nlocked_radar = \"\(.id)\""' engine/data/sites.json > "$OMASTORM_CONFIG"
-cp ui/Theme.qml ui/Engine.qml ui/RadarMark.qml ui/RadarMap.qml ui/Sites.js ui/KeysSheet.qml ui/Keys.js ui/Config.qml ui/Toml.js ui/Location.js ui/Metar.js ui/Metars.qml ui/LocationPicker.qml ui/LocationPrompt.qml ui/Remembered.qml ui/PluginSession.qml ui/qmldir "$demo_dir/"
+cp ui/Theme.qml ui/Engine.qml ui/RadarMark.qml ui/RadarMap.qml ui/TextureCheck.qml ui/Sites.js ui/KeysSheet.qml ui/Keys.js ui/Config.qml ui/Toml.js ui/Location.js ui/Metar.js ui/Metars.qml ui/LocationPicker.qml ui/LocationPrompt.qml ui/Remembered.qml ui/PluginSession.qml ui/qmldir "$demo_dir/"
 cp ui/shaders/*.qsb "$demo_dir/shaders/"
 ruby - "$demo_dir" <<'RUBY'
 dir = ARGV.fetch(0)

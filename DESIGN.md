@@ -42,7 +42,7 @@ the ids and comments in `ui/RadarWindow.qml`.
 | **map stage** | Radar map frame |
 | **locate chip** | Map marker, top-left of the map; jump to the approximate location |
 | **help chip** | Keys / `?` on the map |
-| **metar chips** | Optional. ICAO labels with FAA flight-category color in place of city names, around the selected live NEXRAD radar (US and Canada; OPERA Europe is a no-op). Off until toggled. Default is the nearest stations (at most 16). Optional AWC-priority pick uses the current map view so hubs outrank closer small fields; `count` shrinks the pool; `always_on_when_in_view` pins a home field that is on screen. A chip at the selected radar (KLIT next to KLZK) sits beside the site tag. Optional `mark`: a larger category-colored location (`pin`, the default when omitted or when there is no config file), a filled category block (`chip`), or ICAO letters in category color (`ink`). Click shows the raw METAR on a **metar card** over the map, 80% width, bottom-right, above the OSM credit, so the scale bar stays clear. |
+| **metar chips** | Optional. ICAO labels with FAA flight-category color in place of city names, around the selected live NEXRAD radar (US and Canada; grid mosaics are a no-op). Off until toggled. Default is the nearest stations (at most 16). Optional AWC-priority pick uses the current map view so hubs outrank closer small fields; `count` shrinks the pool; `always_on_when_in_view` pins a home field that is on screen. A chip at the selected radar (KLIT next to KLZK) sits beside the site tag. Optional `mark`: a larger category-colored location (`pin`, the default when omitted or when there is no config file), a filled category block (`chip`), or ICAO letters in category color (`ink`). Click shows the raw METAR on a **metar card** over the map, 80% width, bottom-right, above the OSM credit, so the scale bar stays clear. |
 | **scale bar** | Ground distance under the map, left; locale picks km or mi; label updates with zoom |
 | **legend** | dBZ scale directly under the map |
 | **transport** | Playback buttons |
@@ -87,8 +87,13 @@ last two hours of completed scans, 60 at most; older frames leave the
 catalog, so a station watched yesterday and again tonight loops tonight
 only. Its sweep in progress is an outlined tick after the complete frames
 and is included in the frame count. Mosaic history follows the adapter
-limit; OPERA retains up to 12 complete frames. Each tick represents one frame, without
-extra gap ticks or a baseline.
+policy; OPERA retains up to 12 complete frames. MRMS retains up to 30 actual
+QC base-reflectivity observations in `(newest − 60 minutes, newest]`, anchored
+to the newest accepted observation. It shows current weather before filling
+history; backfill preserves the displayed frame. The newest position follows
+live arrivals, while a historical selection stays until that frame is evicted.
+Outages retain the loop. Each tick represents one frame, without extra gap
+ticks or a baseline.
 
 ## Location, onboarding, and map
 
@@ -154,13 +159,23 @@ selection uses the protocol's nearest-station hysteresis while the held dish
 covers the center; leaving its coverage bypasses hysteresis. Cross-family and
 grid selection follow [docs/grid-adapters.md](docs/grid-adapters.md). Lock pins
 one exact dish or mosaic; `n` releases it and selects from the center without
-moving the camera. Choosing a station in search (or from the station title)
+moving the camera. `Shift+N` locks the mosaic covering the center, also without
+moving the camera, and on a mosaic acts as `n`. Choosing a station in search (or from the station title)
 locks it and centres the map on that site. Live mosaic sources appear in that
 same radar list — covering mosaics on an empty browse, and by id or name when
 typed — and choosing one locks that mosaic and centres on its coverage. They
 are not fake dishes and there is no separate provider picker. Automatic
 hand-off and loading a frame never move the camera. Persist only an explicit
 lock, never an automatically selected source.
+
+NOAA MRMS (`mrms-conus`) is a manual-only contiguous-U.S. mosaic. `Shift+N`
+selects it inside its domain; it appears in the same picker by id/name, and in
+empty browsing only while selected. Its coverage describes browsing and the
+lock indication; it never makes MRMS eligible for automatic follow, unlock, or
+place selection. It uses the measured QC base product, actual observation
+seconds, NOAA/NSSL MRMS attribution, and the existing dBZ palette. Missing/no
+coverage draw transparent, measured negative values remain measured, and no
+METAR overlay or weak-return floor applies.
 
 Closing preserves the view. Reopening restores it, with explicit config
 values taking precedence. Expanding the popover preserves its center, zoom,
@@ -188,6 +203,14 @@ palette, and geometry together; keep the previous ready frame of the same
 source while its replacement loads. A source change clears that frame, and
 the first ready sweep fades in briefly. Display one radar station’s sweep
 at a time.
+
+A grid frame wider or taller than 4096 px is presented only after its decoded
+image and actual GPU texture both match the frame's native dimensions. Qt can
+silently shrink an oversized upload, so image readiness alone is insufficient.
+Unsupported dimensions or failed verification hide the radar and show a
+readable error in both surfaces; the user can choose another source. A size
+that passed stays verified until the scene graph is recreated; discard results
+from superseded checks.
 
 ## Split
 
