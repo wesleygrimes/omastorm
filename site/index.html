@@ -159,6 +159,7 @@
   .eyebrow { color: var(--accent); text-transform: uppercase; letter-spacing: .12em; font-size: 12px; font-weight: 700; margin: 0 0 16px; }
   .sponsor-link { display: inline-flex; align-items: center; gap: 10px; background: var(--accent); color: var(--bg); padding: 12px 20px; border-radius: 6px; font-weight: 650; margin: 8px 0 16px; }
   .sponsor-link svg { width: 19px; height: 19px; flex: none; }
+  .sponsor-link.alt { background: transparent; color: var(--accent); border: 1px solid var(--accent); margin-left: 8px; }
 
   /* Install */
   section.install { margin-top: 36px; display: flex; flex-direction: column; gap: 14px; }
@@ -373,13 +374,13 @@ omarchy restart shell</code></pre><button type="button" data-copy="update-cmd" a
     <h2 id="sponsor-heading">Help keep the radar running.</h2>
     <p>Omastorm is free and open source. If it’s earned a place in your bar, consider sponsoring the work behind it.</p>
     <p>Your support helps make time for the details: reliable live data, thoughtful improvements, and a radar that feels at home on your desktop.</p>
-    <a class="sponsor-link" href="https://github.com/sponsors/wesleygrimes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg>Sponsor on GitHub</a>
+    <a class="sponsor-link" href="https://github.com/sponsors/wesleygrimes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg>Sponsor on GitHub</a><a class="sponsor-link alt" href="https://buymeacoffee.com/ncfrontiersman">Buy me a coffee</a>
     <p class="fine">A bug report, a contribution, or sharing Omastorm helps too. Thanks for being part of it.</p>
   </section>
 </main>
 <footer>
   <div class="foot">
-    <span><a href="https://github.com/wesleygrimes/omastorm">GitHub</a> · <a href="https://github.com/wesleygrimes/omastorm#readme">README</a> · <a href="https://github.com/wesleygrimes/omastorm/releases">Releases</a> · <a href="https://github.com/sponsors/wesleygrimes">Sponsor</a> · MIT</span>
+    <span><a href="https://github.com/wesleygrimes/omastorm">GitHub</a> · <a href="https://github.com/wesleygrimes/omastorm#readme">README</a> · <a href="https://github.com/wesleygrimes/omastorm/releases">Releases</a> · <a href="https://github.com/sponsors/wesleygrimes">Sponsor</a> · <a href="https://buymeacoffee.com/ncfrontiersman">Buy me a coffee</a> · MIT</span>
     <span>Radar: NOAA NEXRAD · <a href="https://www.eumetnet.eu/observations/weather-radar-network/">EUMETNET OPERA</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>) · Map: © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap contributors</a>, <a href="https://openfreemap.org">OpenFreeMap</a>, Natural Earth · Search: <a href="https://www.geonames.org/">GeoNames</a> (<a href="https://creativecommons.org/licenses/by/4.0/">CC BY 4.0</a>) · © 2026 Wesley Grimes</span>
   </div>
 </footer>
