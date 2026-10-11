@@ -157,9 +157,10 @@
   .sponsor h2 { font-size: clamp(28px, 4vw, 42px); line-height: 1.2; max-width: 22ch; letter-spacing: -0.03em; }
   .sponsor p { max-width: 60ch; }
   .eyebrow { color: var(--accent); text-transform: uppercase; letter-spacing: .12em; font-size: 12px; font-weight: 700; margin: 0 0 16px; }
-  .sponsor-link { display: inline-flex; align-items: center; gap: 10px; background: var(--accent); color: var(--bg); padding: 12px 20px; border-radius: 6px; font-weight: 650; margin: 8px 0 16px; }
+  .sponsor-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 8px 0 16px; }
+  .sponsor-link { display: inline-flex; align-items: center; gap: 10px; background: var(--accent); color: var(--bg); padding: 12px 20px; border: 1px solid var(--accent); border-radius: 6px; font-weight: 650; }
   .sponsor-link svg { width: 19px; height: 19px; flex: none; }
-  .sponsor-link.alt { background: transparent; color: var(--accent); border: 1px solid var(--accent); margin-left: 8px; }
+  .sponsor-link.alt { background: transparent; color: var(--accent); }
 
   /* Install */
   section.install { margin-top: 36px; display: flex; flex-direction: column; gap: 14px; }
@@ -374,7 +375,7 @@ omarchy restart shell</code></pre><button type="button" data-copy="update-cmd" a
     <h2 id="sponsor-heading">Help keep the radar running.</h2>
     <p>Omastorm is free and open source. If it’s earned a place in your bar, consider sponsoring the work behind it.</p>
     <p>Your support helps make time for the details: reliable live data, thoughtful improvements, and a radar that feels at home on your desktop.</p>
-    <a class="sponsor-link" href="https://github.com/sponsors/wesleygrimes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg>Sponsor on GitHub</a><a class="sponsor-link alt" href="https://buymeacoffee.com/ncfrontiersman">Buy me a coffee</a>
+    <div class="sponsor-actions"><a class="sponsor-link" href="https://github.com/sponsors/wesleygrimes"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/></svg>Sponsor on GitHub</a><a class="sponsor-link alt" href="https://buymeacoffee.com/ncfrontiersman"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M6 2v2M10 2v2M14 2v2"/><path d="M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1"/></svg>Buy me a coffee</a></div>
     <p class="fine">A bug report, a contribution, or sharing Omastorm helps too. Thanks for being part of it.</p>
   </section>
 </main>
