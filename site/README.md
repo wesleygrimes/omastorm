@@ -26,7 +26,7 @@ The favicon and touch icons come from `branding/mark`; the header uses the
 same monochrome mark as the app. The page follows the visitor’s color scheme. The page uses JetBrains Mono throughout. Treatment names are HTML labels
 in that same font; CSS clips the older montage’s baked-in cursive labels. Decorative icons are SVG
 so they do not depend on a Nerd Font or symbol-font fallback. The dedicated
-sponsorship section links directly to GitHub Sponsors.
+sponsorship section links to GitHub Sponsors and Buy Me a Coffee.
 `_headers` sets cache lifetimes. `robots.txt`, `sitemap.xml`, the canonical URL,
 and SoftwareApplication JSON-LD describe the public homepage.
 
