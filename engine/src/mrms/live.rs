@@ -97,6 +97,8 @@ impl Mrms {
                 geotransform: [-130.0, 70.0, 0.0, 55.0, 0.0, -35.0],
                 palette: self.palette.as_ref().clone(),
                 bounds: self.bounds.as_ref().clone(),
+                scale: None,
+                offset: None,
             },
             sweep::png(1, 1, &[0, 1, 0, 255]).ok()?,
         ))

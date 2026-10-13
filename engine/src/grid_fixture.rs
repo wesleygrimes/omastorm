@@ -64,6 +64,8 @@ impl FixtureMosaic {
                     geotransform: GEOTRANSFORM,
                     palette: palette.clone(),
                     bounds: bounds.clone(),
+                    scale: None,
+                    offset: None,
                 };
                 let pixels = raster(i, palette.len());
                 let png = sweep::png(WIDTH, HEIGHT, &pixels).expect("fixture mosaic png");

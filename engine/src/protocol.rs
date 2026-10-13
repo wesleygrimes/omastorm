@@ -458,6 +458,11 @@ pub struct MosaicFrame {
     pub geotransform: [f64; 6],
     pub palette: Vec<String>,
     pub bounds: Vec<f64>,
+    /// Optional measured-code encoding for the texture's B channel.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale: Option<f32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<f32>,
 }
 
 /// Tagged CRS: WGS84 lon/lat in, east-then-north x/y out (`docs/grid-adapters.md`).

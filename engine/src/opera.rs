@@ -165,6 +165,8 @@ impl Opera {
             geotransform: [0.0, 1.0, 0.0, 0.0, 0.0, -1.0],
             palette: self.palette.clone(),
             bounds: self.bounds.clone(),
+            scale: None,
+            offset: None,
         }
     }
 
@@ -230,23 +232,34 @@ pub fn prefix_for(day: NaiveDate) -> String {
     format!("{}/OPERA/COMP/", day.format("%Y/%m/%d"))
 }
 
+// Measured B codes reserve 0/1 for non-measured cells, matching the grid
+// shader's raw >= 2 guard. Half-dBZ bins cover -32 through 94.5 dBZ.
+const CODE_SCALE: f32 = 2.0;
+const CODE_OFFSET: f32 = 66.0;
+
 /// Classify OPERA DBZH floats into the grid texture encoding.
 pub fn classify(values: &[f32], nodata: Option<f32>, bounds: &[f64], classes: usize) -> Vec<u8> {
     let classes = classes.max(1);
     let fill = nodata.unwrap_or(FILL);
     let mut pixels = Vec::with_capacity(values.len() * 4);
     for &v in values {
-        let (r, g) = if v.is_nan() {
-            (0, 2) // undetect
+        let (r, g, b) = if v.is_nan() {
+            (0, 2, 0) // undetect
         } else if (v - fill).abs() < 1.0 || v <= fill / 2.0 {
             // Missing / nodata (G bit 0). Grid shader draws transparent —
             // nodata draws nothing; oceans must not use the polar folded hatch.
-            (0, 1)
+            (0, 1, 0)
         } else {
             let class = class_of(v as f64, bounds, classes);
-            (class + 1, 0)
+            // Floor rather than round: a value just below a half-dBZ
+            // threshold must remain below its code cutoff. Only B is quantized;
+            // the palette class still comes from the original measured value.
+            let raw = (f64::from(v) * f64::from(CODE_SCALE) + f64::from(CODE_OFFSET))
+                .floor()
+                .clamp(2.0, 255.0) as u8;
+            (class + 1, 0, raw)
         };
-        pixels.extend_from_slice(&[r, g, 0, 255]);
+        pixels.extend_from_slice(&[r, g, b, 255]);
     }
     pixels
 }
@@ -354,6 +367,8 @@ fn finish_frame(
         geotransform,
         palette: palette.to_vec(),
         bounds: bounds.to_vec(),
+        scale: Some(CODE_SCALE),
+        offset: Some(CODE_OFFSET),
     };
     Ok((
         frame,
@@ -825,6 +840,16 @@ mod tests {
         assert_eq!(frame.id, "opera-loading");
         assert!(frame.scan_time.is_empty());
         assert_eq!(frame.status, FrameStatus::Partial);
+        assert_eq!(frame.scale, None);
+        assert_eq!(frame.offset, None);
+        let encoded = serde_json::to_value(&frame).unwrap();
+        assert!(encoded.get("scale").is_none());
+        assert!(encoded.get("offset").is_none());
+        // Legacy mosaics without encoding fields remain readable.
+        assert_eq!(
+            serde_json::from_value::<MosaicFrame>(encoded).unwrap(),
+            frame
+        );
         assert_eq!(frame.width, 1);
         assert_eq!(frame.height, 1);
         assert!(!frame.palette.is_empty());
@@ -874,25 +899,70 @@ mod tests {
         ));
         assert_eq!(frame.product_name, "Reflectivity");
         assert_eq!(frame.units, "dBZ");
+        assert_eq!(frame.scale, Some(CODE_SCALE));
+        assert_eq!(frame.offset, Some(CODE_OFFSET));
+        let encoded = serde_json::to_value(&frame).unwrap();
+        assert_eq!(encoded["scale"], 2.0);
+        assert_eq!(encoded["offset"], 66.0);
         assert_eq!(start_ms, stamp.and_utc().timestamp_millis());
-        let info = png::Decoder::new(std::io::Cursor::new(&png))
+        let mut reader = png::Decoder::new(std::io::Cursor::new(&png))
             .read_info()
-            .unwrap()
-            .info()
-            .clone();
+            .unwrap();
+        let info = reader.info();
         assert_eq!((info.width, info.height), (32, 32));
+        let mut decoded = vec![0; reader.output_buffer_size().unwrap()];
+        reader.next_frame(&mut decoded).unwrap();
+        assert_eq!(decoded[2], 76); // the emitted PNG retains 5 dBZ in B
+        assert_eq!(&decoded[4..8], &[0, 1, 0, 255]);
         let pixels = classify(
             &cog::decode_float_cog(&bytes).unwrap().values,
             Some(FILL),
             &opera.bounds,
             opera.palette.len(),
         );
+        assert_eq!(pixels[2], 76); // 5 dBZ measured code
         assert_eq!(pixels[1], 0); // measured G
         assert!(pixels[0] >= 1);
         assert_eq!(pixels[4], 0);
         assert_eq!(pixels[5], 1); // nodata/missing
         assert_eq!(pixels[12], 0);
         assert_eq!(pixels[13], 2); // undetect nan
+    }
+
+    #[test]
+    fn measured_codes_keep_floor_boundary_and_special_cells_distinct() {
+        let opera = Opera::new();
+        let values = [
+            -40.0,
+            -32.0,
+            0.0,
+            4.5,
+            f32::from_bits(5.0f32.to_bits() - 1),
+            5.0,
+            5.5,
+            100.0,
+            FILL,
+            f32::NAN,
+        ];
+        let pixels = classify(&values, Some(FILL), &opera.bounds, opera.palette.len());
+        let (cells, remainder) = pixels.as_chunks::<4>();
+        assert!(remainder.is_empty());
+        let cutoff = (5.0 * CODE_SCALE + CODE_OFFSET).ceil() as u8;
+        assert_eq!(cutoff, 76);
+        for (i, cell) in cells[..8].iter().enumerate() {
+            assert_eq!(
+                cell[0],
+                class_of(values[i] as f64, &opera.bounds, opera.palette.len()) + 1
+            );
+            assert_eq!(cell[1], 0);
+            assert!(cell[2] >= 2);
+            assert_eq!(cell[2] < cutoff, values[i] < 5.0);
+            assert_eq!(cell[3], 255);
+        }
+        assert_eq!(cells[0][2], 2);
+        assert_eq!(cells[7][2], 255);
+        assert_eq!(cells[8], [0, 1, 0, 255]);
+        assert_eq!(cells[9], [0, 2, 0, 255]);
     }
 
     /// The previous linear scan, kept so the `partition_point` mapping cannot

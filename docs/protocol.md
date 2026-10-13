@@ -153,12 +153,14 @@ It is small (a few KB) so clients replace rather than merge.
   `palette.length` × 1 texture and labels the legend from `bounds` (first band
   `<bounds[1]`, last band `bounds[n-1]+`), so any band count works and radar
   and legend share one source of color.
-- Polar `frame.scale` and `frame.offset` are the moment's own encoding:
+- `frame.scale` and `frame.offset` describe the measured B-channel encoding:
   value = (code − offset) / scale in `units`. The UI uses them to place the
   weak-return floor, a view setting in `units`, in code units for the shader
-  (lookup rule, below). Both are 0 on the loading placeholder, which
-  therefore has no floor. Mosaic frames omit them; the weak-return floor is
-  disabled on the grid path.
+  (lookup rule, below). Both are 0 on polar loading placeholders, which
+  therefore have no floor. OPERA completed mosaics include `scale: 2` and
+  `offset: 66`; other mosaics and loading frames omit these optional fields.
+  The current UI still disables the floor on the grid path; applying it to
+  OPERA requires a UI update after this engine is released and pinned.
 
 `error` answers one command from one client. It goes only to the client that
 sent the command, `state` does not change, and nothing is broadcast, so a
@@ -392,7 +394,12 @@ below-threshold codes are never weak, and the legend names the hidden range.
 
 **Mosaic texture (`frame.texture` when `kind` is `mosaic`):** PNG, RGBA,
 width × height as published. R is palette class + 1 (0 draws nothing), G bit
-0 is missing, G bit 1 is undetect, B is 0, A is 255. No `azimuthLut`.
+0 is missing, G bit 1 is undetect, A is 255. No `azimuthLut`.
+For OPERA measured cells, B is `floor(dBZ * 2 + 66)` clamped to 2..255;
+non-measured cells have B = 0. This preserves half-dBZ floor thresholds
+from -32 through 94.5 dBZ, with saturation outside that range. Palette
+classification still uses the original float, independently of B. Mosaics
+without `scale` / `offset` keep B = 0.
 
 **Grid lookup (`ui/shaders/grid.frag`):** each 3 px screen cell becomes WGS84
 longitude and latitude from the same Web Mercator camera, then the grid CRS
