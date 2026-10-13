@@ -1,0 +1,60 @@
+name: Split engine and UI changes
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  pull-requests: write
+  contents: read
+
+concurrency:
+  group: split-engine-ui-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  split:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.pull_request.number;
+            const marker = '<!-- omastorm-split-engine-ui -->';
+            // Match source ownership, not CI's combined verification groups:
+            // engine changes also run plugin tests, but that does not make them UI changes.
+            const engineFile = path => path.startsWith('engine/')
+              || path.startsWith('.cargo/') || path.startsWith('data/')
+              || path.startsWith('golden/')
+              || ['Cargo.toml', 'Cargo.lock', 'docs/protocol.md', 'docs/grid-adapters.md',
+                  'scripts/build-engine-release.sh', 'scripts/extract-fixtures.sh',
+                  'scripts/refresh-fixtures.sh', 'scripts/bench-engine.py'].includes(path);
+            const uiFile = path => path.startsWith('ui/') || path.startsWith('tests/')
+              || ['run.sh', 'manifest.json', 'scripts/build-shader.sh'].includes(path);
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner, repo, pull_number: issue_number, per_page: 100
+            });
+            // Renames can cross the engine/UI boundary; include the old path too.
+            const paths = [...new Set(files.flatMap(file =>
+              file.previous_filename ? [file.filename, file.previous_filename] : [file.filename]))];
+            const engine = paths.filter(engineFile).sort();
+            const ui = paths.filter(uiFile).sort();
+            if (!engine.length || !ui.length) return;
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number, per_page: 100
+            });
+            if (comments.some(comment => (comment.body || '').includes(marker))) return;
+            // JSON quoting keeps untrusted filenames on one line; escape Markdown/HTML
+            // and mentions so filenames are presented only as text.
+            const list = paths => paths.map(path => '- ' + JSON.stringify(path)
+              .replace(/[&<>@\\`*_{}[\]()#+.!|~-]/g,
+                char => `&#${char.codePointAt(0)};`)).join('\n');
+            await github.rest.issues.createComment({
+              owner, repo, issue_number,
+              body: `${marker}\nPlease split this PR: land the engine change first. `
+                + 'The UI change should follow in a separate PR once the engine is released '
+                + 'and the pin (engine/release.pin) is updated.\n\n'
+                + `Engine files:\n${list(engine)}\n\nUI files:\n${list(ui)}`
+            });
