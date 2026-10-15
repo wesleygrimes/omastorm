@@ -60,7 +60,7 @@ def setup(args):
     import shutil
     missing = [name for name in required if not shutil.which(name)]
     if missing:
-        raise RuntimeError('Missing desktop packages: ' + ', '.join(missing) + '. Install explicitly with omarchy pkg add; setup never elevates privileges.')
+        raise RuntimeError('Missing desktop packages: ' + ', '.join(missing) + '. Provide these prerequisites separately; setup never elevates privileges.')
     run('bash', ROOT / 'scripts/extract-fixtures.sh')
     if args.profile in ('desktop', 'engine'):
         run('bash', ROOT / 'scripts/cargo.sh', 'fetch', '--locked', timeout=600)

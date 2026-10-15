@@ -81,6 +81,10 @@ expect 'A hopeless query shows nothing' '[]' "$(call matches)"
 expect 'A hopeless query counts nothing' '{"open":true,"query":"zzzq","selected":0,"total":0,"focused":true}' "$(call status)"
 call close
 expect 'Close clears the picker' '{"open":false,"query":"","selected":0,"total":0,"focused":false}' "$(call status)"
+long_query=$(printf 'x%.0s' {1..300})
+call open "$long_query"
+expect 'Picker caps programmatic queries' 256 "$(call status | jq '.query | length')"
+call close
 call open ok
 call move 1; call move 5
 expect 'Down stops at the last of four rows' '3' "$(call status | grep -o '"selected":[0-9]*' | cut -d: -f2)"

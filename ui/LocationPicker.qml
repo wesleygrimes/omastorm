@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import Quickshell.Io
 import "Location.js" as Location
 import "Sites.js" as Sites
 
@@ -32,6 +33,8 @@ Item {
     property string pendingQuery: ""
     property string settledQuery: ""
     readonly property int limit: 4
+    readonly property int queryLimit: 256
+    property bool pastePending: false
     readonly property var coordEntry: Location.parseCoordQuery(settledQuery)
     readonly property string coordError: coordEntry && coordEntry.error ? coordEntry.error : ""
     readonly property bool metric: Qt.locale().measurementSystem === Locale.MetricSystem
@@ -87,6 +90,31 @@ Item {
         return Location.mergeSearch(siteRows, placeRows, coordEntry, settledQuery, browseSites, picker.limit, mosaicRows);
     }
     visible: open
+    onOpenChanged: {
+        if (!open) {
+            field.focus = false;
+            pastePending = false;
+            paste.running = false;
+        }
+    }
+    function pasteQuery(primary) {
+        if (!open || !manual || !field.activeFocus || paste.running) return;
+        pastePending = true;
+        // Stream outside Qt: bound bytes before StdioCollector and impose one
+        // deadline on the entire pipeline, including a stalled clipboard owner.
+        paste.command = ["timeout", "--kill-after=0.1s", "1s", "sh", "-c",
+            "wl-paste --no-newline --type text" + (primary ? " --primary" : "") + " 2>/dev/null | head -c 4096"];
+        paste.running = true;
+    }
+    Process {
+        id: paste
+        stdout: StdioCollector { waitForEnd: true }
+        onExited: function(exitCode) {
+            if (exitCode === 0 && stdout.text && picker.pastePending && picker.open && picker.manual && field.activeFocus)
+                field.replaceSelection(String(stdout.text || "").replace(/[\r\n\t]+/g, " "));
+            picker.pastePending = false;
+        }
+    }
     function show(text, offerLocation) {
         onboarding = offerLocation === true;
         browseSites = offerLocation === "sites";
@@ -97,7 +125,7 @@ Item {
         placeResults = [];
         pendingQuery = "";
         open = true;
-        Qt.callLater(() => { if (manual) { field.cursorPosition = field.length; field.forceActiveFocus(); } });
+        Qt.callLater(() => { if (open && manual) { field.cursorPosition = field.length; field.forceActiveFocus(); } });
         applyQuery();
     }
     function close() {
@@ -225,6 +253,14 @@ Item {
                         }
                         TextInput {
                             id: field
+                            objectName: "locationQuery"
+                            enabled: picker.open && picker.manual
+                            activeFocusOnPress: enabled
+                            // Writable Qt inputs inspect foreign clipboard text on
+                            // changes. Keep the native receiver read-only even
+                            // while open; only explicit, bounded paste reads it.
+                            readOnly: true
+                            maximumLength: picker.queryLimit
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             color: picker.theme.foreground
@@ -235,12 +271,45 @@ Item {
                             leftPadding: 0; rightPadding: 0
                             cursorVisible: false
                             cursorDelegate: Item {}
+                            function replaceSelection(value) {
+                                if (!enabled) return;
+                                var start = selectionStart, end = selectionEnd;
+                                var inserted = value.slice(0, maximumLength - (length - (end - start))).replace(/[\uD800-\uDBFF]$/, "");
+                                remove(start, end);
+                                insert(start, inserted);
+                                cursorPosition = start + inserted.length;
+                            }
                             Keys.onPressed: event => {
-                                if (event.key === Qt.Key_Escape) { picker.close(); event.accepted = true; }
+                                if (!field.enabled) return;
+                                if (event.matches(StandardKey.Paste)) { picker.pasteQuery(false); event.accepted = true; }
+                                else if (event.matches(StandardKey.Cut)) { field.copy(); field.replaceSelection(""); event.accepted = true; }
+                                else if (event.key === Qt.Key_Escape) { picker.close(); event.accepted = true; }
                                 else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { picker.accept(); event.accepted = true; }
                                 else if (event.key === Qt.Key_Up) { picker.move(-1); event.accepted = true; }
                                 else if (event.key === Qt.Key_Down) { picker.move(1); event.accepted = true; }
                                 else if (event.key === Qt.Key_U && event.modifiers === Qt.ControlModifier) { field.text = ""; event.accepted = true; }
+                                else if (event.key === Qt.Key_Backspace || event.key === Qt.Key_Delete) {
+                                    if (field.selectionStart === field.selectionEnd) {
+                                        var pos = field.cursorPosition;
+                                        if (event.key === Qt.Key_Backspace && pos > 0)
+                                            field.select(pos - (/[\uD800-\uDBFF][\uDC00-\uDFFF]$/.test(field.text.slice(0, pos)) ? 2 : 1), pos);
+                                        else if (event.key === Qt.Key_Delete && pos < field.length)
+                                            field.select(pos, pos + (/^[\uD800-\uDBFF][\uDC00-\uDFFF]/.test(field.text.slice(pos)) ? 2 : 1));
+                                    }
+                                    field.replaceSelection("");
+                                    event.accepted = true;
+                                } else if (event.text && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier)) && !/[\x00-\x1f\x7f]/.test(event.text)) {
+                                    field.replaceSelection(event.text);
+                                    event.accepted = true;
+                                }
+                            }
+                            MouseArea {
+                                anchors.fill: parent
+                                acceptedButtons: Qt.MiddleButton
+                                onClicked: {
+                                    field.forceActiveFocus();
+                                    picker.pasteQuery(true);
+                                }
                             }
                             Rectangle {
                                 width: 7; height: 15
