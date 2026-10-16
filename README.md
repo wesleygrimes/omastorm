@@ -143,8 +143,8 @@ and how they are selected; see [configuration](docs/configuration.md#display-and
 
 `/` (or `s`) is one field. Type a city, a radar site or mosaic name, or paste coordinates.
 Search accepts up to 256 characters. Keyboard and middle-click paste use
-`wl-paste` (wl-clipboard), with a bounded read and a two-second deadline.
-A failed or oversized paste leaves the query unchanged and names the error.
+`wl-paste` from wl-clipboard. Failed, oversized, or timed-out pastes leave
+the query unchanged and show an error.
 
 A **city** centres the map there, unlocks, and selects a covering source. Type
 a region or country qualifier when needed, such as `London, UK`.

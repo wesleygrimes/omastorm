@@ -91,7 +91,7 @@ Item {
     }
     visible: open
     function show(text, offerLocation) {
-        clipboardReader.pending = false;
+        clipboardReader.selection = null;
         pasteError = "";
         onboarding = offerLocation === true;
         browseSites = offerLocation === "sites";
@@ -106,7 +106,7 @@ Item {
         applyQuery();
     }
     function close() {
-        clipboardReader.pending = false;
+        clipboardReader.selection = null;
         pasteError = "";
         settle.stop();
         open = false;
@@ -128,14 +128,9 @@ Item {
     function paste(primary) {
         if (!open || !manual || !field.activeFocus || clipboardReader.running) return;
         pasteError = "";
-        clipboardReader.beforeText = field.text;
-        clipboardReader.beforeCursor = field.cursorPosition;
-        clipboardReader.beforeStart = field.selectionStart;
-        clipboardReader.beforeEnd = field.selectionEnd;
-        clipboardReader.pending = true;
-        // Bound bytes before Qt (4 UTF-8 bytes per query unit + overflow).
-        // timeout owns the reader, so its deadline survives the shell being
-        // stopped on reload. Never interpolate clipboard contents here.
+        clipboardReader.selection = {start: field.selectionStart, end: field.selectionEnd};
+        // Allow four UTF-8 bytes per query unit, plus an overflow byte.
+        // Keep timeout in the pipeline so it survives a shell reload.
         clipboardReader.command = ["bash", "-o", "pipefail", "-c",
             "timeout --kill-after=0.1s 2s wl-paste --no-newline --type text \"$@\" 2>/dev/null | head -c 1025", "omastorm-paste"]
             .concat(primary ? ["--primary"] : []);
@@ -143,31 +138,26 @@ Item {
     }
     Process {
         id: clipboardReader
-        property bool pending: false
-        property string beforeText: ""
-        property int beforeCursor: 0
-        property int beforeStart: 0
-        property int beforeEnd: 0
+        property var selection: null
         stdout: StdioCollector { waitForEnd: true }
         onExited: (exitCode, exitStatus) => {
-            var current = pending && picker.open && picker.manual && field.activeFocus
-                && field.text === beforeText && field.cursorPosition === beforeCursor
-                && field.selectionStart === beforeStart && field.selectionEnd === beforeEnd;
-            pending = false;
-            if (!current) return;
+            var range = selection;
+            selection = null;
+            if (!range || !picker.open || !picker.manual || !field.activeFocus
+                || field.selectionStart !== range.start || field.selectionEnd !== range.end) return;
             if (exitCode !== 0 || exitStatus !== 0) {
                 picker.pasteError = "PASTE FAILED";
                 return;
             }
-            var text = String(stdout.text || "").replace(/[\r\n]/g, " ");
+            var text = stdout.text.replace(/[\r\n]/g, " ");
             if (!text) return;
-            if (field.length - (beforeEnd - beforeStart) + text.length > picker.queryLimit) {
+            if (field.length - (range.end - range.start) + text.length > picker.queryLimit) {
                 picker.pasteError = "PASTE TOO LONG";
                 return;
             }
-            field.remove(beforeStart, beforeEnd);
-            field.insert(beforeStart, text);
-            field.cursorPosition = beforeStart + text.length;
+            field.remove(range.start, range.end);
+            field.insert(range.start, text);
+            field.cursorPosition = range.start + text.length;
         }
     }
     function go(lat, lon, name) {
@@ -194,7 +184,7 @@ Item {
         engine.send(cmd);
     }
     onQueryChanged: {
-        clipboardReader.pending = false;
+        clipboardReader.selection = null;
         pasteError = "";
         selected = 0;
         if (!String(query).trim()) applyQuery();
@@ -279,8 +269,7 @@ Item {
                         }
                         TextInput {
                             id: field
-                            // Visibility/enabled alone do not stop Qt's
-                            // clipboard-change receiver; readOnly does.
+                            // Qt checks readOnly even when the field is hidden.
                             readOnly: !picker.open || !picker.manual
                             enabled: picker.open && picker.manual
                             maximumLength: picker.queryLimit
@@ -302,8 +291,7 @@ Item {
                                 else if (event.key === Qt.Key_Down) { picker.move(1); event.accepted = true; }
                                 else if (event.key === Qt.Key_U && event.modifiers === Qt.ControlModifier) { field.text = ""; event.accepted = true; }
                             }
-                            // Native middle-click paste also reads the whole
-                            // selection before maximumLength is applied.
+                            // Bound middle-click paste before Qt reads it.
                             MouseArea {
                                 anchors.fill: parent
                                 acceptedButtons: Qt.MiddleButton

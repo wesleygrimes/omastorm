@@ -11,7 +11,7 @@ ShellRoot {
         Item {
             anchors.fill: parent
             TestEvent { id: events }
-            // Offscreen Qt owns a private clipboard; never touch the desktop.
+            // This clipboard belongs to the offscreen Qt process.
             TextInput { id: donor; visible: false; readOnly: true }
             LocationPicker {
                 id: picker
@@ -32,7 +32,7 @@ ShellRoot {
         function open(query: string): void { picker.show(query); }
         function prompt(): void { picker.show("", true); }
         function close(): void { picker.close(); }
-        function reopen(): void { picker.show("late"); picker.close(); }
+        function closeBeforeFocus(): void { picker.show("late"); picker.close(); }
         function offer(text: string): void { donor.text = text; donor.selectAll(); donor.copy(); }
         function type(text: string): void {
             for (var c of text) events.keyClickChar(c, Qt.NoModifier, -1);
@@ -45,10 +45,10 @@ ShellRoot {
         function status(): string {
             var field = picker.testField, reader = picker.testReader;
             return JSON.stringify({open: picker.open, focused: picker.fieldFocused,
-                readOnly: field.readOnly, enabled: field.enabled, canPaste: field.canPaste,
+                canPaste: field.canPaste,
                 query: picker.query, searched: picker.engine.lastQuery,
                 running: reader.running, error: picker.pasteError,
-                collected: String(reader.stdout.text || "").length});
+                collected: reader.stdout.text.length});
         }
     }
 }

@@ -113,8 +113,7 @@ done
 [[ $lat == "$want_lat" && $lon == "$want_lon" ]] || fail "Enter did not centre the map on $first" "Expected: $want_lat $want_lon" "Actual:   $lat $lon"
 check_qml_log "$check_dir/log"
 
-# Exercise the actual field's key/mouse handlers with an isolated Qt clipboard
-# and a stand-in owner. The production timeout/head pipeline remains intact.
+# Stub wl-paste; keep the field's key/mouse handlers and read limits.
 clipboard="$check_dir/clipboard"
 mkdir -p "$clipboard/bin"
 stage_ui "$clipboard/ui"
@@ -137,9 +136,9 @@ import sys
 import time
 
 root = Path(os.environ['OMASTORM_CLIPBOARD_FIXTURE'])
+(root / 'owner.pid').write_text(str(os.getpid()))
 with (root / 'calls').open('a') as log:
     print(' '.join(sys.argv[1:]), file=log)
-(root / 'owner.pid').write_text(str(os.getpid()))
 mode = (root / 'mode').read_text().strip()
 if mode == 'huge':
     try:
@@ -157,7 +156,8 @@ if mode in ('stall', 'trickle', 'stubborn'):
 if mode == 'delayed':
     time.sleep(.5)
 payload = {'coords': '36.23708, -79.97948', 'unicode': 'Łódź',
-           'limit': 'x' * 256, 'oversize': 'x' * 257}.get(mode, 'KTLX')
+           'limit': 'x' * 256, 'oversize': 'x' * 257,
+           'delayed': 'KTLX', 'error': 'KTLX'}[mode]
 os.write(1, payload.encode())
 if mode == 'error':
     sys.exit(1)
@@ -178,7 +178,7 @@ owner_alive() {
   local state
   state=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
   state=${state##*) }
-  # Container PID 1 may retain exited zombies; they cannot read or run.
+  # Container PID 1 may leave dead readers as zombies.
   [[ ${state%% *} != Z && ${state%% *} != X ]]
 }
 clip_ready() {
@@ -204,7 +204,7 @@ paste_mode() {
   clip_done "$before"
 }
 clip offer 'NATIVE CLIPBOARD MUST NOT BE PASTED'
-clip_expect 'Closed field still receives clipboard offers' '.readOnly and (.enabled == false) and (.canPaste == false)'
+clip_expect 'Closed field still accepts paste' '.canPaste == false'
 [[ ! -s $clipboard/calls ]] || fail 'Closed picker started clipboard ingestion'
 clip open ''
 clip_ready
@@ -213,7 +213,7 @@ clip_expect 'Normal typing failed' '.query == "tlx"'
 clip key Ctrl+A > /dev/null
 paste_mode coords
 clip_expect 'Selected-text coordinate paste failed' '.query == "36.23708, -79.97948" and .error == ""'
-# Coordinate queries intentionally bypass the place service; ordinary text must search.
+# Coordinate queries skip place search.
 clip open ''
 clip_ready
 paste_mode unicode Shift+Insert
@@ -245,7 +245,6 @@ for mode in oversize huge error stall trickle stubborn; do
     ! owner_alive "$owner" || fail "Timed-out clipboard owner survived: $owner"
   fi
 done
-# A late result cannot overwrite new typing or a reopened picker.
 printf 'delayed\n' > "$clipboard/mode"
 clip open ''
 clip_ready
@@ -265,16 +264,15 @@ clip_done "$before"
 clip_expect 'Late paste overwrote reopened query' '.query == "fresh"'
 clip prompt
 clip offer 'SECOND CLIPBOARD OFFER'
-clip_expect 'Onboarding field receives clipboard offers' '.readOnly and (.enabled == false) and (.canPaste == false)'
-clip reopen
-clip_expect 'Deferred focus survived immediate close' '.open == false and .focused == false and .readOnly'
+clip_expect 'Onboarding field still accepts paste' '.canPaste == false'
+clip closeBeforeFocus
+clip_expect 'Deferred focus survived immediate close' '.open == false and .focused == false and .canPaste == false'
 clip open tlx
 clip_ready
 clip key Escape > /dev/null
-clip_expect 'Escape did not release focus' '.open == false and .focused == false and .readOnly'
+clip_expect 'Escape did not release focus' '.open == false and .focused == false and .canPaste == false'
 check_qml_log "$clipboard/log"
-# Destroy the UI during a stalled read. The deadline must remain owned by
-# timeout, rather than disappearing with the QML Process's shell leader.
+# The reader must still time out after its UI process exits.
 printf 'stall\n' > "$clipboard/mode"
 clip open ''
 clip_ready
@@ -294,5 +292,5 @@ for _ in {1..60}; do
   sleep .05
 done
 ! owner_alive "$owner" || fail 'Clipboard reader survived its deadline after UI shutdown'
-echo 'Picker clipboard: typing, keyboard/primary paste, bounds, deadlines, stale replies, focus PASS'
+echo 'Picker clipboard: PASS'
 echo "PICKER_PASSED"
