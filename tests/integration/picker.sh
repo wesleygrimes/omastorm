@@ -112,4 +112,177 @@ for _ in {1..50}; do
 done
 [[ $lat == "$want_lat" && $lon == "$want_lon" ]] || fail "Enter did not centre the map on $first" "Expected: $want_lat $want_lon" "Actual:   $lat $lon"
 check_qml_log "$check_dir/log"
+
+# Exercise the actual field's key/mouse handlers with an isolated Qt clipboard
+# and a stand-in owner. The production timeout/head pipeline remains intact.
+clipboard="$check_dir/clipboard"
+mkdir -p "$clipboard/bin"
+stage_ui "$clipboard/ui"
+python3 - "$clipboard/ui/LocationPicker.qml" <<'PY'
+from pathlib import Path
+import sys
+path = Path(sys.argv[1])
+text = path.read_text()
+anchor = '    id: picker\n'
+assert anchor in text
+path.write_text(text.replace(anchor, anchor + '    property alias testField: field\n    property alias testReader: clipboardReader\n', 1))
+PY
+cp tests/harnesses/picker-clipboard.qml "$clipboard/ui/Test.qml"
+cat > "$clipboard/bin/wl-paste" <<'PY'
+#!/usr/bin/env python3
+import os
+from pathlib import Path
+import sys
+import time
+
+root = Path(os.environ['OMASTORM_CLIPBOARD_FIXTURE'])
+with (root / 'calls').open('a') as log:
+    print(' '.join(sys.argv[1:]), file=log)
+(root / 'owner.pid').write_text(str(os.getpid()))
+mode = (root / 'mode').read_text().strip()
+if mode == 'huge':
+    try:
+        while True:
+            os.write(1, b'x' * 4096)
+    except BrokenPipeError:
+        sys.exit(1)
+if mode in ('stall', 'trickle'):
+    while True:
+        if mode == 'trickle':
+            os.write(1, b'x')
+        time.sleep(.2)
+if mode == 'delayed':
+    time.sleep(.5)
+payload = {'coords': '36.23708, -79.97948', 'unicode': 'Łódź',
+           'limit': 'x' * 256, 'oversize': 'x' * 257}.get(mode, 'KTLX')
+os.write(1, payload.encode())
+if mode == 'error':
+    sys.exit(1)
+PY
+chmod +x "$clipboard/bin/wl-paste"
+: > "$clipboard/calls"
+printf 'coords\n' > "$clipboard/mode"
+OMASTORM_CLIPBOARD_FIXTURE="$clipboard" PATH="$clipboard/bin:$PATH" \
+  quickshell --no-color -p "$clipboard/ui/Test.qml" > "$clipboard/log" 2>&1 &
+clipboard_pid=$!
+trap 'kill "$clipboard_pid" "$pid" 2>/dev/null || true; wait "$clipboard_pid" "$pid" 2>/dev/null || true' EXIT
+clip() { quickshell ipc --pid "$clipboard_pid" call clipboardTest "$@"; }
+fail_log="$clipboard/log"
+for _ in {1..100}; do clip status > /dev/null 2>&1 && break; sleep .1; done
+clip status > /dev/null || fail 'Clipboard harness did not start'
+clip_expect() { local state; state=$(clip status); jq -e "$2" <<< "$state" > /dev/null || fail "$1: $state"; }
+clip_ready() {
+  for _ in {1..50}; do
+    [[ $(clip status | jq -r .focused) == true ]] && return
+    sleep .05
+  done
+  fail 'Picker did not receive focus'
+}
+clip_done() {
+  local before=$1 state
+  for _ in {1..100}; do
+    state=$(clip status)
+    if [[ $(wc -l < "$clipboard/calls") -gt $before ]] && jq -e '.running == false' <<< "$state" > /dev/null; then return; fi
+    sleep .05
+  done
+  fail "Bounded paste did not finish: $state"
+}
+paste_mode() {
+  printf '%s\n' "$1" > "$clipboard/mode"
+  local before; before=$(wc -l < "$clipboard/calls")
+  clip key "${2:-Ctrl+V}" > /dev/null
+  clip_done "$before"
+}
+clip offer 'NATIVE CLIPBOARD MUST NOT BE PASTED'
+clip_expect 'Closed field still receives clipboard offers' '.readOnly and (.enabled == false) and (.canPaste == false)'
+[[ ! -s $clipboard/calls ]] || fail 'Closed picker started clipboard ingestion'
+clip open ''
+clip_ready
+clip type tlx
+clip_expect 'Normal typing failed' '.query == "tlx"'
+clip key Ctrl+A > /dev/null
+paste_mode coords
+clip_expect 'Selected-text coordinate paste failed' '.query == "36.23708, -79.97948" and .error == ""'
+# Coordinate queries intentionally bypass the place service; ordinary text must search.
+clip open ''
+clip_ready
+paste_mode unicode Shift+Insert
+for _ in {1..30}; do
+  [[ $(clip status | jq -r .searched) == 'Łódź' ]] && break
+  sleep .05
+done
+clip_expect 'Shift+Insert/Unicode search failed' '.query == "Łódź" and .searched == "Łódź"'
+clip open ''
+clip_ready
+printf 'coords\n' > "$clipboard/mode"
+before=$(wc -l < "$clipboard/calls")
+clip middle > /dev/null
+clip_done "$before"
+clip_expect 'Middle-click paste failed' '.query == "36.23708, -79.97948"'
+tail -1 "$clipboard/calls" | rg -q -- '--primary' || fail 'Middle-click did not use primary selection'
+clip open ''
+clip_ready
+paste_mode limit
+clip type z
+clip_expect 'Query length limit failed' '(.query | length) == 256 and .error == ""'
+for mode in oversize huge error stall trickle; do
+  clip open keep
+  clip_ready
+  paste_mode "$mode"
+  clip_expect "Unsafe $mode paste changed the query or exceeded its read cap" '.query == "keep" and .error != "" and .collected <= 1025'
+  if [[ $mode == stall || $mode == trickle ]]; then
+    owner=$(cat "$clipboard/owner.pid")
+    [[ ! -d /proc/$owner ]] || fail "Timed-out clipboard owner survived: $owner"
+  fi
+done
+# A late result cannot overwrite new typing or a reopened picker.
+printf 'delayed\n' > "$clipboard/mode"
+clip open ''
+clip_ready
+before=$(wc -l < "$clipboard/calls")
+clip key Ctrl+V > /dev/null
+clip type x
+clip_done "$before"
+clip_expect 'Late paste overwrote typing' '.query == "x"'
+clip open ''
+clip_ready
+before=$(wc -l < "$clipboard/calls")
+clip key Ctrl+V > /dev/null
+clip close
+clip open fresh
+clip_ready
+clip_done "$before"
+clip_expect 'Late paste overwrote reopened query' '.query == "fresh"'
+clip prompt
+clip offer 'SECOND CLIPBOARD OFFER'
+clip_expect 'Onboarding field receives clipboard offers' '.readOnly and (.enabled == false) and (.canPaste == false)'
+clip reopen
+clip_expect 'Deferred focus survived immediate close' '.open == false and .focused == false and .readOnly'
+clip open tlx
+clip_ready
+clip key Escape > /dev/null
+clip_expect 'Escape did not release focus' '.open == false and .focused == false and .readOnly'
+check_qml_log "$clipboard/log"
+# Destroy the UI during a stalled read. The deadline must remain owned by
+# timeout, rather than disappearing with the QML Process's shell leader.
+printf 'stall\n' > "$clipboard/mode"
+clip open ''
+clip_ready
+before=$(wc -l < "$clipboard/calls")
+clip key Ctrl+V > /dev/null
+for _ in {1..50}; do
+  [[ $(wc -l < "$clipboard/calls") -gt $before ]] && break
+  sleep .05
+done
+[[ $(wc -l < "$clipboard/calls") -gt $before ]] || fail 'Stalled clipboard owner did not start'
+owner=$(cat "$clipboard/owner.pid")
+[[ -d /proc/$owner ]] || fail 'Stalled owner exited before UI shutdown'
+kill "$clipboard_pid"
+wait "$clipboard_pid" 2>/dev/null || true
+for _ in {1..60}; do
+  [[ ! -d /proc/$owner ]] && break
+  sleep .05
+done
+[[ ! -d /proc/$owner ]] || fail 'Clipboard reader survived its deadline after UI shutdown'
+echo 'Picker clipboard: typing, keyboard/primary paste, bounds, deadlines, stale replies, focus PASS'
 echo "PICKER_PASSED"

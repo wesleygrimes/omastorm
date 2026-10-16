@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Layouts
+import Quickshell.Io
 import "Location.js" as Location
 import "Sites.js" as Sites
 
@@ -32,6 +33,8 @@ Item {
     property string pendingQuery: ""
     property string settledQuery: ""
     readonly property int limit: 4
+    readonly property int queryLimit: 256
+    property string pasteError: ""
     readonly property var coordEntry: Location.parseCoordQuery(settledQuery)
     readonly property string coordError: coordEntry && coordEntry.error ? coordEntry.error : ""
     readonly property bool metric: Qt.locale().measurementSystem === Locale.MetricSystem
@@ -88,6 +91,8 @@ Item {
     }
     visible: open
     function show(text, offerLocation) {
+        clipboardReader.pending = false;
+        pasteError = "";
         onboarding = offerLocation === true;
         browseSites = offerLocation === "sites";
         manual = !onboarding;
@@ -97,10 +102,12 @@ Item {
         placeResults = [];
         pendingQuery = "";
         open = true;
-        Qt.callLater(() => { if (manual) { field.cursorPosition = field.length; field.forceActiveFocus(); } });
+        Qt.callLater(() => { if (picker.open && manual) { field.cursorPosition = field.length; field.forceActiveFocus(); } });
         applyQuery();
     }
     function close() {
+        clipboardReader.pending = false;
+        pasteError = "";
         settle.stop();
         open = false;
         field.text = "";
@@ -118,6 +125,51 @@ Item {
         chosen(row);
     }
     function move(delta) { selected = Math.max(0, Math.min(rows.length - 1, selected + delta)); }
+    function paste(primary) {
+        if (!open || !manual || !field.activeFocus || clipboardReader.running) return;
+        pasteError = "";
+        clipboardReader.beforeText = field.text;
+        clipboardReader.beforeCursor = field.cursorPosition;
+        clipboardReader.beforeStart = field.selectionStart;
+        clipboardReader.beforeEnd = field.selectionEnd;
+        clipboardReader.pending = true;
+        // Bound bytes before Qt (4 UTF-8 bytes per query unit + overflow).
+        // timeout owns the reader, so its deadline survives the shell being
+        // stopped on reload. Never interpolate clipboard contents here.
+        clipboardReader.command = ["bash", "-o", "pipefail", "-c",
+            "timeout --signal=KILL 2s wl-paste --no-newline --type text \"$@\" 2>/dev/null | head -c 1025", "omastorm-paste"]
+            .concat(primary ? ["--primary"] : []);
+        clipboardReader.running = true;
+    }
+    Process {
+        id: clipboardReader
+        property bool pending: false
+        property string beforeText: ""
+        property int beforeCursor: 0
+        property int beforeStart: 0
+        property int beforeEnd: 0
+        stdout: StdioCollector { waitForEnd: true }
+        onExited: (exitCode, exitStatus) => {
+            var current = pending && picker.open && picker.manual && field.activeFocus
+                && field.text === beforeText && field.cursorPosition === beforeCursor
+                && field.selectionStart === beforeStart && field.selectionEnd === beforeEnd;
+            pending = false;
+            if (!current) return;
+            if (exitCode !== 0 || exitStatus !== 0) {
+                picker.pasteError = "PASTE FAILED";
+                return;
+            }
+            var text = String(stdout.text || "").replace(/[\r\n]/g, " ");
+            if (!text) return;
+            if (field.length - (beforeEnd - beforeStart) + text.length > picker.queryLimit) {
+                picker.pasteError = "PASTE TOO LONG";
+                return;
+            }
+            field.remove(beforeStart, beforeEnd);
+            field.insert(beforeStart, text);
+            field.cursorPosition = beforeStart + text.length;
+        }
+    }
     function go(lat, lon, name) {
         close();
         chosen({ kind: "place", lat: lat, lon: lon, name: name || "", label: name || "" });
@@ -142,6 +194,8 @@ Item {
         engine.send(cmd);
     }
     onQueryChanged: {
+        clipboardReader.pending = false;
+        pasteError = "";
         selected = 0;
         if (!String(query).trim()) applyQuery();
         else settle.restart();
@@ -225,6 +279,11 @@ Item {
                         }
                         TextInput {
                             id: field
+                            // Visibility/enabled alone do not stop Qt's
+                            // clipboard-change receiver; readOnly does.
+                            readOnly: !picker.open || !picker.manual
+                            enabled: picker.open && picker.manual
+                            maximumLength: picker.queryLimit
                             Layout.fillWidth: true
                             Layout.fillHeight: true
                             color: picker.theme.foreground
@@ -236,11 +295,23 @@ Item {
                             cursorVisible: false
                             cursorDelegate: Item {}
                             Keys.onPressed: event => {
-                                if (event.key === Qt.Key_Escape) { picker.close(); event.accepted = true; }
+                                if (event.matches(StandardKey.Paste)) { picker.paste(false); event.accepted = true; }
+                                else if (event.key === Qt.Key_Escape) { picker.close(); event.accepted = true; }
                                 else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { picker.accept(); event.accepted = true; }
                                 else if (event.key === Qt.Key_Up) { picker.move(-1); event.accepted = true; }
                                 else if (event.key === Qt.Key_Down) { picker.move(1); event.accepted = true; }
                                 else if (event.key === Qt.Key_U && event.modifiers === Qt.ControlModifier) { field.text = ""; event.accepted = true; }
+                            }
+                            // Native middle-click paste also reads the whole
+                            // selection before maximumLength is applied.
+                            MouseArea {
+                                anchors.fill: parent
+                                acceptedButtons: Qt.MiddleButton
+                                onClicked: mouse => {
+                                    field.forceActiveFocus();
+                                    field.cursorPosition = field.positionAt(mouse.x, mouse.y);
+                                    picker.paste(true);
+                                }
                             }
                             Rectangle {
                                 width: 7; height: 15
@@ -335,7 +406,7 @@ Item {
                     Word { text: "↵ go"; font.pixelSize: 10; opacity: .55 }
                     Word { text: "esc close"; font.pixelSize: 10; opacity: .55; visible: !picker.compact }
                     Item { Layout.fillWidth: true }
-                    Word { text: picker.rows.length ? picker.rows.length + " shown" : ""; font.pixelSize: 10; opacity: .55 }
+                    Word { text: picker.pasteError || (picker.rows.length ? picker.rows.length + " shown" : ""); font.pixelSize: 10; opacity: .55 }
                 }
             }
         }
