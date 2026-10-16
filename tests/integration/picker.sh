@@ -132,6 +132,7 @@ cat > "$clipboard/bin/wl-paste" <<'PY'
 #!/usr/bin/env python3
 import os
 from pathlib import Path
+import signal
 import sys
 import time
 
@@ -146,7 +147,9 @@ if mode == 'huge':
             os.write(1, b'x' * 4096)
     except BrokenPipeError:
         sys.exit(1)
-if mode in ('stall', 'trickle'):
+if mode == 'stubborn':
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+if mode in ('stall', 'trickle', 'stubborn'):
     while True:
         if mode == 'trickle':
             os.write(1, b'x')
@@ -171,6 +174,13 @@ fail_log="$clipboard/log"
 for _ in {1..100}; do clip status > /dev/null 2>&1 && break; sleep .1; done
 clip status > /dev/null || fail 'Clipboard harness did not start'
 clip_expect() { local state; state=$(clip status); jq -e "$2" <<< "$state" > /dev/null || fail "$1: $state"; }
+owner_alive() {
+  local state
+  state=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+  state=${state##*) }
+  # Container PID 1 may retain exited zombies; they cannot read or run.
+  [[ ${state%% *} != Z && ${state%% *} != X ]]
+}
 clip_ready() {
   for _ in {1..50}; do
     [[ $(clip status | jq -r .focused) == true ]] && return
@@ -225,14 +235,14 @@ clip_ready
 paste_mode limit
 clip type z
 clip_expect 'Query length limit failed' '(.query | length) == 256 and .error == ""'
-for mode in oversize huge error stall trickle; do
+for mode in oversize huge error stall trickle stubborn; do
   clip open keep
   clip_ready
   paste_mode "$mode"
   clip_expect "Unsafe $mode paste changed the query or exceeded its read cap" '.query == "keep" and .error != "" and .collected <= 1025'
-  if [[ $mode == stall || $mode == trickle ]]; then
+  if [[ $mode == stall || $mode == trickle || $mode == stubborn ]]; then
     owner=$(cat "$clipboard/owner.pid")
-    [[ ! -d /proc/$owner ]] || fail "Timed-out clipboard owner survived: $owner"
+    ! owner_alive "$owner" || fail "Timed-out clipboard owner survived: $owner"
   fi
 done
 # A late result cannot overwrite new typing or a reopened picker.
@@ -276,13 +286,13 @@ for _ in {1..50}; do
 done
 [[ $(wc -l < "$clipboard/calls") -gt $before ]] || fail 'Stalled clipboard owner did not start'
 owner=$(cat "$clipboard/owner.pid")
-[[ -d /proc/$owner ]] || fail 'Stalled owner exited before UI shutdown'
+owner_alive "$owner" || fail 'Stalled owner exited before UI shutdown'
 kill "$clipboard_pid"
 wait "$clipboard_pid" 2>/dev/null || true
 for _ in {1..60}; do
-  [[ ! -d /proc/$owner ]] && break
+  ! owner_alive "$owner" && break
   sleep .05
 done
-[[ ! -d /proc/$owner ]] || fail 'Clipboard reader survived its deadline after UI shutdown'
+! owner_alive "$owner" || fail 'Clipboard reader survived its deadline after UI shutdown'
 echo 'Picker clipboard: typing, keyboard/primary paste, bounds, deadlines, stale replies, focus PASS'
 echo "PICKER_PASSED"

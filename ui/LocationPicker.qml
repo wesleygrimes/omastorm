@@ -137,7 +137,7 @@ Item {
         // timeout owns the reader, so its deadline survives the shell being
         // stopped on reload. Never interpolate clipboard contents here.
         clipboardReader.command = ["bash", "-o", "pipefail", "-c",
-            "timeout --signal=KILL 2s wl-paste --no-newline --type text \"$@\" 2>/dev/null | head -c 1025", "omastorm-paste"]
+            "timeout --kill-after=0.1s 2s wl-paste --no-newline --type text \"$@\" 2>/dev/null | head -c 1025", "omastorm-paste"]
             .concat(primary ? ["--primary"] : []);
         clipboardReader.running = true;
     }
