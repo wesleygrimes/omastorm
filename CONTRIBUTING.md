@@ -5,6 +5,8 @@ Every pull request requires an issue approved by a maintainer before the PR is
 opened. This applies to bug fixes and feature requests, including draft PRs
 and automated PRs.
 
+For vulnerabilities, follow the private reporting steps in [SECURITY.md](SECURITY.md).
+
 ## Issues
 
 For a bug, use the
