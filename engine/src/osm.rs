@@ -25,6 +25,8 @@ use std::{
 };
 use tokio::{sync::Semaphore, task::spawn_blocking};
 
+mod budget;
+
 /// `osm` starts here: about 500 m/px at 35° N, where Natural Earth's
 /// kilometre vertex spacing begins to show (DESIGN.md).
 pub const FROM_ZOOM: u32 = 7;
@@ -49,6 +51,7 @@ const TARGET: u64 = 448 << 20;
 const KEEP_VERSIONS: usize = 2;
 /// The biggest body accepted; the largest tile measured near KTLX is 132 kB.
 const MAX_BODY: usize = 4 << 20;
+const LAYERS: [&str; 5] = ["boundary", "water", "waterway", "transportation", "place"];
 /// Road stroke widths in tile pixels: a proposal for the capture review.
 const MAJOR_WIDTH: f32 = 1.5;
 const MINOR_WIDTH: f32 = 1.0;
@@ -494,6 +497,7 @@ fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
 /// primary roads A as 255 minus coverage; `place` cities, towns, and
 /// villages become labels.
 pub fn render(bytes: &[u8], key: TileKey) -> io::Result<(Vec<u8>, Vec<Label>)> {
+    budget::check(bytes)?;
     let mut boundaries = Strokes::new();
     let mut water = Strokes::new();
     let mut minor = Strokes::new();
@@ -502,11 +506,7 @@ pub fn render(bytes: &[u8], key: TileKey) -> io::Result<(Vec<u8>, Vec<Label>)> {
     if !bytes.is_empty() {
         let reader = Reader::new(bytes.to_vec()).map_err(io::Error::other)?;
         for layer in reader.get_layer_metadata().map_err(io::Error::other)? {
-            let wanted = matches!(
-                layer.name.as_str(),
-                "boundary" | "water" | "waterway" | "transportation" | "place"
-            );
-            if !wanted {
+            if !LAYERS.contains(&layer.name.as_str()) {
                 continue;
             }
             // The tile's extent (4096 by convention) maps onto 512 px.
@@ -645,6 +645,124 @@ mod tests {
     use crate::tiles::review::{DIR as REVIEW, preview};
 
     const RECORDED: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/vt");
+    const TAG_ENCODINGS: [&[u8]; 4] = [
+        &[18, 2, 0, 0],        // Packed.
+        &[16, 0, 16, 0],       // Unpacked.
+        &[18, 1, 0, 18, 1, 0], // Split across packed fields.
+        &[18, 1, 0, 16, 0],    // Mixed packed and unpacked.
+    ];
+
+    fn varint(mut value: u64, out: &mut Vec<u8>) {
+        while value >= 128 {
+            out.push(value as u8 | 128);
+            value >>= 7;
+        }
+        out.push(value as u8);
+    }
+
+    fn field(number: u8, bytes: &[u8], out: &mut Vec<u8>) {
+        varint(u64::from(number) << 3 | 2, out);
+        varint(bytes.len() as u64, out);
+        out.extend_from_slice(bytes);
+    }
+
+    fn repeated_property_tile(key: &str, value: &str, count: usize, tags: &[u8]) -> Vec<u8> {
+        let mut layer = Vec::new();
+        field(1, b"waterway", &mut layer);
+        layer.extend_from_slice(&[120, 2]); // Layer version 2.
+        field(3, key.as_bytes(), &mut layer);
+        let mut dictionary_value = Vec::new();
+        field(1, value.as_bytes(), &mut dictionary_value);
+        field(4, &dictionary_value, &mut layer);
+        let mut feature = tags.to_vec();
+        feature.extend_from_slice(&[24, 1]); // Point geometry.
+        field(4, &[9, 0, 0], &mut feature); // MoveTo (0, 0).
+        for _ in 0..count {
+            field(2, &feature, &mut layer);
+        }
+        let mut tile = Vec::new();
+        field(3, &layer, &mut tile);
+        tile
+    }
+
+    #[test]
+    fn rejects_tiles_with_excessive_shared_property_expansion() {
+        let large = "x".repeat(64 << 10);
+        for tags in TAG_ENCODINGS {
+            for (key, value) in [("unused", large.as_str()), (large.as_str(), "small")] {
+                let bytes = repeated_property_tile(key, value, 512, tags);
+                assert!(bytes.len() < MAX_BODY);
+                let result = render(&bytes, TileKey { z: 7, x: 0, y: 0 });
+                assert!(result.is_err(), "shared dictionary expansion was accepted");
+                let error = result.unwrap_err();
+                assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+                assert_eq!(
+                    error.to_string(),
+                    "vector tile properties over the size limit"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn accepts_tiles_with_bounded_shared_properties() {
+        let large = "x".repeat(64 << 10);
+        let key = TileKey { z: 7, x: 0, y: 0 };
+        let blank = render(&[], key).unwrap().0;
+        for tags in TAG_ENCODINGS {
+            let bytes = repeated_property_tile("unused", &large, 128, tags);
+            let (png, labels) = render(&bytes, key).unwrap();
+            assert_eq!(png, blank);
+            assert!(labels.is_empty());
+        }
+    }
+
+    #[test]
+    fn property_expansion_budget_is_shared_across_layers() {
+        let large = "x".repeat(64 << 10);
+        let layer = repeated_property_tile("unused", &large, 128, TAG_ENCODINGS[0]);
+        let mut tile = layer.clone();
+        tile.extend_from_slice(&layer);
+        assert!(tile.len() < MAX_BODY);
+        let error = render(&tile, TileKey { z: 7, x: 0, y: 0 }).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "vector tile properties over the size limit"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_property_tags() {
+        for tags in [
+            &[18, 1, 0][..],    // Missing value index.
+            &[18, 2, 0, 1][..], // Value index outside the dictionary.
+            &[18, 2, 1, 0][..], // Key index outside the dictionary.
+            &[18, 1, 128][..],  // Truncated varint.
+        ] {
+            let tile = repeated_property_tile("unused", "small", 1, tags);
+            assert!(render(&tile, TileKey { z: 7, x: 0, y: 0 }).is_err());
+        }
+    }
+
+    #[test]
+    fn rejects_oversized_cached_tile_bodies() {
+        let error = render(&vec![0; MAX_BODY + 1], TileKey { z: 7, x: 0, y: 0 }).unwrap_err();
+        assert_eq!(error.to_string(), "vector tile body over the size limit");
+    }
+
+    #[test]
+    fn unknown_protobuf_fields_preserve_rendering() {
+        let key = TileKey { z: 7, x: 0, y: 0 };
+        let mut tile = repeated_property_tile("unused", "small", 1, TAG_ENCODINGS[0]);
+        let expected = render(&tile, key).unwrap().0;
+        tile.extend_from_slice(&[
+            40, 150, 1, // Varint.
+            49, 0, 0, 0, 0, 0, 0, 0, 0, // Fixed64.
+            61, 0, 0, 0, 0, // Fixed32.
+            66, 1, 0, // Length-delimited.
+        ]);
+        assert_eq!(render(&tile, key).unwrap().0, expected);
+    }
 
     /// A loopback response, optionally held open after its last supplied byte.
     /// No public service or disk cache is involved. Holding the response open

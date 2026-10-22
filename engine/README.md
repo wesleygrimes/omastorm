@@ -150,6 +150,12 @@ URL for development. Requests use a ten-second timeout and at most four
 concurrent fetches. Transport errors, 429s, and 5xx responses trigger a
 30-second backoff; cached tiles still serve.
 
+Tile bodies are limited to 4 MiB. Before decoding fetched or cached tiles,
+`src/osm/budget.rs` checks the dictionary references in rendered layers against
+a shared 16 MiB property budget. Each tag pair counts its key bytes, encoded
+value bytes, and 256 bytes for scalar values and hash table storage. Tiles
+over either limit return a tile error before feature properties are expanded.
+
 Vector tiles persist under
 `$XDG_CACHE_HOME/omastorm/vt/<source>/<version>/<z>/<x>/<y>.pbf`.
 The two newest data versions are retained. Above 512 MB, eviction removes the
