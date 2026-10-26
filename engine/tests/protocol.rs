@@ -699,6 +699,9 @@ fn select_source_publishes_the_fixture_mosaic_and_rejects_polar_ids() {
     assert_eq!(frame["status"], "complete");
     assert!(frame.get("azimuthLut").is_none());
     assert!(frame.get("rays").is_none());
+    for key in ["scale", "offset", "measuredCode"] {
+        assert!(frame.get(key).is_none(), "fixture mosaic carries {key}");
+    }
     assert_eq!(frame["width"], 16);
     assert_eq!(frame["height"], 16);
     assert_eq!(frame["crs"]["kind"], "geographic");
@@ -783,6 +786,9 @@ fn mrms_is_explicit_and_its_lock_survives_client_reconnect_and_reselection() {
     assert_eq!(first["frame"]["kind"], "mosaic");
     assert_eq!(first["frame"]["units"], "dBZ");
     assert!(first["frame"].get("site").is_none());
+    for key in ["scale", "offset", "measuredCode"] {
+        assert!(first["frame"].get(key).is_none(), "MRMS carries {key}");
+    }
     send(&mut client, json!({"type":"lock","enabled":true}));
     state(&mut client, |s| s["navigation"]["locked"] == true);
     // Inside the MRMS box, outside NEXRAD coverage. A lock keeps MRMS here;
@@ -831,6 +837,9 @@ fn view_center_over_europe_selects_opera() {
         assert_eq!(s["frame"]["kind"], "mosaic");
         assert_eq!(s["frame"]["id"], "opera-loading");
         assert_eq!(s["frame"]["scanTime"], "");
+        for key in ["scale", "offset", "measuredCode"] {
+            assert!(s["frame"].get(key).is_none(), "OPERA loading carries {key}");
+        }
         assert_eq!(s["timeline"], json!([]));
     }
 }

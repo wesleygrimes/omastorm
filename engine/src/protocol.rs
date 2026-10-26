@@ -458,6 +458,18 @@ pub struct MosaicFrame {
     pub geotransform: [f64; 6],
     pub palette: Vec<String>,
     pub bounds: Vec<f64>,
+    /// The texture's B-channel encoding, when the adapter preserves measured
+    /// codes there. Not polar `scale` / `offset`: clients take those as the
+    /// weak-return floor being in force, and the grid path does not apply it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub measured_code: Option<MeasuredCode>,
+}
+
+/// Measured value = (code - offset) / scale, in the frame's `units`.
+#[derive(Serialize, Deserialize, PartialEq, Clone, Copy, Debug)]
+pub struct MeasuredCode {
+    pub scale: f32,
+    pub offset: f32,
 }
 
 /// Tagged CRS: WGS84 lon/lat in, east-then-north x/y out (`docs/grid-adapters.md`).
