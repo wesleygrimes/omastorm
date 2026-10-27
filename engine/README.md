@@ -159,6 +159,12 @@ Tile bodies are limited to 4 MiB. Before decoding fetched or cached tiles,
 a shared 16 MiB property budget. Each tag pair counts its key bytes, encoded
 value bytes, and 256 bytes for scalar values and hash table storage. Tiles
 over either limit return a tile error before feature properties are expanded.
+Geometry checks share tile-wide caps of 16,384 parts and 262,144 coordinates.
+Each decoded layer may reserve up to 4 GiB of coordinate address space, counting
+retained line capacity and transient polygon ring buffers before decoding.
+Most reserved pages are untouched; the coordinate and part caps bound populated
+geometry separately. Polygon reservations are conservatively counted together
+within each feature, while only its coordinate clones carry into the next.
 
 Vector tiles persist under
 `$XDG_CACHE_HOME/omastorm/vt/<source>/<version>/<z>/<x>/<y>.pbf`.

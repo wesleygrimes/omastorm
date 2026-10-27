@@ -782,23 +782,34 @@ mod tests {
 
     #[test]
     fn geometry_reservations_are_bounded_across_features_and_layers() {
-        // Parts and coordinates are modest; full-length line buffers exceed 64 MiB.
-        let mut bytes = short_lines_tile(1_200);
+        // Parts and coordinates are modest; retained line buffers exceed 4 GiB.
+        let mut bytes = short_lines_tile(10_000);
         assert!(budget::check(&bytes).is_err());
-        // Each feature is safe alone. Their retained buffers add up per tile.
-        bytes = short_lines_tile(850);
+        // Layers decode independently, even when their names are identical.
+        bytes = short_lines_tile(7_000);
         budget::check(&bytes).unwrap();
         bytes.extend_from_within(..);
+        budget::check(&bytes).unwrap();
+        // The parts cap still applies across layers.
+        bytes.extend_from_within(..);
         assert!(budget::check(&bytes).is_err());
-        let geometry = packed_geometry(&[9, 0, 0, 10, 2, 2].repeat(850));
+        // Within a layer, retained line capacities accumulate across features.
+        let geometry = packed_geometry(&[9, 0, 0, 10, 2, 2].repeat(7_000));
         assert!(budget::check(&geometry_tile("waterway", 2, &geometry, 2)).is_err());
-        // Every closed ring allocates another full-length buffer, even after
-        // the last ring. 965 * 9 * 966 slots just exceeds the reservation cap.
-        for rings in [964, 965] {
-            let geometry = packed_geometry(&[9, 0, 0, 18, 2, 0, 0, 2, 15].repeat(rings));
-            let bytes = geometry_tile("water", 3, &geometry, 1);
-            assert_eq!(budget::check(&bytes).is_ok(), rings == 964);
+        // Ring reservations are transient across features, including the spare
+        // buffer and clones. The conservative per-feature estimate crosses 4 GiB.
+        for ring in [
+            [9, 0, 0, 18, 2, 0, 0, 2, 15], // Separate exteriors.
+            [9, 0, 0, 18, 0, 2, 2, 0, 15], // Rings retained until the feature ends.
+        ] {
+            for rings in [7_722, 7_723] {
+                let geometry = packed_geometry(&ring.repeat(rings));
+                let bytes = geometry_tile("water", 3, &geometry, 1);
+                assert_eq!(budget::check(&bytes).is_ok(), rings == 7_722);
+            }
         }
+        let rings = packed_geometry(&[9, 0, 0, 18, 2, 0, 0, 2, 15].repeat(7_000));
+        budget::check(&geometry_tile("water", 3, &rings, 2)).unwrap();
         // Unselected layers never reach get_features().
         budget::check(&geometry_tile("building", 2, &geometry, 2)).unwrap();
     }
@@ -1043,7 +1054,7 @@ mod tests {
                     std::thread::current().id()
                 ));
                 let _ = fs::remove_dir_all(&dir);
-                let bad = short_lines_tile(1_200);
+                let bad = short_lines_tile(10_000);
                 let good = fs::read(format!("{RECORDED}/7-29-50.pbf")).unwrap();
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let url = format!(
@@ -1180,7 +1191,7 @@ mod tests {
                 let path = dir.join("test/7/0/0.pbf");
                 let key = TileKey { z: 7, x: 0, y: 0 };
                 for bad in [
-                    short_lines_tile(1_200),
+                    short_lines_tile(10_000),
                     repeated_property_tile("unused", &"x".repeat(64 << 10), 512, TAG_ENCODINGS[0]),
                 ] {
                     write(&path, &bad).unwrap();
@@ -1339,6 +1350,26 @@ mod tests {
             c.partial_minor += usize::from(p[2] > 0 && p[2] < 255);
         }
         c
+    }
+
+    #[test]
+    fn dense_recorded_tile_passes_geometry_budget() {
+        // This tile exceeded the former tile-wide 8,388,608-slot cap.
+        let bytes = fs::read(format!("{RECORDED}/11-481-846.pbf")).unwrap();
+        budget::check(&bytes).unwrap();
+        let (png, _) = render(
+            &bytes,
+            TileKey {
+                z: 11,
+                x: 481,
+                y: 846,
+            },
+        )
+        .unwrap();
+        let pixels = decode(&png);
+        let coverage = count(&pixels);
+        assert!(coverage.g > 0);
+        assert!(coverage.major > 0);
     }
 
     #[test]

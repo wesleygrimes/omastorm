@@ -5,12 +5,15 @@ use std::io;
 const MAX_PROPERTIES: usize = 16 << 20;
 // Allow for scalar values and hash table storage as well as string contents.
 const PROPERTY_OVERHEAD: usize = 256;
-// The recorded z7/z11 tiles peak at 773 parts, 16,754 coordinates and 815,276
-// reserved coordinate slots. Leave at least 10x headroom, with 64 MiB of f32
-// coordinate reservations per tile, including mvt-reader 2.5.0's spare ring.
+// Across 72 dense OpenFreeMap z7-z14 tiles, peaks were 10,796 parts, 47,373
+// coordinates and 218,098,502 estimated live coordinate slots. A counting
+// allocator measured 1,746,677,821 peak live requested bytes with mvt-reader
+// 2.5.0, including reader/properties. Allow 4 GiB of f32 coordinate reservations
+// per layer (over 2.4x headroom). These mostly untouched reservations are address
+// space, not RSS; parts and coordinates separately bound the populated data.
 const MAX_PARTS: usize = 16_384;
 const MAX_COORDINATES: usize = 262_144;
-const MAX_RESERVED: usize = 8 << 20;
+const MAX_RESERVED: usize = 512 << 20;
 
 struct GeometryBudget {
     parts: usize,
@@ -33,6 +36,8 @@ pub(super) fn check(mut tile: &[u8]) -> io::Result<()> {
     };
     while !tile.is_empty() {
         if let (3, 2, layer) = field(&mut tile)? {
+            // render() drops the previous layer's features before decoding this one.
+            geometry.reserved = MAX_RESERVED;
             check_layer(layer, &mut remaining, &mut geometry)?;
         }
     }
@@ -115,6 +120,7 @@ fn check_geometry(mut feature: &[u8], kind: u32, budget: &mut GeometryBudget) ->
     let mut parts = 0usize;
     let mut points = 0usize;
     let mut parameters = 0usize;
+    let coordinates_before = budget.coordinates;
     let mut word = |value: u64| -> io::Result<()> {
         words += 1;
         if parameters != 0 {
@@ -176,17 +182,28 @@ fn check_geometry(mut feature: &[u8], kind: u32, budget: &mut GeometryBudget) ->
     if parameters != 0 || parts == 0 || (kind == 2 && points < 2) || (kind == 3 && points != 0) {
         return Err(invalid_geometry());
     }
-    // 2.5.0 reserves geometry_data.len() for every line and every closed ring,
-    // plus one fresh buffer after the final ring. Points use one buffer.
-    let buffers = match kind {
-        1 => 1,
-        2 => parts,
-        _ => parts + 1,
+    let coordinates = coordinates_before - budget.coordinates;
+    // Lines keep every full-length buffer. Points keep only their coordinates.
+    // Polygons keep length-sized clones; reserved rings and the spare buffer
+    // die before the next feature. Conservatively count all rings in a feature
+    // together, plus a temporary ring clone, without interpreting winding.
+    let (retained, transient) = match kind {
+        1 => (coordinates, words),
+        2 => (parts.checked_mul(words).ok_or_else(geometry_limit)?, 0),
+        _ => (
+            coordinates,
+            (parts + 1)
+                .checked_mul(words)
+                .and_then(|reserved| reserved.checked_add(coordinates))
+                .ok_or_else(geometry_limit)?,
+        ),
     };
-    let reserved = buffers.checked_mul(words).ok_or_else(geometry_limit)?;
+    if retained.checked_add(transient).ok_or_else(geometry_limit)? > budget.reserved {
+        return Err(geometry_limit());
+    }
     budget.reserved = budget
         .reserved
-        .checked_sub(reserved)
+        .checked_sub(retained)
         .ok_or_else(geometry_limit)?;
     Ok(())
 }
