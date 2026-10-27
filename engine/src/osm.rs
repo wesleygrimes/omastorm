@@ -18,6 +18,7 @@ use mvt_reader::{
 };
 use serde::Deserialize;
 use std::{
+    collections::VecDeque,
     env, fs, io,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -44,6 +45,9 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const IN_FLIGHT: usize = 4;
 /// After a 429, a 5xx, or a transport failure.
 const BACK_OFF: Duration = Duration::from_secs(30);
+/// Rejected content delays only its own tile, with bounded memory.
+const REJECT_DELAY: Duration = Duration::from_secs(30);
+const MAX_REJECTED: usize = 256;
 /// Cache ceiling and the size eviction trims to (DESIGN.md, basemap tiles).
 const CEILING: u64 = 512 << 20;
 const TARGET: u64 = 448 << 20;
@@ -83,6 +87,7 @@ struct Inner {
     /// The URL template once TileJSON has been read this daemon's life.
     template: Option<String>,
     back_off_until: Option<Instant>,
+    rejected: VecDeque<(String, TileKey, Instant)>,
     /// Bytes under `dir`: the startup scan plus what was written since.
     cache_bytes: u64,
     /// Written to since the last trim.
@@ -173,6 +178,7 @@ impl Osm {
                 info,
                 template: None,
                 back_off_until: None,
+                rejected: VecDeque::new(),
                 cache_bytes,
                 grown: false,
             }),
@@ -211,6 +217,28 @@ impl Osm {
         let mut inner = self.inner.lock().unwrap();
         inner.back_off_until = None;
         inner.info.status = OsmStatus::Ok;
+    }
+    fn rejected(&self, version: &str, key: TileKey) -> bool {
+        let now = Instant::now();
+        self.inner
+            .lock()
+            .unwrap()
+            .rejected
+            .iter()
+            .any(|(v, k, until)| v == version && *k == key && now < *until)
+    }
+    fn reject(&self, version: &str, key: TileKey) {
+        let now = Instant::now();
+        let mut inner = self.inner.lock().unwrap();
+        inner
+            .rejected
+            .retain(|(v, k, until)| now < *until && !(v == version && *k == key));
+        if inner.rejected.len() == MAX_REJECTED {
+            inner.rejected.pop_front();
+        }
+        inner
+            .rejected
+            .push_back((version.to_owned(), key, now + REJECT_DELAY));
     }
     fn known(&self) -> Option<(String, String)> {
         let inner = self.inner.lock().unwrap();
@@ -312,19 +340,21 @@ impl Osm {
                 }
             }
         }
-        if self.backing_off() {
+        if self.backing_off() || self.rejected(&version, key) {
             return None;
         }
         let url = template
             .replace("{z}", &key.z.to_string())
             .replace("{x}", &key.x.to_string())
             .replace("{y}", &key.y.to_string());
-        match self.get(&url).await.and_then(|bytes| {
-            budget::check(&bytes).map_err(|e| e.to_string())?;
-            Ok(bytes)
-        }) {
+        match self.get(&url).await {
             Ok(bytes) => {
                 self.succeed();
+                if let Err(e) = budget::check(&bytes) {
+                    eprintln!("Tile {url}: {e}");
+                    self.reject(&version, key);
+                    return None;
+                }
                 match write(&path, &bytes) {
                     Ok(()) => {
                         let mut inner = self.inner.lock().unwrap();
@@ -991,6 +1021,7 @@ mod tests {
                 },
                 template: None,
                 back_off_until: None,
+                rejected: VecDeque::new(),
                 cache_bytes: 0,
                 grown: false,
             }),
@@ -998,7 +1029,7 @@ mod tests {
     }
 
     #[test]
-    fn rejected_tiles_are_never_cached_or_replayed() {
+    fn rejected_tiles_do_not_block_neighbors_or_refetch_immediately() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
         tokio::runtime::Builder::new_current_thread()
@@ -1013,7 +1044,7 @@ mod tests {
                 ));
                 let _ = fs::remove_dir_all(&dir);
                 let bad = short_lines_tile(1_200);
-                let good = short_lines_tile(8);
+                let good = fs::read(format!("{RECORDED}/7-29-50.pbf")).unwrap();
                 let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
                 let url = format!(
                     "http://{}/{{z}}/{{x}}/{{y}}.pbf",
@@ -1024,48 +1055,107 @@ mod tests {
                     let mut inner = source.inner.lock().unwrap();
                     inner.info.version = "test".into();
                     inner.template = Some(url);
+                    // A completed download also recovers an offline source.
+                    inner.info.status = OsmStatus::Offline;
+                    inner.back_off_until = Some(Instant::now());
                 }
-                let replies = [bad.clone(), good.clone()];
+                let replies = [
+                    ("/7/28/50.pbf", bad.clone()),
+                    ("/7/29/50.pbf", good.clone()),
+                    ("/7/28/50.pbf", good.clone()),
+                ];
+                let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let received = requests.clone();
                 let server = tokio::spawn(async move {
-                    for body in replies {
+                    for (path, body) in replies {
                         let (mut socket, _) = listener.accept().await.unwrap();
                         let mut request = Vec::new();
                         while !request.ends_with(b"\r\n\r\n") {
                             request.push(socket.read_u8().await.unwrap());
                             assert!(request.len() < 16 * 1024);
                         }
+                        assert!(request.starts_with(format!("GET {path} HTTP/1.1\r\n").as_bytes()));
+                        received.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                         let headers =
                             format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
                         socket.write_all(headers.as_bytes()).await.unwrap();
                         socket.write_all(&body).await.unwrap();
                     }
                 });
-                let key = TileKey { z: 7, x: 0, y: 0 };
-                let path = dir.join("test/7/0/0.pbf");
+                let key = TileKey { z: 7, x: 28, y: 50 };
+                let neighbor = TileKey { z: 7, x: 29, y: 50 };
+                let path = dir.join("test/7/28/50.pbf");
                 assert!(source.tile(key).await.is_none());
                 assert!(!path.exists(), "rejected download was cached");
                 assert_eq!(source.inner.lock().unwrap().cache_bytes, 0);
+                assert!(!source.backing_off());
+                assert_eq!(source.info().status, OsmStatus::Ok);
+                assert!(source.tile(key).await.is_none());
+                assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
 
-                // Simulate a tile cached by an older engine. Back-off prevents
-                // a replacement fetch, so this call must remove it and stop.
+                // A tile cached by an older engine is removed too. The tile's
+                // rejection delay still prevents another download.
                 write(&path, &bad).unwrap();
                 source.inner.lock().unwrap().cache_bytes = bad.len() as u64;
                 assert!(source.tile(key).await.is_none());
                 assert!(!path.exists(), "rejected cached tile survived");
                 assert_eq!(source.inner.lock().unwrap().cache_bytes, 0);
 
-                source.succeed();
-                assert_eq!(source.tile(key).await.unwrap(), good);
-                assert_eq!(fs::read(&path).unwrap(), good);
+                assert_eq!(source.tile(neighbor).await.unwrap(), good);
+                assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
+                assert_eq!(fs::read(dir.join("test/7/29/50.pbf")).unwrap(), good);
+                assert!(!source.backing_off());
+                assert_eq!(source.info().status, OsmStatus::Ok);
+                assert!(source.tile(key).await.is_none());
+                assert!(!path.exists());
+                assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
                 source.fail();
                 assert_eq!(
-                    source.tile(key).await.unwrap(),
+                    source.tile(neighbor).await.unwrap(),
                     good,
                     "valid cache works offline"
                 );
-                server.await.unwrap();
+                // Expire the delay without making the test wait 30 seconds.
+                {
+                    let mut inner = source.inner.lock().unwrap();
+                    inner.rejected.front_mut().unwrap().2 = Instant::now();
+                    inner.back_off_until = Some(Instant::now());
+                }
+                assert_eq!(source.tile(key).await.unwrap(), good);
+                assert_eq!(fs::read(&path).unwrap(), good);
+                assert!(!source.backing_off());
+                tokio::time::timeout(Duration::from_secs(3), server)
+                    .await
+                    .unwrap()
+                    .unwrap();
                 fs::remove_dir_all(dir).unwrap();
             });
+    }
+
+    #[test]
+    fn rejection_delays_expire_and_have_bounded_memory() {
+        let source = test_source(String::new(), PathBuf::new());
+        let key = TileKey { z: 7, x: 0, y: 0 };
+        source.reject("v1", key);
+        assert!(source.rejected("v1", key));
+        assert!(!source.rejected("v2", key));
+        source.inner.lock().unwrap().rejected.front_mut().unwrap().2 = Instant::now();
+        assert!(!source.rejected("v1", key));
+        source.reject("v1", key);
+        source.reject("v1", key);
+        assert_eq!(source.inner.lock().unwrap().rejected.len(), 1);
+        for x in 1..=MAX_REJECTED as u32 {
+            source.reject("v1", TileKey { x, ..key });
+        }
+        assert_eq!(source.inner.lock().unwrap().rejected.len(), MAX_REJECTED);
+        assert!(!source.rejected("v1", key), "oldest rejection was evicted");
+        assert!(source.rejected(
+            "v1",
+            TileKey {
+                x: MAX_REJECTED as u32,
+                ..key
+            }
+        ));
     }
 
     #[test]
