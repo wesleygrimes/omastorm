@@ -400,6 +400,24 @@ fn catalogued_near(cached: &[i64], stamp: NaiveDateTime) -> bool {
     cached.iter().any(|&t| (t - ms).abs() <= 2_000)
 }
 
+/// Remember only the newest catalog-sized window for replay deduplication.
+/// The poller can run indefinitely; retaining every delivered scan would
+/// grow this list for its entire lifetime. Keep it sorted like the catalog
+/// so a rediscovered older scan cannot displace a more recent one.
+fn remember_sweep(known: &mut Vec<i64>, start_ms: i64) {
+    let Err(mut at) = known.binary_search(&start_ms) else {
+        return;
+    };
+    if known.len() == crate::catalog::RING {
+        if at == 0 {
+            return;
+        }
+        known.remove(0);
+        at -= 1;
+    }
+    known.insert(at, start_ms);
+}
+
 /// Earlier finished volumes for backfill: at most `limit`, newest first,
 /// none newer than the joined archive file. Yesterday is unused when today
 /// already has more than `limit` files.
@@ -689,10 +707,8 @@ pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>, skip_kn
                 }
             }
         }
-        if let Some(start_ms) = assembler.start_ms()
-            && !known.contains(&start_ms)
-        {
-            known.push(start_ms);
+        if let Some(start_ms) = assembler.start_ms() {
+            remember_sweep(&mut known, start_ms);
         }
         skip_known = true;
 
@@ -734,10 +750,8 @@ pub async fn poll(site: String, events: Sender<Event>, cached: Vec<i64>, skip_kn
                     if !deliver(&mut assembler, &site, &chunk, &events, None).await {
                         return;
                     }
-                    if let Some(start_ms) = assembler.start_ms()
-                        && !known.contains(&start_ms)
-                    {
-                        known.push(start_ms);
+                    if let Some(start_ms) = assembler.start_ms() {
+                        remember_sweep(&mut known, start_ms);
                     }
                     continue;
                 }
@@ -769,6 +783,42 @@ mod tests {
     use chrono::NaiveDate;
     use nexrad_data::volume::File;
     use std::fs;
+
+    #[test]
+    fn delivered_sweep_history_stays_bounded_across_long_sessions() {
+        let mut known = Vec::new();
+        let ring = crate::catalog::RING;
+        for start_ms in 0..10_000 {
+            remember_sweep(&mut known, start_ms);
+            // Every chunk of a partial sweep remembers the same start.
+            remember_sweep(&mut known, start_ms);
+            assert_eq!(known.len(), ring.min(start_ms as usize + 1));
+            assert_eq!(known.last(), Some(&start_ms));
+        }
+        assert_eq!(known, (10_000 - ring as i64..10_000).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn replayed_sweeps_preserve_the_newest_cached_history() {
+        let ring = crate::catalog::RING as i64;
+        let mut known: Vec<_> = (0..ring).map(|n| n * 2).collect();
+        let cached = known.clone();
+        for &start_ms in cached.iter().rev() {
+            remember_sweep(&mut known, start_ms);
+        }
+        remember_sweep(&mut known, -1);
+        assert_eq!(known, cached, "duplicates and older scans evict nothing");
+
+        remember_sweep(&mut known, 3);
+        let mut expected = cached[1..].to_vec();
+        expected.insert(1, 3);
+        assert_eq!(known, expected, "out-of-order scans keep timestamp order");
+
+        remember_sweep(&mut known, ring * 2);
+        expected.remove(0);
+        expected.push(ring * 2);
+        assert_eq!(known, expected);
+    }
 
     fn chunk_id(volume: usize, name: &str) -> ChunkIdentifier {
         ChunkIdentifier::from_name("KJAX".into(), VolumeIndex::new(volume), name.into(), None)
