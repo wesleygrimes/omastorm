@@ -1,7 +1,7 @@
 # Verified public engine release; update through mise release engine pin.
-tag=engine-0.1.15
+tag=engine-0.1.16
 repo=wesleygrimes/omastorm
 asset_x86_64=omastorm-engine-x86_64-unknown-linux-gnu
-sha256_x86_64=2545d97af05a683c909f1b9873b45b164ef42ddac93c050958430bf3776e977e
+sha256_x86_64=d2ac057771bd324a748bc1c9fa14669734f123128c7abd17af82f497ee1cd9ee
 asset_aarch64=omastorm-engine-aarch64-unknown-linux-gnu
-sha256_aarch64=cad284f905e6f68f1ea8bf69622b941487c1cb14478811db64023455d2e19559
+sha256_aarch64=3fb20cdcbd9199ec341cdad7ea6bed2a14c3f27af42117bb3df9ca64e28b1972

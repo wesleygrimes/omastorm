@@ -6,7 +6,8 @@
   "license": "Data © OpenStreetMap contributors, Open Database License; OpenMapTiles schema, BSD/CC-BY",
   "tiles": {
     "7-29-50.pbf": "z7 tile holding KTLX: central Oklahoma at about 500 m/px, 131,709 bytes as served",
-    "11-470-808.pbf": "z11 tile holding KTLX and Midwest City: the road network the roads channels are checked against, 21,446 bytes as served"
+    "11-470-808.pbf": "z11 tile holding KTLX and Midwest City: the road network the roads channels are checked against, 21,446 bytes as served",
+    "11-481-846.pbf": "z11 Houston dense geometry regression: 3,013 parts, 14,061 coordinates, 93,459 bytes as served; OpenFreeMap planet version 20261025_080012_pt, fetched 2026-10-27"
   },
-  "notes": "Recorded once for the engine's offline tile tests (engine/src/osm.rs, engine/tests/protocol.rs); the daemon never reads them. Fetched with curl and the engine's User-Agent from the URL template TileJSON named that day."
+  "notes": "Recorded for the engine's offline tile tests (engine/src/osm.rs, engine/tests/protocol.rs); the daemon never reads them. The two KTLX tiles were fetched with curl and the engine's User-Agent from the URL template TileJSON named that day; the source version and retrieval date above apply to those tiles."
 }

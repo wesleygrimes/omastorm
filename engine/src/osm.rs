@@ -18,6 +18,7 @@ use mvt_reader::{
 };
 use serde::Deserialize;
 use std::{
+    collections::VecDeque,
     env, fs, io,
     path::{Path, PathBuf},
     sync::Mutex,
@@ -44,6 +45,9 @@ const FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const IN_FLIGHT: usize = 4;
 /// After a 429, a 5xx, or a transport failure.
 const BACK_OFF: Duration = Duration::from_secs(30);
+/// Rejected content delays only its own tile, with bounded memory.
+const REJECT_DELAY: Duration = Duration::from_secs(30);
+const MAX_REJECTED: usize = 256;
 /// Cache ceiling and the size eviction trims to (DESIGN.md, basemap tiles).
 const CEILING: u64 = 512 << 20;
 const TARGET: u64 = 448 << 20;
@@ -83,6 +87,7 @@ struct Inner {
     /// The URL template once TileJSON has been read this daemon's life.
     template: Option<String>,
     back_off_until: Option<Instant>,
+    rejected: VecDeque<(String, TileKey, Instant)>,
     /// Bytes under `dir`: the startup scan plus what was written since.
     cache_bytes: u64,
     /// Written to since the last trim.
@@ -173,6 +178,7 @@ impl Osm {
                 info,
                 template: None,
                 back_off_until: None,
+                rejected: VecDeque::new(),
                 cache_bytes,
                 grown: false,
             }),
@@ -211,6 +217,28 @@ impl Osm {
         let mut inner = self.inner.lock().unwrap();
         inner.back_off_until = None;
         inner.info.status = OsmStatus::Ok;
+    }
+    fn rejected(&self, version: &str, key: TileKey) -> bool {
+        let now = Instant::now();
+        self.inner
+            .lock()
+            .unwrap()
+            .rejected
+            .iter()
+            .any(|(v, k, until)| v == version && *k == key && now < *until)
+    }
+    fn reject(&self, version: &str, key: TileKey) {
+        let now = Instant::now();
+        let mut inner = self.inner.lock().unwrap();
+        inner
+            .rejected
+            .retain(|(v, k, until)| now < *until && !(v == version && *k == key));
+        if inner.rejected.len() == MAX_REJECTED {
+            inner.rejected.pop_front();
+        }
+        inner
+            .rejected
+            .push_back((version.to_owned(), key, now + REJECT_DELAY));
     }
     fn known(&self) -> Option<(String, String)> {
         let inner = self.inner.lock().unwrap();
@@ -294,10 +322,25 @@ impl Osm {
             .join(format!("{}.pbf", key.y));
         // A cached tile is tens of kilobytes from the page cache: read inline.
         if let Ok(bytes) = fs::read(&path) {
-            touch(&path);
-            return Some(bytes);
+            match budget::check(&bytes) {
+                Ok(()) => {
+                    touch(&path);
+                    return Some(bytes);
+                }
+                Err(e) => {
+                    eprintln!("Tile cache {}: {e}", path.display());
+                    match fs::remove_file(&path) {
+                        Ok(()) => {
+                            let mut inner = self.inner.lock().unwrap();
+                            inner.cache_bytes =
+                                inner.cache_bytes.saturating_sub(bytes.len() as u64);
+                        }
+                        Err(e) => eprintln!("Tile cache {}: {e}", path.display()),
+                    }
+                }
+            }
         }
-        if self.backing_off() {
+        if self.backing_off() || self.rejected(&version, key) {
             return None;
         }
         let url = template
@@ -307,6 +350,11 @@ impl Osm {
         match self.get(&url).await {
             Ok(bytes) => {
                 self.succeed();
+                if let Err(e) = budget::check(&bytes) {
+                    eprintln!("Tile {url}: {e}");
+                    self.reject(&version, key);
+                    return None;
+                }
                 match write(&path, &bytes) {
                     Ok(()) => {
                         let mut inner = self.inner.lock().unwrap();
@@ -685,6 +733,162 @@ mod tests {
         tile
     }
 
+    fn geometry_tile(name: &str, kind: u8, geometry_fields: &[u8], count: usize) -> Vec<u8> {
+        let mut layer = Vec::new();
+        field(1, name.as_bytes(), &mut layer);
+        layer.extend_from_slice(&[120, 2]);
+        let mut feature = vec![24, kind];
+        feature.extend_from_slice(geometry_fields);
+        for _ in 0..count {
+            field(2, &feature, &mut layer);
+        }
+        let mut tile = Vec::new();
+        field(3, &layer, &mut tile);
+        tile
+    }
+
+    fn packed_geometry(words: &[u32]) -> Vec<u8> {
+        let mut packed = Vec::new();
+        for &word in words {
+            varint(u64::from(word), &mut packed);
+        }
+        let mut fields = Vec::new();
+        field(4, &packed, &mut fields);
+        fields
+    }
+
+    fn short_lines_tile(parts: usize) -> Vec<u8> {
+        let geometry = packed_geometry(&[9, 0, 0, 10, 2, 2].repeat(parts));
+        geometry_tile("waterway", 2, &geometry, 1)
+    }
+
+    #[test]
+    fn rejects_quadratic_geometry_expansion_without_decoding() {
+        let parts = 500_000u64;
+        let bytes = short_lines_tile(parts as usize);
+        assert!(bytes.len() < MAX_BODY);
+        // 2.5.0 retains a full geometry-length buffer for every two-point line.
+        // Calculate the allocation only. Never pass this tile to get_features().
+        let reserved_bytes =
+            parts * (6 * parts) * std::mem::size_of::<geo_types::Coord<f32>>() as u64;
+        assert!(reserved_bytes > 10_000_000_000_000);
+        let error = budget::check(&bytes).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+        assert_eq!(
+            error.to_string(),
+            "vector tile geometry over the size limit"
+        );
+    }
+
+    #[test]
+    fn geometry_reservations_are_bounded_across_features_and_layers() {
+        // Parts and coordinates are modest; retained line buffers exceed 4 GiB.
+        let mut bytes = short_lines_tile(10_000);
+        assert!(budget::check(&bytes).is_err());
+        // Layers decode independently, even when their names are identical.
+        bytes = short_lines_tile(7_000);
+        budget::check(&bytes).unwrap();
+        bytes.extend_from_within(..);
+        budget::check(&bytes).unwrap();
+        // The parts cap still applies across layers.
+        bytes.extend_from_within(..);
+        assert!(budget::check(&bytes).is_err());
+        // Within a layer, retained line capacities accumulate across features.
+        let geometry = packed_geometry(&[9, 0, 0, 10, 2, 2].repeat(7_000));
+        assert!(budget::check(&geometry_tile("waterway", 2, &geometry, 2)).is_err());
+        // Ring reservations are transient across features, including the spare
+        // buffer and clones. The conservative per-feature estimate crosses 4 GiB.
+        for ring in [
+            [9, 0, 0, 18, 2, 0, 0, 2, 15], // Separate exteriors.
+            [9, 0, 0, 18, 0, 2, 2, 0, 15], // Rings retained until the feature ends.
+        ] {
+            for rings in [7_722, 7_723] {
+                let geometry = packed_geometry(&ring.repeat(rings));
+                let bytes = geometry_tile("water", 3, &geometry, 1);
+                assert_eq!(budget::check(&bytes).is_ok(), rings == 7_722);
+            }
+        }
+        let rings = packed_geometry(&[9, 0, 0, 18, 2, 0, 0, 2, 15].repeat(7_000));
+        budget::check(&geometry_tile("water", 3, &rings, 2)).unwrap();
+        // Unselected layers never reach get_features().
+        budget::check(&geometry_tile("building", 2, &geometry, 2)).unwrap();
+    }
+
+    #[test]
+    fn geometry_parts_and_coordinates_have_independent_limits() {
+        let geometry = packed_geometry(&[9, 0, 0, 10, 2, 2]);
+        budget::check(&geometry_tile("waterway", 2, &geometry, 16_384)).unwrap();
+        assert!(budget::check(&geometry_tile("waterway", 2, &geometry, 16_385)).is_err());
+        for coordinates in [262_144, 262_145] {
+            let mut words = vec![9, 0, 0, ((coordinates - 1) << 3) | 2];
+            words.resize(4 + 2 * (coordinates as usize - 1), 0);
+            let bytes = geometry_tile("waterway", 2, &packed_geometry(&words), 1);
+            assert_eq!(budget::check(&bytes).is_ok(), coordinates == 262_144);
+        }
+    }
+
+    #[test]
+    fn modest_geometry_passes_in_all_protobuf_encodings() {
+        for (kind, words) in [
+            (1, vec![17, 0, 0, 2, 2]), // Two points.
+            (2, [9, 0, 0, 10, 2, 2].repeat(64)),
+            (3, [9, 0, 0, 18, 2, 0, 0, 2, 15].repeat(8)), // Closed triangles.
+        ] {
+            let mut unpacked = Vec::new();
+            let mut mixed = Vec::new();
+            for (i, &word) in words.iter().enumerate() {
+                unpacked.push(32);
+                varint(u64::from(word), &mut unpacked);
+                if i % 2 == 0 {
+                    mixed.extend(packed_geometry(&[word]));
+                } else {
+                    mixed.push(32);
+                    varint(u64::from(word), &mut mixed);
+                }
+            }
+            for geometry in [packed_geometry(&words), unpacked, mixed] {
+                let bytes = geometry_tile("waterway", kind, &geometry, 1);
+                budget::check(&bytes).unwrap();
+                render(&bytes, TileKey { z: 7, x: 0, y: 0 }).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_geometry_commands() {
+        for (kind, words) in [
+            (0, vec![9, 0, 0]),                     // Unknown geometry type.
+            (2, vec![]),                            // Empty geometry.
+            (2, vec![1]),                           // Zero command count.
+            (2, vec![11, 0, 0]),                    // Unknown command.
+            (2, vec![9, 0]),                        // Missing y parameter.
+            (2, vec![9, 0, 0, 10]),                 // Missing LineTo parameters.
+            (2, vec![9, 0, 0]),                     // Single-point line.
+            (2, vec![10, 0, 0]),                    // LineTo without MoveTo.
+            (2, vec![17, 0, 0, 0, 0]),              // Multi-point MoveTo in a line.
+            (2, vec![9, 0, 0, 15]),                 // ClosePath in a line.
+            (2, vec![9, 0, 0, 10, 2, 2, 10, 2, 2]), // Repeated LineTo.
+            (3, vec![15]),                          // ClosePath without a ring.
+            (3, vec![9, 0, 0, 10, 2, 2, 15]),       // Ring with only two points.
+            (3, vec![9, 0, 0, 18, 2, 0, 0, 2]),     // Unclosed ring.
+            (3, vec![9, 0, 0, 18, 2, 0, 0, 2, 23]), // Repeated ClosePath.
+            (1, vec![9, 0, 0, 10, 2, 2]),           // LineTo in point geometry.
+        ] {
+            let bytes = geometry_tile("waterway", kind, &packed_geometry(&words), 1);
+            let error = budget::check(&bytes).unwrap_err();
+            assert_eq!(
+                error.kind(),
+                io::ErrorKind::InvalidData,
+                "{kind}: {words:?}"
+            );
+        }
+        let bytes = geometry_tile("waterway", 2, &[34, 1, 128], 1); // Truncated varint.
+        assert_eq!(
+            budget::check(&bytes).unwrap_err().kind(),
+            io::ErrorKind::InvalidData
+        );
+    }
+
     #[test]
     fn rejects_tiles_with_excessive_shared_property_expansion() {
         let large = "x".repeat(64 << 10);
@@ -798,9 +1002,19 @@ mod tests {
         });
         // Only client and permits are used by get(); avoid Osm::open(), which
         // reads environment configuration and opens the user's persistent cache.
-        let source = Osm {
-            url: url.clone(),
-            dir: PathBuf::new(),
+        let source = test_source(url.clone(), PathBuf::new());
+        let result = tokio::time::timeout(Duration::from_secs(3), source.get(&url))
+            .await
+            .unwrap_or_else(|_| Err("still waiting for the response to finish".into()));
+        let _ = release.send(());
+        server.await.unwrap();
+        result
+    }
+
+    fn test_source(url: String, dir: PathBuf) -> Osm {
+        Osm {
+            url,
+            dir,
             client: reqwest::Client::builder()
                 .no_proxy()
                 .timeout(FETCH_TIMEOUT)
@@ -818,16 +1032,182 @@ mod tests {
                 },
                 template: None,
                 back_off_until: None,
+                rejected: VecDeque::new(),
                 cache_bytes: 0,
                 grown: false,
             }),
-        };
-        let result = tokio::time::timeout(Duration::from_secs(3), source.get(&url))
-            .await
-            .unwrap_or_else(|_| Err("still waiting for the response to finish".into()));
-        let _ = release.send(());
-        server.await.unwrap();
-        result
+        }
+    }
+
+    #[test]
+    fn rejected_tiles_do_not_block_neighbors_or_refetch_immediately() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+                    "../target/vt-budget-{}-{:?}",
+                    std::process::id(),
+                    std::thread::current().id()
+                ));
+                let _ = fs::remove_dir_all(&dir);
+                let bad = short_lines_tile(10_000);
+                let good = fs::read(format!("{RECORDED}/7-29-50.pbf")).unwrap();
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let url = format!(
+                    "http://{}/{{z}}/{{x}}/{{y}}.pbf",
+                    listener.local_addr().unwrap()
+                );
+                let source = test_source(url.clone(), dir.clone());
+                {
+                    let mut inner = source.inner.lock().unwrap();
+                    inner.info.version = "test".into();
+                    inner.template = Some(url);
+                    // A completed download also recovers an offline source.
+                    inner.info.status = OsmStatus::Offline;
+                    inner.back_off_until = Some(Instant::now());
+                }
+                let replies = [
+                    ("/7/28/50.pbf", bad.clone()),
+                    ("/7/29/50.pbf", good.clone()),
+                    ("/7/28/50.pbf", good.clone()),
+                ];
+                let requests = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+                let received = requests.clone();
+                let server = tokio::spawn(async move {
+                    for (path, body) in replies {
+                        let (mut socket, _) = listener.accept().await.unwrap();
+                        let mut request = Vec::new();
+                        while !request.ends_with(b"\r\n\r\n") {
+                            request.push(socket.read_u8().await.unwrap());
+                            assert!(request.len() < 16 * 1024);
+                        }
+                        assert!(request.starts_with(format!("GET {path} HTTP/1.1\r\n").as_bytes()));
+                        received.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        let headers =
+                            format!("HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n", body.len());
+                        socket.write_all(headers.as_bytes()).await.unwrap();
+                        socket.write_all(&body).await.unwrap();
+                    }
+                });
+                let key = TileKey { z: 7, x: 28, y: 50 };
+                let neighbor = TileKey { z: 7, x: 29, y: 50 };
+                let path = dir.join("test/7/28/50.pbf");
+                assert!(source.tile(key).await.is_none());
+                assert!(!path.exists(), "rejected download was cached");
+                assert_eq!(source.inner.lock().unwrap().cache_bytes, 0);
+                assert!(!source.backing_off());
+                assert_eq!(source.info().status, OsmStatus::Ok);
+                assert!(source.tile(key).await.is_none());
+                assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 1);
+
+                // A tile cached by an older engine is removed too. The tile's
+                // rejection delay still prevents another download.
+                write(&path, &bad).unwrap();
+                source.inner.lock().unwrap().cache_bytes = bad.len() as u64;
+                assert!(source.tile(key).await.is_none());
+                assert!(!path.exists(), "rejected cached tile survived");
+                assert_eq!(source.inner.lock().unwrap().cache_bytes, 0);
+
+                assert_eq!(source.tile(neighbor).await.unwrap(), good);
+                assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
+                assert_eq!(fs::read(dir.join("test/7/29/50.pbf")).unwrap(), good);
+                assert!(!source.backing_off());
+                assert_eq!(source.info().status, OsmStatus::Ok);
+                assert!(source.tile(key).await.is_none());
+                assert!(!path.exists());
+                assert_eq!(requests.load(std::sync::atomic::Ordering::SeqCst), 2);
+                source.fail();
+                assert_eq!(
+                    source.tile(neighbor).await.unwrap(),
+                    good,
+                    "valid cache works offline"
+                );
+                // Expire the delay without making the test wait 30 seconds.
+                {
+                    let mut inner = source.inner.lock().unwrap();
+                    inner.rejected.front_mut().unwrap().2 = Instant::now();
+                    inner.back_off_until = Some(Instant::now());
+                }
+                assert_eq!(source.tile(key).await.unwrap(), good);
+                assert_eq!(fs::read(&path).unwrap(), good);
+                assert!(!source.backing_off());
+                tokio::time::timeout(Duration::from_secs(3), server)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                fs::remove_dir_all(dir).unwrap();
+            });
+    }
+
+    #[test]
+    fn rejection_delays_expire_and_have_bounded_memory() {
+        let source = test_source(String::new(), PathBuf::new());
+        let key = TileKey { z: 7, x: 0, y: 0 };
+        source.reject("v1", key);
+        assert!(source.rejected("v1", key));
+        assert!(!source.rejected("v2", key));
+        source.inner.lock().unwrap().rejected.front_mut().unwrap().2 = Instant::now();
+        assert!(!source.rejected("v1", key));
+        source.reject("v1", key);
+        source.reject("v1", key);
+        assert_eq!(source.inner.lock().unwrap().rejected.len(), 1);
+        for x in 1..=MAX_REJECTED as u32 {
+            source.reject("v1", TileKey { x, ..key });
+        }
+        assert_eq!(source.inner.lock().unwrap().rejected.len(), MAX_REJECTED);
+        assert!(!source.rejected("v1", key), "oldest rejection was evicted");
+        assert!(source.rejected(
+            "v1",
+            TileKey {
+                x: MAX_REJECTED as u32,
+                ..key
+            }
+        ));
+    }
+
+    #[test]
+    fn rejected_cached_tiles_are_removed_while_offline() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(format!(
+                    "../target/vt-budget-offline-{}-{:?}",
+                    std::process::id(),
+                    std::thread::current().id()
+                ));
+                let source = test_source(String::new(), dir.clone());
+                {
+                    let mut inner = source.inner.lock().unwrap();
+                    inner.info.version = "test".into();
+                    inner.template = Some("http://127.0.0.1:1/{z}/{x}/{y}.pbf".into());
+                }
+                source.fail();
+                let path = dir.join("test/7/0/0.pbf");
+                let key = TileKey { z: 7, x: 0, y: 0 };
+                for bad in [
+                    short_lines_tile(10_000),
+                    repeated_property_tile("unused", &"x".repeat(64 << 10), 512, TAG_ENCODINGS[0]),
+                ] {
+                    write(&path, &bad).unwrap();
+                    source.inner.lock().unwrap().cache_bytes = bad.len() as u64;
+                    assert!(source.tile(key).await.is_none());
+                    assert!(!path.exists());
+                    assert_eq!(source.inner.lock().unwrap().cache_bytes, 0);
+                }
+                let good = short_lines_tile(8);
+                write(&path, &good).unwrap();
+                source.inner.lock().unwrap().cache_bytes = good.len() as u64;
+                assert_eq!(source.tile(key).await.unwrap(), good);
+                assert!(path.exists());
+                assert_eq!(source.inner.lock().unwrap().cache_bytes, good.len() as u64);
+                fs::remove_dir_all(dir).unwrap();
+            });
     }
 
     fn chunked_body(size: usize, complete: bool) -> Vec<u8> {
@@ -970,6 +1350,26 @@ mod tests {
             c.partial_minor += usize::from(p[2] > 0 && p[2] < 255);
         }
         c
+    }
+
+    #[test]
+    fn dense_recorded_tile_passes_geometry_budget() {
+        // This tile exceeded the former tile-wide 8,388,608-slot cap.
+        let bytes = fs::read(format!("{RECORDED}/11-481-846.pbf")).unwrap();
+        budget::check(&bytes).unwrap();
+        let (png, _) = render(
+            &bytes,
+            TileKey {
+                z: 11,
+                x: 481,
+                y: 846,
+            },
+        )
+        .unwrap();
+        let pixels = decode(&png);
+        let coverage = count(&pixels);
+        assert!(coverage.g > 0);
+        assert!(coverage.major > 0);
     }
 
     #[test]

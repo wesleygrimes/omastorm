@@ -1,10 +1,25 @@
-//! Bound dictionary expansion before mvt-reader clones properties per feature.
+//! Bound property and geometry expansion before mvt-reader decodes features.
 
 use std::io;
 
 const MAX_PROPERTIES: usize = 16 << 20;
 // Allow for scalar values and hash table storage as well as string contents.
 const PROPERTY_OVERHEAD: usize = 256;
+// Across 72 dense OpenFreeMap z7-z14 tiles, peaks were 10,796 parts, 47,373
+// coordinates and 218,098,502 estimated live coordinate slots. A counting
+// allocator measured 1,746,677,821 peak live requested bytes with mvt-reader
+// 2.5.0, including reader/properties. Allow 4 GiB of f32 coordinate reservations
+// per layer (over 2.4x headroom). These mostly untouched reservations are address
+// space, not RSS; parts and coordinates separately bound the populated data.
+const MAX_PARTS: usize = 16_384;
+const MAX_COORDINATES: usize = 262_144;
+const MAX_RESERVED: usize = 512 << 20;
+
+struct GeometryBudget {
+    parts: usize,
+    coordinates: usize,
+    reserved: usize,
+}
 
 pub(super) fn check(mut tile: &[u8]) -> io::Result<()> {
     if tile.len() > super::MAX_BODY {
@@ -14,15 +29,26 @@ pub(super) fn check(mut tile: &[u8]) -> io::Result<()> {
         ));
     }
     let mut remaining = MAX_PROPERTIES;
+    let mut geometry = GeometryBudget {
+        parts: MAX_PARTS,
+        coordinates: MAX_COORDINATES,
+        reserved: MAX_RESERVED,
+    };
     while !tile.is_empty() {
         if let (3, 2, layer) = field(&mut tile)? {
-            check_layer(layer, &mut remaining)?;
+            // render() drops the previous layer's features before decoding this one.
+            geometry.reserved = MAX_RESERVED;
+            check_layer(layer, &mut remaining, &mut geometry)?;
         }
     }
     Ok(())
 }
 
-fn check_layer(layer: &[u8], remaining: &mut usize) -> io::Result<()> {
+fn check_layer(
+    layer: &[u8],
+    remaining: &mut usize,
+    geometry: &mut GeometryBudget,
+) -> io::Result<()> {
     let mut input = layer;
     let mut name = &[][..];
     let mut keys = Vec::new();
@@ -43,6 +69,8 @@ fn check_layer(layer: &[u8], remaining: &mut usize) -> io::Result<()> {
     input = layer;
     while !input.is_empty() {
         if let (2, 2, mut feature) = field(&mut input)? {
+            let original = feature;
+            let mut kind = None;
             let mut key = None;
             let mut tag = |index: u64| -> io::Result<()> {
                 // prost decodes uint32 tags by truncating the wire varint.
@@ -69,15 +97,126 @@ fn check_layer(layer: &[u8], remaining: &mut usize) -> io::Result<()> {
                             tag(varint(&mut packed)?)?;
                         }
                     }
+                    (3, 0, mut value) => kind = Some(varint(&mut value)? as u32),
                     _ => {}
                 }
             }
             if key.is_some() {
                 return Err(invalid());
             }
+            if let Some(kind) = kind {
+                check_geometry(original, kind, geometry)?;
+            }
         }
     }
     Ok(())
+}
+
+fn check_geometry(mut feature: &[u8], kind: u32, budget: &mut GeometryBudget) -> io::Result<()> {
+    if !(1..=3).contains(&kind) {
+        return Err(invalid_geometry());
+    }
+    let mut words = 0usize;
+    let mut parts = 0usize;
+    let mut points = 0usize;
+    let mut parameters = 0usize;
+    let coordinates_before = budget.coordinates;
+    let mut word = |value: u64| -> io::Result<()> {
+        words += 1;
+        if parameters != 0 {
+            parameters -= 1;
+            return Ok(());
+        }
+        // Like prost's repeated uint32, truncate the wire varint first.
+        let value = value as u32;
+        let count = (value >> 3) as usize;
+        if count == 0 {
+            return Err(invalid_geometry());
+        }
+        match value & 7 {
+            1 => {
+                let valid = match kind {
+                    1 => parts == 0,
+                    2 => count == 1 && (points == 0 || points >= 2),
+                    3 => count == 1 && points == 0,
+                    _ => false,
+                };
+                if !valid {
+                    return Err(invalid_geometry());
+                }
+                budget.parts = budget.parts.checked_sub(1).ok_or_else(geometry_limit)?;
+                parts += 1;
+                points = 0;
+            }
+            2 if kind != 1 && points == 1 => {}
+            7 if kind == 3 && count == 1 && points >= 3 => {
+                budget.coordinates = budget
+                    .coordinates
+                    .checked_sub(1)
+                    .ok_or_else(geometry_limit)?;
+                points = 0;
+                return Ok(());
+            }
+            _ => return Err(invalid_geometry()),
+        }
+        budget.coordinates = budget
+            .coordinates
+            .checked_sub(count)
+            .ok_or_else(geometry_limit)?;
+        points += count;
+        parameters = count * 2;
+        Ok(())
+    };
+    // Repeated geometry words concatenate across packed and unpacked fields.
+    while !feature.is_empty() {
+        match field(&mut feature)? {
+            (4, 0, mut value) => word(varint(&mut value)?)?,
+            (4, 2, mut packed) => {
+                while !packed.is_empty() {
+                    word(varint(&mut packed)?)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    if parameters != 0 || parts == 0 || (kind == 2 && points < 2) || (kind == 3 && points != 0) {
+        return Err(invalid_geometry());
+    }
+    let coordinates = coordinates_before - budget.coordinates;
+    // Lines keep every full-length buffer. Points keep only their coordinates.
+    // Polygons keep length-sized clones; reserved rings and the spare buffer
+    // die before the next feature. Conservatively count all rings in a feature
+    // together, plus a temporary ring clone, without interpreting winding.
+    let (retained, transient) = match kind {
+        1 => (coordinates, words),
+        2 => (parts.checked_mul(words).ok_or_else(geometry_limit)?, 0),
+        _ => (
+            coordinates,
+            (parts + 1)
+                .checked_mul(words)
+                .and_then(|reserved| reserved.checked_add(coordinates))
+                .ok_or_else(geometry_limit)?,
+        ),
+    };
+    if retained.checked_add(transient).ok_or_else(geometry_limit)? > budget.reserved {
+        return Err(geometry_limit());
+    }
+    budget.reserved = budget
+        .reserved
+        .checked_sub(retained)
+        .ok_or_else(geometry_limit)?;
+    Ok(())
+}
+
+fn invalid_geometry() -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, "invalid vector tile geometry")
+}
+
+fn geometry_limit() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "vector tile geometry over the size limit",
+    )
 }
 
 fn invalid() -> io::Error {
@@ -85,7 +224,7 @@ fn invalid() -> io::Error {
 }
 
 // Read protobuf fields without allocating their contents. Only layers, key
-// and value lengths, and feature tag indices are needed for the budget.
+// and value lengths, feature tag indices and geometry words are needed.
 fn field<'a>(input: &mut &'a [u8]) -> io::Result<(u32, u8, &'a [u8])> {
     let tag = u32::try_from(varint(input)?).map_err(|_| invalid())?;
     if tag >> 3 == 0 {
