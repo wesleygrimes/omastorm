@@ -14,6 +14,8 @@ See [grid-adapters.md](grid-adapters.md) for source registry, coverage, and CRS.
 - Every message has `"type"`. Engine messages also carry `"v": 2`. A client that
   sees an unknown `v` shows an error and stops rendering radar.
 - Key order within an object is not significant; clients read keys by name.
+  Clients ignore keys they do not read. An optional key that a client can
+  skip is added without changing `v`.
 
 ## Engine messages
 
@@ -159,6 +161,12 @@ It is small (a few KB) so clients replace rather than merge.
   (lookup rule, below). Both are 0 on the loading placeholder, which
   therefore has no floor. Mosaic frames omit them; the weak-return floor is
   disabled on the grid path.
+- Mosaic `frame.measuredCode` is optional: `{"scale":…,"offset":…}` for the
+  measured code the mosaic texture keeps in B, with
+  value = (code − offset) / scale in `units`. Completed OPERA frames carry
+  `{"scale":2,"offset":66}`; loading placeholders and other mosaics omit it.
+  It is its own key, not top-level `scale` / `offset`, because clients take
+  those as the weak-return floor being in force. The UI does not read it yet.
 
 `error` answers one command from one client. It goes only to the client that
 sent the command, `state` does not change, and nothing is broadcast, so a
@@ -392,7 +400,12 @@ below-threshold codes are never weak, and the legend names the hidden range.
 
 **Mosaic texture (`frame.texture` when `kind` is `mosaic`):** PNG, RGBA,
 width × height as published. R is palette class + 1 (0 draws nothing), G bit
-0 is missing, G bit 1 is undetect, B is 0, A is 255. No `azimuthLut`.
+0 is missing, G bit 1 is undetect, A is 255. No `azimuthLut`.
+For OPERA measured cells, B is `floor(dBZ * 2 + 66)` clamped to 2..255;
+non-measured cells have B = 0. This preserves half-dBZ floor thresholds
+from -32 through 94.5 dBZ, with saturation outside that range. Palette
+classification still uses the original float, independently of B. Mosaics
+without `measuredCode` keep B = 0.
 
 **Grid lookup (`ui/shaders/grid.frag`):** each 3 px screen cell becomes WGS84
 longitude and latitude from the same Web Mercator camera, then the grid CRS

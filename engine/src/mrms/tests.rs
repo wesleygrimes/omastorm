@@ -636,7 +636,16 @@ fn full_conus_frame_has_complete_metadata_and_missing_texture() {
     assert_eq!(frame.palette, palette);
     assert_eq!(frame.bounds, bounds);
     let wire = serde_json::to_value(frame).unwrap();
-    for field in ["site", "tilt", "elevation", "rangeKm", "datumTransform"] {
+    for field in [
+        "site",
+        "tilt",
+        "elevation",
+        "rangeKm",
+        "datumTransform",
+        "scale",
+        "offset",
+        "measuredCode",
+    ] {
         assert!(wire.get(field).is_none());
     }
     assert!(texture.len() < TEXTURE_MAX);

@@ -56,6 +56,7 @@ pub fn decode_frame(
         geotransform: AFFINE,
         palette: palette.to_vec(),
         bounds: bounds.to_vec(),
+        measured_code: None,
     };
     Ok((frame, texture, stamp.and_utc().timestamp_millis()))
 }
