@@ -24,6 +24,29 @@ class Commands(unittest.TestCase):
         self.assertEqual(argv[0], 'shellcheck')
         self.assertIn(cli.ROOT / 'scripts/hooks/omastorm', argv)
 
+    def test_ui_lint_requires_an_explicit_text_format(self):
+        source = '\n'.join((
+            'Item {',
+            '    Text { text: "<img src=x>" }',
+            '    Text { textFormat: Text.PlainText; text: "{" }',
+            '    Text {',
+            '        textFormat: Text.StyledText',
+            '    }',
+            '    component Word: Text {',
+            '        // textFormat: Text.PlainText',
+            '        Text { textFormat: Text.PlainText }',
+            '    }',
+            '    Word { textFormat: Text.StyledText }',
+            '}'))
+        self.assertEqual(cli.unformatted_text(source), [2, 7])
+        for file in sorted((cli.ROOT / 'ui').glob('*.qml')):
+            self.assertEqual(cli.unformatted_text(file.read_text()), [], file.name)
+        stderr = io.StringIO()
+        with patch('sys.argv', ['omastorm', 'lint', '--scope', 'ui']), patch.object(cli, 'run'), \
+                patch.object(cli, 'unformatted_text', return_value=[7]), contextlib.redirect_stderr(stderr):
+            self.assertEqual(cli.main(), 1)
+        self.assertRegex(stderr.getvalue(), r'^ui/\w+\.qml:7: Text without textFormat')
+
     def test_invalid_integration_usage_exits_two_before_starting_processes(self):
         for argv in (['test','integration','--case','nonexistent-case'],['test','integration','--scope','protocol','--case','popover']):
             with patch('sys.argv',['omastorm',*argv]),patch('suite.integration') as start,contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit) as error:
