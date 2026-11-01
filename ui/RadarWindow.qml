@@ -232,6 +232,7 @@ Item {
         var errors = Location.configErrors(config.values);
         var wanted = KeyMap.treatment(config.treatment, errors), floor = KeyMap.weakFloor(config.weakFloor, errors);
         KeyMap.focusMode(config.focusMode, errors);
+        KeyMap.popoverScale(config.popoverScale, errors);
         var resolved = KeyMap.resolve(config.keys, canon);
         bindings = resolved.bindings;
         configErrors = errors.concat(resolved.errors);

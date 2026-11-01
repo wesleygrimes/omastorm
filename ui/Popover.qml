@@ -38,16 +38,25 @@ FocusScope {
     }
     signal expandRequested()
     signal closeRequested()
-    implicitWidth: 308
-    // Match RadarBar's fixed KeyboardPanel contentHeight (400 − 28 inset).
+    // config.toml popover_scale. Every length below goes through px(), not
+    // a scale transform, so text, controls and the map draw at full
+    // resolution. Hairline borders stay 1 px.
+    readonly property real uiScale: session.popoverScale
+    function px(length) { return KeyMap.scaled(length, uiScale); }
+    implicitWidth: px(KeyMap.POPOVER_WIDTH)
+    // Match RadarBar's fixed KeyboardPanel contentHeight (card + 28 inset).
     // Do not track layout.implicitHeight — time labels and status text
     // settling after open made the panel shrink and grow.
-    implicitHeight: 372
+    implicitHeight: px(KeyMap.POPOVER_HEIGHT)
     Engine { id: connection }
     function step(delta) { if (state) connection.send({type: "step", delta: delta}); }
     function play() { if (state) connection.send({type: state.playing ? "pause" : "play"}); }
     // Harnesses read this surface's METAR state.
     readonly property alias metarState: metar
+    // Harnesses read the laid-out geometry: the map's height and the bottom
+    // of the last row, which must stay inside implicitHeight at every scale.
+    readonly property real mapHeight: mapFrame.height
+    readonly property real contentBottom: attribution.y + attribution.height
     Metars {
         id: metar
         engine: connection
@@ -83,14 +92,14 @@ FocusScope {
         textFormat: Text.PlainText
         color: card.theme.foreground
         font.family: card.theme.font
-        font.pixelSize: 12
+        font.pixelSize: card.px(12)
         elide: Text.ElideRight
     }
     component Control: Button {
         id: button
-        implicitHeight: 28
-        implicitWidth: Math.max(28, contentItem.implicitWidth + 12)
-        padding: 5
+        implicitHeight: card.px(28)
+        implicitWidth: Math.max(card.px(28), contentItem.implicitWidth + card.px(12))
+        padding: card.px(5)
         contentItem: Label {
             text: button.text
             horizontalAlignment: Text.AlignHCenter
@@ -109,18 +118,23 @@ FocusScope {
         anchors.right: parent.right
         anchors.top: parent.top
         height: card.implicitHeight
-        spacing: 10
+        spacing: card.px(10)
         RowLayout {
             Layout.fillWidth: true
-            spacing: 6
-            Label { text: connection.selectedSiteId || (connection.source ? connection.source.id : "—"); font.bold: true; font.pixelSize: 14 }
+            spacing: card.px(6)
+            Label { text: connection.selectedSiteId || (connection.source ? connection.source.id : "—"); font.bold: true; font.pixelSize: card.px(14) }
             Label { Layout.fillWidth: true; text: connection.site ? connection.site.name : (connection.source ? connection.source.name : ""); opacity: .65 }
-            Rectangle { width: 5; height: 5; radius: 3; color: card.statusColor }
-            Label { text: card.statusText; color: card.statusColor; font.pixelSize: 11 }
+            Rectangle { width: card.px(5); height: card.px(5); radius: card.px(3); color: card.statusColor }
+            Label { text: card.statusText; color: card.statusColor; font.pixelSize: card.px(11) }
         }
         Rectangle {
+            id: mapFrame
             Layout.fillWidth: true
-            Layout.preferredHeight: 280
+            // px(280) unless rounding at an odd scale leaves the rows below
+            // short of room; then the map gives up those pixels, never the card.
+            Layout.fillHeight: true
+            Layout.preferredHeight: card.px(280)
+            Layout.maximumHeight: card.px(280)
             color: card.theme.background
             border.color: Qt.alpha(card.theme.foreground, .17)
             clip: true
@@ -142,7 +156,8 @@ FocusScope {
                 metarMark: Metar.markFromConfig(card.session.config.values) || "pin"
                 treatment: card.session.treatment
                 weakFloor: card.session.weakFloor
-                labelSize: 10
+                labelSize: card.px(10)
+                chromeScale: card.uiScale
                 radarOpacity: card.condition === "unavailable" ? .6 : 1
                 // The expand overlay above takes every click and wheel.
                 interactive: false
@@ -162,10 +177,10 @@ FocusScope {
                 visible: !!metar.selected
                 anchors.right: parent.right
                 anchors.bottom: parent.bottom
-                anchors.rightMargin: 8
-                anchors.bottomMargin: 32
+                anchors.rightMargin: card.px(8)
+                anchors.bottomMargin: card.px(32)
                 width: Math.round(parent.width * 0.8)
-                height: popoverMetarText.implicitHeight + 20
+                height: popoverMetarText.implicitHeight + card.px(20)
                 color: Qt.alpha(card.theme.background, .95)
                 border.width: 1
                 border.color: Qt.alpha(card.theme.foreground, .22)
@@ -174,10 +189,10 @@ FocusScope {
                     anchors.left: parent.left
                     anchors.right: parent.right
                     anchors.top: parent.top
-                    anchors.margins: 6
+                    anchors.margins: card.px(6)
                     wrapMode: Text.Wrap
                     font.family: "monospace"
-                    font.pixelSize: 10
+                    font.pixelSize: card.px(10)
                     text: metar.selected ? metar.selected.raw : ""
                 }
             }
@@ -185,21 +200,21 @@ FocusScope {
                 target: card.session
                 function onViewChanged() { map.applyView(); }
             }
-            Label { anchors.top: parent.top; anchors.right: parent.right; anchors.margins: 8; text: "⤢"; font.pixelSize: 20; opacity: .65 }
+            Label { anchors.top: parent.top; anchors.right: parent.right; anchors.margins: card.px(8); text: "⤢"; font.pixelSize: card.px(20); opacity: .65 }
             RowLayout {
-                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: 8
+                anchors.left: parent.left; anchors.right: parent.right; anchors.bottom: parent.bottom; anchors.margins: card.px(8)
                 Rectangle {
-                    implicitWidth: product.implicitWidth + 10; implicitHeight: 20
+                    implicitWidth: product.implicitWidth + card.px(10); implicitHeight: card.px(20)
                     color: Qt.alpha(card.theme.background, .92)
-                    Label { id: product; anchors.centerIn: parent; font.pixelSize: 10; opacity: .8
+                    Label { id: product; anchors.centerIn: parent; font.pixelSize: card.px(10); opacity: .8
                         text: card.scan ? card.scan.productName.toUpperCase()
                             + (card.scan.kind !== "mosaic" && card.scan.scanTime ? " " + card.scan.elevationDeg.toFixed(1) + "°" : "") : "" }
                 }
                 Item { Layout.fillWidth: true }
                 Rectangle {
-                    implicitWidth: time.implicitWidth + 10; implicitHeight: 20
+                    implicitWidth: time.implicitWidth + card.px(10); implicitHeight: card.px(20)
                     color: Qt.alpha(card.theme.background, .92)
-                    Label { id: time; anchors.centerIn: parent; font.pixelSize: 10; opacity: .8
+                    Label { id: time; anchors.centerIn: parent; font.pixelSize: card.px(10); opacity: .8
                         text: {
                             if (!card.scan || !card.scan.scanTime) return "";
                             var loc = Qt.locale(), d = new Date(card.scan.scanTime);
@@ -226,19 +241,19 @@ FocusScope {
             // An update is on disk but this shell still runs the old plugin;
             // the click restarts the shell (PluginSession.updatePending).
             Rectangle {
-                anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 8
+                anchors.top: parent.top; anchors.left: parent.left; anchors.margins: card.px(8)
                 visible: card.session.updatePending
-                implicitWidth: updated.implicitWidth + 10; implicitHeight: 20
+                implicitWidth: updated.implicitWidth + card.px(10); implicitHeight: card.px(20)
                 color: Qt.alpha(card.theme.background, .92)
                 border.color: card.theme.accent
-                Label { id: updated; anchors.centerIn: parent; font.pixelSize: 10; color: card.theme.accent; text: card.session.updateNotice }
+                Label { id: updated; anchors.centerIn: parent; font.pixelSize: card.px(10); color: card.theme.accent; text: card.session.updateNotice }
                 MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: card.session.restartShell() }
             }
             Rectangle {
                 anchors.centerIn: parent
                 visible: card.condition === "loading" && (!card.scan || !card.scan.scanTime) && !!card.state
-                implicitWidth: popLoad.implicitWidth + 20
-                implicitHeight: 24
+                implicitWidth: popLoad.implicitWidth + card.px(20)
+                implicitHeight: card.px(24)
                 color: Qt.alpha(card.theme.background, .88)
                 border.width: 1
                 border.color: Qt.alpha(card.theme.foreground, .22)
@@ -247,17 +262,17 @@ FocusScope {
                     anchors.centerIn: parent
                     text: "Loading..."
                     color: card.theme.accent
-                    font.pixelSize: 10
+                    font.pixelSize: card.px(10)
                 }
             }
             Rectangle {
-                anchors.centerIn: parent; width: parent.width - 24
-                height: errorNotice.implicitHeight + 16
+                anchors.centerIn: parent; width: parent.width - card.px(24)
+                height: errorNotice.implicitHeight + card.px(16)
                 color: card.theme.background
                 visible: errorNotice.text.length > 0
                 Label {
                     id: errorNotice
-                    anchors.centerIn: parent; width: parent.width - 16; wrapMode: Text.Wrap
+                    anchors.centerIn: parent; width: parent.width - card.px(16); wrapMode: Text.Wrap
                     horizontalAlignment: Text.AlignHCenter
                     text: map.error || card.session.startupError || connection.error
                 }
@@ -274,9 +289,10 @@ FocusScope {
                 }
                 LocationPrompt {
                     anchors.centerIn: parent
-                    width: parent.width - 32
+                    width: parent.width - card.px(32)
                     session: card.session
                     theme: card.theme
+                    uiScale: card.uiScale
                     onManualChosen: { card.session.requestLocationPicker(); card.expandRequested(); }
                 }
             }
@@ -288,17 +304,17 @@ FocusScope {
         }
         RowLayout {
             Layout.fillWidth: true
-            spacing: 6
+            spacing: card.px(6)
             Control { text: "‹"; Accessible.name: "Previous frame"; enabled: card.frames.length > 1; onClicked: card.step(-1) }
             Control { text: card.state && card.state.playing ? "Ⅱ" : "▷"; Accessible.name: "Play or pause"; enabled: card.frames.filter(f => f.status === "complete").length > 1; onClicked: card.play() }
             Control { text: "›"; Accessible.name: "Next frame"; enabled: card.frames.length > 1; onClicked: card.step(1) }
             ColumnLayout {
                 Layout.fillWidth: true
-                spacing: 3
+                spacing: card.px(3)
                 Item {
                     id: strip
                     Layout.fillWidth: true
-                    implicitHeight: 14
+                    implicitHeight: card.px(14)
                     Repeater {
                         model: card.slots
                         Rectangle {
@@ -307,8 +323,8 @@ FocusScope {
                             readonly property bool current: index === card.currentSlot
                             x: card.slots.length > 1 ? Math.round(index * (strip.width - width) / (card.slots.length - 1)) : Math.round((strip.width - width) / 2)
                             y: Math.round((strip.height - height) / 2)
-                            width: current || modelData.partial ? 3 : 2
-                            height: current || modelData.partial ? 14 : 10
+                            width: card.px(current || modelData.partial ? 3 : 2)
+                            height: card.px(current || modelData.partial ? 14 : 10)
                             color: current ? card.theme.accent : modelData.partial ? "transparent"
                                 : Qt.alpha(card.theme.foreground, .40)
                             border.width: modelData.partial && !current ? 1 : 0
@@ -318,16 +334,17 @@ FocusScope {
                 }
                 RowLayout {
                     Layout.fillWidth: true
-                    Layout.preferredHeight: 12
-                    Label { font.pixelSize: 10; opacity: .55; text: card.frames.length ? Qt.formatTime(new Date(card.frames[0].scanTime), Qt.locale().timeFormat(Locale.ShortFormat)) : " " }
+                    Layout.preferredHeight: card.px(12)
+                    Label { font.pixelSize: card.px(10); opacity: .55; text: card.frames.length ? Qt.formatTime(new Date(card.frames[0].scanTime), Qt.locale().timeFormat(Locale.ShortFormat)) : " " }
                     Item { Layout.fillWidth: true }
-                    Label { font.pixelSize: 10; opacity: .55; text: card.condition === "ok" ? "now" : card.frames.length ? Qt.formatTime(new Date(card.frames[card.frames.length - 1].scanTime), Qt.locale().timeFormat(Locale.ShortFormat)) : " " }
+                    Label { font.pixelSize: card.px(10); opacity: .55; text: card.condition === "ok" ? "now" : card.frames.length ? Qt.formatTime(new Date(card.frames[card.frames.length - 1].scanTime), Qt.locale().timeFormat(Locale.ShortFormat)) : " " }
                 }
             }
         }
         Label {
+            id: attribution
             Layout.fillWidth: true
-            font.pixelSize: 8
+            font.pixelSize: card.px(8)
             opacity: .5
             elide: Text.ElideRight
             text: map.osmOnScreen ? (connection.source ? connection.source.attribution : "NOAA") + " · © OpenStreetMap"

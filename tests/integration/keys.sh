@@ -25,6 +25,7 @@ cat > "$check_dir/config.toml" <<'TOML'
 treatment = "neon"
 weak_floor = true
 focus_mode = "yes"
+popover_scale = 9
 [keys]
 pan_left = "e Left"
 zoom_in = "foo"
@@ -61,11 +62,11 @@ b=$(call bindings)
 [[ $b == *'"reset":["0"]'* ]] || fail "A numeric reset did not keep its default: $b"
 [[ $b == *'"search":["/","S"]'* && $b == *'"nearest":["N"]'* ]] || fail "The conflict on s did not stay with search: $b"
 e=$(call errors)
-for wanted in 'treatment = \"neon\": not PIXELS, GLYPHS, or STIPPLE' 'weak_floor = true: a dBZ number or false' 'focus_mode = \"yes\": true or false' '[keys] zoom_in = \"foo\": foo is not a key' "[keys] nearest = \\\"s\\\": S is search's key" '[keys] bogus is not an action' '[keys] reset must be a quoted string'; do
+for wanted in 'treatment = \"neon\": not PIXELS, GLYPHS, or STIPPLE' 'weak_floor = true: a dBZ number or false' 'focus_mode = \"yes\": true or false' 'popover_scale = 9: outside 0.75 to 2.5, using 2.5' '[keys] zoom_in = \"foo\": foo is not a key' "[keys] nearest = \\\"s\\\": S is search's key" '[keys] bogus is not an action' '[keys] reset must be a quoted string'; do
   [[ $e == *"$wanted"* ]] || fail "Missing report: $wanted" "Reported: $e"
 done
-expect 'Seven mistakes' 7 "$(grep -o '\[keys\]\|treatment =\|weak_floor =\|focus_mode =' <<< "$e" | wc -l)"
-expect 'The status slot names the first and counts the rest' 'TREATMENT = "NEON": NOT PIXELS, GLYPHS, OR STIPPLE (+6 MORE)' "$(field error)"
+expect 'Eight mistakes' 8 "$(grep -o '\[keys\]\|treatment =\|weak_floor =\|focus_mode =\|popover_scale =' <<< "$e" | wc -l)"
+expect 'The status slot names the first and counts the rest' 'TREATMENT = "NEON": NOT PIXELS, GLYPHS, OR STIPPLE (+7 MORE)' "$(field error)"
 expect 'A bad treatment leaves Glyphs' GLYPHS "$(field treatment)"
 expect 'A bad weak_floor leaves the default floor' 5 "$(field weakFloor)"
 expect 'A bad focus_mode leaves the window FULL' FULL "$(field layout)"

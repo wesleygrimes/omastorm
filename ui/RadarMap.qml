@@ -43,6 +43,12 @@ Item {
     property var weakFloor: null
     readonly property int weakBelow: scan && weakFloor !== null && scan.scale > 0 ? Math.max(0, Math.min(256, Math.ceil(weakFloor * scan.scale + scan.offset))) : 0
     property int labelSize: 12
+    // Multiplies the overlay chrome (label chips, markers, the site tag and
+    // their spacing) beside labelSize; the popover passes popover_scale.
+    // Hairlines stay 1 px.
+    property real chromeScale: 1
+    function u(length) { return Math.round(length * chromeScale); }
+    onChromeScaleChanged: Qt.callLater(rebuildLabels)
     property real radarOpacity: 1    // the radar layer alone; the basemap keeps its strength
     property bool locked: false      // the accent frame on the active marker and tag (DESIGN.md, markers)
     property bool interactive: true  // false while location prompt/picker owns the surface
@@ -470,9 +476,11 @@ Item {
         // Idle / lean start still lays out station markers and place labels;
         // only radar-specific rings and tags wait for a selection.
         labelMetrics.text = siteId || "";
+        var chipH = u(16), pad = u(6), gapX = u(5), gapY = u(4), reach = u(20);
         var occupied = siteId
-            ? [{x:-7, y:-7, w:14, h:14}, {x:7, y:4, w:labelMetrics.advanceWidth+6, h:16}]
+            ? [{x:-u(7), y:-u(7), w:u(14), h:u(14)}, {x:u(7), y:u(4), w:labelMetrics.advanceWidth+pad, h:chipH}]
             : [], result = [], stations = [];
+        var clear = (q, w) => !occupied.some(o => q.x<o.x+o.w+gapX && q.x+w+pad+gapX>o.x && q.y<o.y+o.h+gapY && q.y+reach>o.y);
         // Station IDs take priority over place names. Reserve every marker
         // first; co-located archived/test stations must not cover each other.
         var nearby = sites.filter(s => s.id !== siteId
@@ -481,7 +489,7 @@ Item {
         for (var s of nearby) {
             var mx = (mercatorX(s.lon) - siteMx) * worldPixels;
             var my = (mercatorY(s.lat) - siteMy) * worldPixels;
-            occupied.push({x:mx-4, y:my-4, w:8, h:8});
+            occupied.push({x:mx-u(4), y:my-u(4), w:u(8), h:u(8)});
         }
         var metarOverlay = map.metarMode && map.metars && map.metars.length;
         var overlay = metarOverlay
@@ -497,17 +505,17 @@ Item {
                 labelMetrics.text = p.name;
                 var mtx = (mercatorX(p.lon) - siteMx) * worldPixels, mty = (mercatorY(p.lat) - siteMy) * worldPixels;
                 var mtw = labelMetrics.advanceWidth, chosen = null;
-                for (var q of [{x:mtx+7,y:mty-8},{x:mtx-mtw-24,y:mty-8},
-                               {x:mtx-mtw/2,y:mty+22},{x:mtx-mtw/2,y:mty-28},
-                               {x:mtx+10,y:mty+22},{x:mtx+10,y:mty-24},
-                               {x:mtx-mtw-24,y:mty+22},{x:mtx-mtw-24,y:mty-28}]) {
-                    if (occupied.some(o => q.x<o.x+o.w+5 && q.x+mtw+11>o.x && q.y<o.y+o.h+4 && q.y+20>o.y)) continue;
+                for (var q of [{x:mtx+u(7),y:mty-u(8)},{x:mtx-mtw-u(24),y:mty-u(8)},
+                               {x:mtx-mtw/2,y:mty+u(22)},{x:mtx-mtw/2,y:mty-u(28)},
+                               {x:mtx+u(10),y:mty+u(22)},{x:mtx+u(10),y:mty-u(24)},
+                               {x:mtx-mtw-u(24),y:mty+u(22)},{x:mtx-mtw-u(24),y:mty-u(28)}]) {
+                    if (!clear(q, mtw)) continue;
                     chosen = q; break;
                 }
                 if (!chosen) continue;
-                occupied.push({x:chosen.x,y:chosen.y,w:mtw+6,h:16});
+                occupied.push({x:chosen.x,y:chosen.y,w:mtw+pad,h:chipH});
                 result.push({name:p.name, x:chosen.x, y:chosen.y,
-                             width:mtw+6, markerX:mtx, markerY:mty,
+                             width:mtw+pad, markerX:mtx, markerY:mty,
                              category: p.category || "", raw: p.raw || "",
                              obsTime: p.obsTime || "", id: p.id || ""});
             }
@@ -517,14 +525,14 @@ Item {
             var ty = (mercatorY(s.lat) - siteMy) * worldPixels;
             labelMetrics.text = s.id;
             var tw = labelMetrics.advanceWidth, chosen = null;
-            for (var q of [{x:tx+10,y:ty+4}, {x:tx-tw-16,y:ty+4},
-                           {x:tx+10,y:ty-20}, {x:tx-tw-16,y:ty-20}]) {
-                if (occupied.some(o => q.x<o.x+o.w+5 && q.x+tw+11>o.x && q.y<o.y+o.h+4 && q.y+20>o.y)) continue;
+            for (var q of [{x:tx+u(10),y:ty+u(4)}, {x:tx-tw-u(16),y:ty+u(4)},
+                           {x:tx+u(10),y:ty-u(20)}, {x:tx-tw-u(16),y:ty-u(20)}]) {
+                if (!clear(q, tw)) continue;
                 chosen = q; break;
             }
             if (!chosen) continue;
-            occupied.push({x:chosen.x,y:chosen.y,w:tw+6,h:16});
-            stations.push({name:s.id, x:chosen.x, y:chosen.y, width:tw+6});
+            occupied.push({x:chosen.x,y:chosen.y,w:tw+pad,h:chipH});
+            stations.push({name:s.id, x:chosen.x, y:chosen.y, width:tw+pad});
         }
         if (JSON.stringify(siteLabels) !== JSON.stringify(stations)) siteLabels = stations;
         if (!metarOverlay) {
@@ -532,15 +540,15 @@ Item {
                 labelMetrics.text = p.name;
                 var tx = (mercatorX(p.lon) - siteMx) * worldPixels, ty = (mercatorY(p.lat) - siteMy) * worldPixels;
                 var tw = labelMetrics.advanceWidth, chosen = null;
-                for (var q of [{x:tx+7,y:ty-8},{x:tx-tw-12,y:ty-8},
-                               {x:tx-tw/2,y:ty+7},{x:tx-tw/2,y:ty-23}]) {
-                    if (occupied.some(o => q.x<o.x+o.w+5 && q.x+tw+11>o.x && q.y<o.y+o.h+4 && q.y+20>o.y)) continue;
+                for (var q of [{x:tx+u(7),y:ty-u(8)},{x:tx-tw-u(12),y:ty-u(8)},
+                               {x:tx-tw/2,y:ty+u(7)},{x:tx-tw/2,y:ty-u(23)}]) {
+                    if (!clear(q, tw)) continue;
                     chosen=q; break;
                 }
                 if (!chosen) continue;
-                occupied.push({x:chosen.x,y:chosen.y,w:tw+6,h:16});
+                occupied.push({x:chosen.x,y:chosen.y,w:tw+pad,h:chipH});
                 result.push({name:p.name, x:chosen.x, y:chosen.y,
-                             width:tw+6, markerX:tx, markerY:ty,
+                             width:tw+pad, markerX:tx, markerY:ty,
                              category: p.category || "", raw: p.raw || "",
                              obsTime: p.obsTime || "", id: p.id || ""});
             }
@@ -929,9 +937,9 @@ Item {
             model: map.sites.filter(s => s.id !== map.siteId)
             Rectangle {
                 required property var modelData
-                x: (map.mercatorX(modelData.lon)-map.siteMx)*map.worldPixels-3
-                y: (map.mercatorY(modelData.lat)-map.siteMy)*map.worldPixels-3
-                width: 6; height: 6
+                x: (map.mercatorX(modelData.lon)-map.siteMx)*map.worldPixels-width/2
+                y: (map.mercatorY(modelData.lat)-map.siteMy)*map.worldPixels-height/2
+                width: map.u(6); height: map.u(6)
                 color: map.theme.background
                 border.width: 1; border.color: Qt.alpha(map.theme.foreground, .7)
             }
@@ -941,13 +949,13 @@ Item {
             Rectangle {
                 required property var modelData
                 x: modelData.x; y: modelData.y
-                width: modelData.width; height: 16
-                visible: overlayCamera.x+x >= 8 && overlayCamera.x+x+width <= map.width-8
-                    && overlayCamera.y+y >= 26 && overlayCamera.y+y+height <= map.height-30
+                width: modelData.width; height: map.u(16)
+                visible: overlayCamera.x+x >= map.u(8) && overlayCamera.x+x+width <= map.width-map.u(8)
+                    && overlayCamera.y+y >= map.u(26) && overlayCamera.y+y+height <= map.height-map.u(30)
                 color: Qt.alpha(map.theme.background, .88)
                 Text {
                     textFormat: Text.PlainText
-                    x: 3; anchors.verticalCenter: parent.verticalCenter
+                    x: map.u(3); anchors.verticalCenter: parent.verticalCenter
                     text: modelData.name; color: Qt.alpha(map.theme.foreground, .75)
                     font.family: map.theme.font; font.pixelSize: map.labelSize
                 }
@@ -958,13 +966,13 @@ Item {
             Item {
                 required property var modelData
                 // Keep labels clear of the surface's corner annotations.
-                visible: overlayCamera.x + modelData.x >= 8
-                    && overlayCamera.x + modelData.x + modelData.width <= map.width - 8
-                    && overlayCamera.y + modelData.y >= 26
-                    && overlayCamera.y + modelData.y + 16 <= map.height - 30
+                visible: overlayCamera.x + modelData.x >= map.u(8)
+                    && overlayCamera.x + modelData.x + modelData.width <= map.width - map.u(8)
+                    && overlayCamera.y + modelData.y >= map.u(26)
+                    && overlayCamera.y + modelData.y + map.u(16) <= map.height - map.u(30)
                 Rectangle {
                     readonly property bool pin: map.metarMode && map.metarMark === "pin" && !!modelData.category
-                    readonly property int pinSize: pin ? 10 : 2
+                    readonly property int pinSize: map.u(pin ? 10 : 2)
                     readonly property color pinInk: pin && Metar.color(modelData.category)
                         ? Metar.color(modelData.category) : map.theme.foreground
                     x: modelData.markerX - pinSize / 2
@@ -976,13 +984,13 @@ Item {
                     readonly property bool ink: map.metarMode && map.metarMark === "ink" && !!Metar.color(modelData.category)
                     readonly property bool block: map.metarMode && map.metarMark !== "ink" && map.metarMark !== "pin" && !!Metar.color(modelData.category)
                     x: modelData.x; y: modelData.y
-                    width: modelData.width; height: 16
+                    width: modelData.width; height: map.u(16)
                     color: block ? Qt.alpha(Metar.color(modelData.category), .88)
                          : ink ? "transparent"
                          : Qt.alpha(map.theme.background, .88)
                     Text {
                         textFormat: Text.PlainText
-                        x: 3; anchors.verticalCenter: parent.verticalCenter
+                        x: map.u(3); anchors.verticalCenter: parent.verticalCenter
                         text: modelData.name
                         color: parent.block ? "#ffffff"
                              : parent.ink ? Metar.color(modelData.category)
@@ -993,23 +1001,23 @@ Item {
                 }
             }
         }
-        Rectangle { x: -7; y: -.5; width: 14; height: 1; color: map.theme.foreground; visible: map.siteId !== "" && !map.mosaic }
-        Rectangle { x: -.5; y: -7; width: 1; height: 14; color: map.theme.foreground; visible: map.siteId !== "" && !map.mosaic }
+        Rectangle { x: -map.u(7); y: -.5; width: map.u(14); height: 1; color: map.theme.foreground; visible: map.siteId !== "" && !map.mosaic }
+        Rectangle { x: -.5; y: -map.u(7); width: 1; height: map.u(14); color: map.theme.foreground; visible: map.siteId !== "" && !map.mosaic }
         // The lock: an accent 1 px frame on the marker and the tag.
         // Mosaics have no dish marker; the frame sits on the coverage centroid.
         Rectangle {
-            x: -6; y: -6; width: 12; height: 12; color: "transparent"
+            x: -map.u(6); y: -map.u(6); width: map.u(12); height: map.u(12); color: "transparent"
             visible: map.locked && (map.siteId !== "" || map.mosaic)
             border.width: 1; border.color: map.theme.accent
         }
         Rectangle {
-            x: 7; y: 4; width: Math.floor(siteTag.implicitWidth) + 6; height: 16; color: map.theme.background
+            x: map.u(7); y: map.u(4); width: Math.floor(siteTag.implicitWidth) + map.u(6); height: map.u(16); color: map.theme.background
             visible: map.siteId !== "" || (map.mosaic && map.sourceId !== "")
             border.width: map.locked ? 1 : 0; border.color: map.theme.accent
             Text {
                 textFormat: Text.PlainText
                 id: siteTag
-                x: 3; anchors.verticalCenter: parent.verticalCenter
+                x: map.u(3); anchors.verticalCenter: parent.verticalCenter
                 text: map.siteId || (map.mosaic ? map.sourceId : "")
                 color: map.theme.foreground
                 font.family: map.theme.font; font.pixelSize: map.labelSize
@@ -1019,11 +1027,11 @@ Item {
     function metarAt(mx, my) {
         if (!map.metarMode) return null;
         var ox = mx - overlayCamera.x, oy = my - overlayCamera.y;
-        var pin = map.metarMark === "pin" ? 6 : 2;
+        var pin = u(map.metarMark === "pin" ? 6 : 2), chipH = u(16);
         for (var i = labels.length - 1; i >= 0; i--) {
             var L = labels[i];
             if (!L.raw) continue;
-            if (ox >= L.x && ox <= L.x + L.width && oy >= L.y && oy <= L.y + 16) return L;
+            if (ox >= L.x && ox <= L.x + L.width && oy >= L.y && oy <= L.y + chipH) return L;
             if (Math.abs(ox - L.markerX) <= pin && Math.abs(oy - L.markerY) <= pin) return L;
         }
         return null;

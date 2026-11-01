@@ -12,24 +12,28 @@ ShellRoot {
     FloatingWindow {
         id: preview
         visible: true
-        implicitWidth: 380
-        implicitHeight: 500
+        implicitWidth: picture.width
+        implicitHeight: picture.height
         color: "#181414"
+        // Sized by the panel, not the window, so a capture after a
+        // popover_scale change holds the whole card.
         Item {
             id: picture
-            anchors.fill: parent
+            width: Math.max(380, frame.width + 44)
+            height: Math.max(500, frame.y + frame.height + 58)
             Rectangle {
                 x: 0; y: 0; width: parent.width; height: 32; color: theme.snapshot.background
                 RadarMark { x: 294; y: 8; ink: theme.snapshot.foreground }
             }
             Rectangle {
-                x: 22; y: 42; width: 336; height: 400
+                id: frame
+                x: 22; y: 42; width: popover.implicitWidth + 28; height: popover.implicitHeight + 28
                 color: theme.snapshot.background
                 border.width: 2; border.color: theme.snapshot.accent
                 visible: !harness.expanded
                 Popover {
                     id: popover
-                    x: 14; y: 14; width: 308
+                    x: 14; y: 14; width: implicitWidth
                     session: harness.session
                     onExpandRequested: { harness.expanded = true; panel.open("{}"); }
                     onCloseRequested: harness.expanded = true
@@ -62,7 +66,10 @@ ShellRoot {
                 window: panel.opened, windowSite: panel.siteId, windowFrame: panel.scan ? panel.scan.id : "",
                 windowPlaying: panel.playing, windowTreatment: panel.treatment, error: session.startupError,
                 needsLocation: session.needsLocation, lat: session.centerLat, lon: session.centerLon,
-                updatePending: session.updatePending, updateNotice: session.updateNotice});
+                updatePending: session.updatePending, updateNotice: session.updateNotice,
+                scale: session.popoverScale, cardWidth: popover.width, cardHeight: popover.implicitHeight,
+                frameWidth: frame.width, frameHeight: frame.height, mapHeight: popover.mapHeight,
+                contentBottom: popover.contentBottom});
         }
         function capture(path: string): void { picture.grabToImage(result => result.saveToFile(path)); }
         function quit(): void { Qt.quit(); }

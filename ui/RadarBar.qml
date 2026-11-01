@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Ui
 import qs.Commons
+import "Keys.js" as KeyMap
 
 BarWidget {
     id: root
@@ -64,11 +65,12 @@ BarWidget {
         open: root.opened
         // Fixed height: binding to the Loader item jumps from the 440
         // fallback to a settling layout on every open (shrink/grow jitter).
-        // Card geometry is stable (308×372 content + 28 inset around it).
+        // Card geometry is stable (308×372 content at popover_scale 1, plus
+        // the unscaled 28 inset of padding and border around it).
         padding: 12
         borderSpec: Border.flat(Color.accent, 2)
-        contentWidth: 336
-        contentHeight: 400
+        contentWidth: KeyMap.scaled(KeyMap.POPOVER_WIDTH, root.session.popoverScale) + 28
+        contentHeight: KeyMap.scaled(KeyMap.POPOVER_HEIGHT, root.session.popoverScale) + 28
         focusTarget: content.item
         Loader {
             id: content

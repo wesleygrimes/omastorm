@@ -67,6 +67,33 @@ expect_command() {
     '.[$client] == [$expected]' >/dev/null || fail "Wrong $client command: $(call playbackCommands)"
 }
 until_status '.site == "KTLX" and .windowSite == "KTLX"'
+# popover_scale: the card, its map and RadarBar's 28 px inset scale together,
+# the map stays within a few rounding pixels of 280 × scale, and the last row
+# stays inside the card. Absent is today's 308×372 card in a 336×400 panel.
+expect_layout() { # scale, card width, card height
+  until_status "$(printf '.scale == %s and .cardWidth == %s and .cardHeight == %s
+    and .frameWidth == %s + 28 and .frameHeight == %s + 28
+    and .mapHeight > (280 * %s | round) - 4 and .mapHeight <= (280 * %s | round)
+    and .contentBottom > 0 and .contentBottom <= .cardHeight' "$1" "$2" "$3" "$2" "$3" "$1" "$1")"
+}
+expect_layout 1 308 372
+[[ $(status | jq '[.frameWidth, .frameHeight, .mapHeight]' -c) == '[336,400,280]' ]] \
+  || fail "Default popover geometry changed: $(status)"
+for scale in 1.5 2; do
+  printf 'popover_scale = %s\n' "$scale" > "$OMASTORM_CONFIG"
+  expect_layout "$scale" "$(jq -n "308 * $scale | round")" "$(jq -n "372 * $scale | round")"
+  # The grab is asynchronous: wait for it before the next scale lands.
+  rm -f "review/popover-scale-$scale.png"
+  call capture "$PWD/review/popover-scale-$scale.png"
+  for _ in {1..50}; do [[ -s review/popover-scale-$scale.png ]] && break; sleep .1; done
+  [[ -s review/popover-scale-$scale.png ]] || fail "No capture at popover_scale $scale"
+done
+printf 'popover_scale = 9\n' > "$OMASTORM_CONFIG"
+expect_layout 2.5 770 930
+printf 'popover_scale = "big"\n' > "$OMASTORM_CONFIG"
+expect_layout 1 308 372
+: > "$OMASTORM_CONFIG"
+expect_layout 1 308 372
 before=$(status | jq -r .frame)
 call expand
 until_status '.window and .expanded'
@@ -184,4 +211,4 @@ call quit
 wait "$pid"
 pid=
 check_qml_log "$scratch/ui.log"
-echo 'Popover: archived provenance, expand preservation, treatment sharing, close/reopen, playback, lock, update notice, daemon restart PASS'
+echo 'Popover: popover_scale layout, archived provenance, expand preservation, treatment sharing, close/reopen, playback, lock, update notice, daemon restart PASS'

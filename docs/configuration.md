@@ -12,7 +12,7 @@ engine. The UI sends the commands described in [protocol.md](protocol.md).
 
 | File | Owner and purpose | Contents |
 | --- | --- | --- |
-| `~/.config/omastorm/config.toml` | User-managed, deliberate preferences | Optional fixed launch center, radar override, treatment, weak-return floor, keybindings |
+| `~/.config/omastorm/config.toml` | User-managed, deliberate preferences | Optional fixed launch center, radar override, treatment, weak-return floor, popover scale, keybindings |
 | `$XDG_STATE_HOME/omastorm/state.json` | App-managed, remembered session | Last map center, zoom, and optional radar lock chosen in the UI |
 
 When `XDG_STATE_HOME` is unset, state lives at
@@ -90,6 +90,7 @@ center_lon = -79.97948
 treatment = "GLYPHS" # PIXELS, GLYPHS, or STIPPLE at launch; Glyphs when omitted
 weak_floor = 5       # dBZ; false draws every measured return
 focus_mode = false   # true opens on the map alone; `f` toggles until the window closes
+popover_scale = 1.0  # bar popover size, 0.75 to 2.5; 1 when omitted
 
 [metar]
 show = false                         # ICAO chips on the map; omit or false is off
@@ -152,6 +153,16 @@ the machine's own state and weather files are not read unless
   window closes without writing the file; reopening, or an edit of this
   value, uses the file again. Anything else is reported like a bad
   `treatment` and leaves it off.
+- `popover_scale`: optional, `1` when omitted. Multiplies the bar
+  popover's size: the 308×372 card, its map, text, controls, and map
+  labels, and RadarBar's panel around it (the 12 px padding and 2 px
+  border stay fixed). Every length is rounded to whole pixels and laid
+  out at that size rather than magnified, so text and the map stay sharp;
+  hairline borders stay 1 px. The map gives up a few rounding pixels
+  before any row below it can overflow the card. Applies when the file
+  changes. A number below 0.75 or above 2.5 is clamped to that end and
+  named in the window's status slot; anything else (a quoted string, a
+  boolean) is named the same way and leaves 1. The window is unaffected.
 - `[metar] show`: optional. `true` seeds the METAR overlay on (ICAO chips
   replace city names around the selected live NEXRAD radar). Omit or
   `false` is off. US and Canada only; on mosaics (OPERA and MRMS) the
@@ -192,7 +203,7 @@ the machine's own state and weather files are not read unless
   unknown action, or a key another action already holds leaves that action
   on its default and is named in the status slot (`[KEYS] ZOOM_IN = "FOO":
   FOO IS NOT A KEY`, with a count of any further mistakes) until the file is
-  fixed; a bad `treatment`, `weak_floor`, `focus_mode`, centre, or `locked_radar` is
+  fixed; a bad `treatment`, `weak_floor`, `focus_mode`, `popover_scale`, centre, or `locked_radar` is
   reported the same way. `home_site` and `follow` are unused and named if
   present.
 
