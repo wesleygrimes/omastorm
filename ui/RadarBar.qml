@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import qs.Ui
 import qs.Commons
+import qs.Commons as Commons
 import "Keys.js" as KeyMap
 
 BarWidget {
@@ -50,9 +51,9 @@ BarWidget {
         iconComponent: Component {
             Item {
                 RadarMark { anchors.centerIn: parent; ink: button.foreground; opacity: root.live ? 1 : .6 }
-                Rectangle { anchors.right: parent.right; anchors.bottom: parent.bottom; width: 5; height: 5; color: Color.urgent; visible: root.down }
+                Rectangle { anchors.right: parent.right; anchors.bottom: parent.bottom; width: 5; height: 5; color: Commons.Color.urgent; visible: root.down }
                 // An update waiting on a shell restart; the popover names it.
-                Rectangle { anchors.right: parent.right; anchors.bottom: parent.bottom; width: 5; height: 5; color: Color.accent; visible: !root.down && root.session.updatePending }
+                Rectangle { anchors.right: parent.right; anchors.bottom: parent.bottom; width: 5; height: 5; color: Commons.Color.accent; visible: !root.down && root.session.updatePending }
             }
         }
         onPressed: b => { if (b === Qt.LeftButton) { if (root.opened) root.close(); else root.open(); } }
@@ -68,7 +69,7 @@ BarWidget {
         // Card geometry is stable (308×372 content at popover_scale 1, plus
         // the unscaled 28 inset of padding and border around it).
         padding: 12
-        borderSpec: Border.flat(Color.accent, 2)
+        borderSpec: Border.flat(Commons.Color.accent, 2)
         contentWidth: KeyMap.scaled(KeyMap.POPOVER_WIDTH, root.session.popoverScale) + 28
         contentHeight: KeyMap.scaled(KeyMap.POPOVER_HEIGHT, root.session.popoverScale) + 28
         focusTarget: content.item
