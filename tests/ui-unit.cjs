@@ -31,6 +31,33 @@ assert.equal(Keys.resolve({play:'h'}, x=>x).errors.length, 1);
 assert.equal(Keys.envFloor('off'), null);
 const Toml = moduleBody('Toml');
 assert.equal(Toml.parse('[keys]\nplay = "Space" # comment\n')['keys.play'], 'Space');
+// popover_scale: absent is 1, valid passes, out of range clamps, anything else is 1; only absent and valid are silent.
+function popoverScale(toml) {
+    const errors = [];
+    return {scale: Keys.popoverScale(Toml.parse(toml).popover_scale, errors), errors: errors.length};
+}
+assert.deepEqual(popoverScale(''), {scale: 1, errors: 0});
+assert.deepEqual(popoverScale('treatment = "PIXELS"\n'), {scale: 1, errors: 0});
+assert.deepEqual(popoverScale('popover_scale = 1.5\n'), {scale: 1.5, errors: 0});
+assert.deepEqual(popoverScale('popover_scale = 2 # ultrawide\n'), {scale: 2, errors: 0});
+assert.deepEqual(popoverScale('popover_scale = 0.75\n'), {scale: 0.75, errors: 0});
+assert.deepEqual(popoverScale('popover_scale = 2.5\n'), {scale: 2.5, errors: 0});
+assert.deepEqual(popoverScale('popover_scale = 9\n'), {scale: 2.5, errors: 1});
+assert.deepEqual(popoverScale('popover_scale = 0.2\n'), {scale: 0.75, errors: 1});
+assert.deepEqual(popoverScale('popover_scale = -1\n'), {scale: 0.75, errors: 1});
+assert.deepEqual(popoverScale('popover_scale = "1.5"\n'), {scale: 1, errors: 1});
+assert.deepEqual(popoverScale('popover_scale = true\n'), {scale: 1, errors: 1});
+// Not in the scalar subset Toml.js reads, so it is absent rather than an error.
+assert.deepEqual(popoverScale('popover_scale = [1.5]\n'), {scale: 1, errors: 0});
+assert.equal(Keys.popoverScale(NaN, []), 1);
+assert.equal(Keys.popoverScale(Infinity, []), 1);
+assert.equal(Keys.popoverScale(null, []), 1);
+// Whole pixels, and today's card and panel exactly at 1.
+assert.equal(Keys.scaled(Keys.POPOVER_WIDTH, 1), 308);
+assert.equal(Keys.scaled(Keys.POPOVER_HEIGHT, 1) + 28, 400);
+assert.equal(Keys.scaled(Keys.POPOVER_WIDTH, 1.5), 462);
+assert.equal(Keys.scaled(Keys.POPOVER_HEIGHT, 2), 744);
+assert.equal(Keys.scaled(10, 1.25), 13);
 const Metar = moduleBody('Metar');
 assert.equal(Metar.color('VFR'), '#00c000');
 assert.equal(Metar.countFromConfig({'metar.count':999}), 0);

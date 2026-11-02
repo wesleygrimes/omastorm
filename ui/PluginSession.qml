@@ -25,6 +25,9 @@ QtObject {
     // key change it, OMASTORM_WEAK outranks the file for captures.
     property var weakFloor: KeyMap.envFloor(Quickshell.env("OMASTORM_WEAK")) !== undefined ? KeyMap.envFloor(Quickshell.env("OMASTORM_WEAK")) : KeyMap.DEFAULT_FLOOR
     property string startupError: ""
+    // The bar popover's size multiplier (config.toml popover_scale); the
+    // window names a bad value in its status slot.
+    readonly property real popoverScale: KeyMap.popoverScale(config.popoverScale, [])
     readonly property bool ready: config.ready && remembered.ready
     readonly property string persistError: remembered.error ? remembered.error.toUpperCase() : ""
     property bool hasView: false
