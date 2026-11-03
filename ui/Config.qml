@@ -48,12 +48,16 @@ QtObject {
     // The live fix from gpsd while `gpsd = true` and a receiver has one
     // (DESIGN.md, gpsd follow as built), or null. gpspipe -w relays gpsd's
     // JSON stream; a TPV with a 2D-or-better fix is a position, mode 1 is
-    // a receiver with none. The relay exits when gpsd is not answering and
-    // comes back every five seconds until it is, or until the key is off.
+    // a receiver with none. The relay exits when gpsd is not answering or
+    // gpspipe is not installed, and comes back every five seconds until it
+    // is, or until the key is off. The shell wrapper turns a missing
+    // gpspipe into exit 127, so a later install is picked up without a
+    // relaunch and the log names it once instead of on every retry.
     readonly property bool gpsd: values.gpsd === true
     property var fix: null
+    property bool gpspipeMissing: false
     property Process gps: Process {
-        command: ["gpspipe", "-w"]
+        command: ["sh", "-c", "command -v gpspipe >/dev/null 2>&1 || exit 127; exec gpspipe -w"]
         stdout: SplitParser {
             onRead: line => {
                 try {
@@ -66,7 +70,12 @@ QtObject {
             }
         }
         running: root.gpsd
-        onExited: { root.fix = null; if (root.gpsd) gpsRetry.restart(); }
+        onExited: code => {
+            root.fix = null;
+            if (code === 127 && !root.gpspipeMissing) console.warn("gpsd = true, but gpspipe is not installed (gpsd package); retrying every 5 s");
+            root.gpspipeMissing = code === 127;
+            if (root.gpsd) gpsRetry.restart();
+        }
     }
     property Timer gpsRetry: Timer { interval: 5000; onTriggered: if (root.gpsd && !root.gps.running) root.gps.running = true }
     onGpsdChanged: { gps.running = gpsd; if (!gpsd) fix = null; }

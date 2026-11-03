@@ -4,12 +4,13 @@
 # streams gpsd JSON, and the map follows each fix — a Dallas fix centres
 # the map there, names GPS as the source and hands the radar off to KFWS;
 # a fix in Oklahoma City hands off to KTLX; a parked receiver's jitter
-# moves nothing; a user pan pauses follow; the crosshair chip pauses and
-# resumes; a lock holds the radar while the map still follows; a lost fix
-# leaves the view where it was; an explicit config centre outranks the
-# remembered fix; turning the key off hides the chip; turning it back on
-# clears any pause that carried over. Runs as the gps integration case,
-# whose scratch daemon it leaves on KTLX.
+# moves nothing; a zoom keeps following; a user pan pauses follow; the
+# crosshair chip pauses and resumes; a lock holds the radar while the map
+# still follows; a lost fix leaves the view where it was; an explicit
+# config centre outranks the remembered fix; turning the key off hides the
+# chip; turning it back on clears any pause that carried over; a
+# non-boolean value is named in the status slot. Runs as the gps
+# integration case, whose scratch daemon it leaves on KTLX.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 check_dir="$PWD/target/check-gps"
@@ -80,6 +81,12 @@ near "$(field lat)" 35.47 || fail "The map did not follow to Oklahoma City: $(fi
 fix 35.4703 -97.3302
 sleep 2
 expect 'Jitter left the centre alone' "$(field lat)" "35.47"
+
+# A keyboard zoom keeps the centre, so follow keeps steering.
+call run zoom_in
+sleep 2
+expect 'A zoom left follow running' "$(field gpsPaused)" "false"
+expect 'A zoom left the chip filled' "$(field gpsFollowing)" "true"
 
 # A user pan pauses follow: the camera stays where the pan left it, and
 # the next fix that has moved does not snap it back.
@@ -164,6 +171,12 @@ fix 36.30 -97.80
 until_field gpsFollowing true
 until_field locationSource gps
 near "$(field lat)" 36.30 || fail "A resumed receiver did not follow its fix: $(field lat)"
+
+# A value that is not a boolean is named in the status slot and leaves
+# follow off.
+printf 'gpsd = "yes"\n' > "$check_dir/config.toml"
+until_field gpsEnabled false
+until_field error 'GPSD = "YES": TRUE OR FALSE'
 
 if rg -q 'TypeError|ReferenceError|Unable to assign|is not a function' "$check_dir/log"; then fail "QML errors in the log"; fi
 echo "GPS_PASSED"
