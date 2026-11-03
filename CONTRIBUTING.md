@@ -185,7 +185,9 @@ unstaged and new files; `--base` changes that comparison. Unknown paths select
 complete applicable checks. GPU verification is explicit with `--gpu`;
 `--changed` names it when rendering paths changed.
 QML/JS parsing and native JS lint run with Qt tools. This is a syntax check:
-`mise format` applies rustfmt only and never rewrites QML/JS. Integration exercises
+`mise format` applies rustfmt only and never rewrites QML/JS. UI lint also fails
+on a `Text` or `Text`-based component in `ui/` without its own `textFormat`; set
+`Text.PlainText` for data, or a rich format deliberately. Integration exercises
 Quickshell imports, and desktop checks validate Omarchy imports/routing.
 `mise check` also verifies both published pin assets using GitHub; this
 read-only release validation needs network access. Development and integration

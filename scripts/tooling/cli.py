@@ -3,6 +3,7 @@
 import argparse
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -70,6 +71,31 @@ def setup(args):
     print('Setup complete. Optional capture packages: imagemagick, ffmpeg. Shader/lint/format tools: qt6-shadertools, qt6-declarative. No development/test command fetches dependencies.')
 
 
+# Comments, strings and regex literals, blanked so their braces and words are not code.
+LITERAL = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\\n])*"|\'(?:\\.|[^\'\\\n])*\'|`(?:\\.|[^`\\])*`'
+                     r'|(?<=[(,=:[!&|?{};])\s*/(?![/*])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n\[])+/', re.S)
+
+
+def unformatted_text(source):
+    """Lines of Text objects and Text-based components lacking their own textFormat binding.
+
+    Text defaults to AutoText, which renders markup-like data as HTML. Instances
+    of a Text-based component inherit the component's format and are not checked.
+    """
+    code = LITERAL.sub(lambda match: re.sub(r'[^\n]', ' ', match.group()), source)
+    lines = []
+    for match in re.finditer(r'\bText\s*\{', code):
+        depth, own = 1, []
+        for char in code[match.end():]:
+            depth += (char == '{') - (char == '}')
+            if not depth:
+                break
+            own.append(char if depth == 1 else ' ')
+        if not re.search(r'(?<![\w.])textFormat\s*:', ''.join(own)):
+            lines.append(code.count('\n', 0, match.start()) + 1)
+    return lines
+
+
 def main():
     os.chdir(ROOT)
     top = parser()
@@ -112,6 +138,10 @@ def main():
                 for file in sorted(list((ROOT / 'ui').glob('*.qml')) + list((ROOT / 'ui').glob('*.js'))):
                     run('/usr/lib/qt6/bin/qmlformat', file, stdout=subprocess.DEVNULL)
                 run('/usr/lib/qt6/bin/qmllint', *sorted((ROOT / 'ui').glob('*.js')))
+                missing = [f'{file.relative_to(ROOT)}:{line}: Text without textFormat; set Text.PlainText, or a rich format deliberately'
+                           for file in sorted((ROOT / 'ui').glob('*.qml')) for line in unformatted_text(file.read_text())]
+                if missing:
+                    raise RuntimeError('\n'.join(missing))
             if args.command == 'format' and args.scope in ('all', 'tooling'):
                 import usage
                 usage.write(top)
