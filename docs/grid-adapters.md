@@ -169,16 +169,22 @@ precolored map and not polar gates.
 | `status` | `complete` (mosaics do not paint a sweep) |
 | `product`, `productName`, `units` | Engine vocabulary; UI lays it out |
 | `palette`, `bounds` | Shared color classes; v2 bounds are JSON numbers, including fractional values |
+| `measuredCode` | Optional B-channel encoding `{scale, offset}`; completed OPERA frames use 2 and 66 |
 | `texture` | Runtime RGBA8 PNG of classified values, `tex/` rule unchanged |
 | `width`, `height` | Raster size |
 | `crs`, `geotransform` | Normalized native georeference below; the shader maps a map cell to a pixel |
 
 No `azimuthLut`. No rays/gates. The decoder classifies each native
 measured value against `bounds` before writing the texture: R is palette
-class + 1, G bit 0 is missing, G bit 1 is undetect, and B/A are zero/255.
-This texture is a display product, not a lossless export of provider
-measurements. Grid frames omit polar `scale` / `offset`, so the dBZ
-weak-return floor is disabled. Every adapter defines bounds and a palette
+class + 1, G bit 0 is missing, G bit 1 is undetect, and A is 255.
+OPERA measured cells preserve a half-dBZ code in B:
+`floor(value * 2 + 66)`, clamped to 2..255 (-32 through 94.5 dBZ).
+Missing and undetect cells have B = 0. Other adapters keep B = 0 and omit
+`measuredCode`. Grid frames never carry polar `scale` / `offset`, which
+clients read as the weak-return floor being in force; the grid path does not
+apply the floor. This texture is a display product, not a lossless export
+of provider measurements; R classification uses the original value.
+Every adapter defines bounds and a palette
 in its own units. The engine still owns product, unit, and color; radar
 arrays still never enter JSON or QML.
 

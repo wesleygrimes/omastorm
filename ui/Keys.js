@@ -146,6 +146,26 @@ function focusMode(value, errors) {
     errors.push("focus_mode = " + JSON.stringify(value) + ": true or false");
     return false;
 }
+// The popover_scale setting: a size multiplier for the bar popover, 1 when
+// unset. A number outside MIN_SCALE..MAX_SCALE is clamped and reported;
+// anything else is reported and leaves 1.
+var MIN_SCALE = 0.75, MAX_SCALE = 2.5;
+function popoverScale(value, errors) {
+    if (value === undefined) return 1;
+    if (typeof value !== "number" || !isFinite(value)) {
+        errors.push("popover_scale = " + JSON.stringify(value) + ": a number from " + MIN_SCALE + " to " + MAX_SCALE);
+        return 1;
+    }
+    if (value >= MIN_SCALE && value <= MAX_SCALE) return value;
+    var clamped = Math.max(MIN_SCALE, Math.min(MAX_SCALE, value));
+    errors.push("popover_scale = " + value + ": outside " + MIN_SCALE + " to " + MAX_SCALE + ", using " + clamped);
+    return clamped;
+}
+// A popover length at this scale, whole pixels so text and edges stay
+// sharp. The card is POPOVER_WIDTH x POPOVER_HEIGHT at scale 1; RadarBar's
+// panel adds its fixed padding and border around it.
+var POPOVER_WIDTH = 308, POPOVER_HEIGHT = 372;
+function scaled(length, scale) { return Math.round(length * scale); }
 
 // A sequence as the sheet's key cap shows it: letters in their case,
 // arrows and the named keys as words or symbols, modifiers spelled out.

@@ -259,6 +259,7 @@ center_lon = -79.97948
 treatment = "GLYPHS"  # PIXELS, GLYPHS, or STIPPLE at launch
 weak_floor = 5        # dBZ; false draws every measured return
 focus_mode = false    # true opens on the map alone
+popover_scale = 1.0   # 0.75–2.5; 1.5 or 2 for a bigger bar popover
 
 [metar]
 show = true           # optional; start with airport reports on the map
@@ -272,6 +273,10 @@ A bad value is named in the status slot and that setting stays on its
 default. Keys are Qt sequences; an empty string unbinds. `1` `2` `3` change
 treatment, `w` changes the weak-return floor, `a` toggles aviation mode, and
 `f` toggles focus mode for the session without writing the file.
+
+`popover_scale` sizes the bar popover on a dense or very wide screen: its
+text, controls, and map all grow together. A number outside 0.75–2.5 uses
+the nearest end of that range.
 
 The window drops the brand row and the legend when it is too small for
 them, and gets them back when it grows.
