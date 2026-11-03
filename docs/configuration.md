@@ -136,9 +136,13 @@ zoom_in = "+ ="
   holds the radar while the map keeps following; a user pan pauses the
   follow so the chip click resumes from where the camera was. The
   remembered view is written like any other centre, so the last fix is
-  where a relaunch opens. A lost fix leaves the view where the receiver
-  last was; gpsd not answering is retried every five seconds while the
-  key is on. Off when omitted.
+  where a relaunch opens. A zoom keeps following;
+  only a pan pauses. A lost fix leaves the view where the receiver last
+  was. While the key is on, gpsd not answering and `gpspipe` not
+  installed are both retried every five seconds, so installing gpsd later
+  needs no relaunch; a missing `gpspipe` is logged once. A value other
+  than `true` or `false` is named in the status slot and leaves follow
+  off. Off when omitted.
 
 A Jacksonville map center with `locked_radar = "KFCX"` is valid. Honor both
 settings even when the sweep is outside the view. Show the selected station
@@ -218,13 +222,13 @@ the machine's own state and weather files are not read unless
   `pan_down` `pan_up` `pan_right` (`h j k l` and the arrows), `zoom_in`
   (`+ =`), `zoom_out` (`-`), `reset` (`0`, the resolved location), `previous_frame` (`[`),
   `next_frame` (`]`), `play` (`Space`), `oldest` (`Home`), `newest` (`End`),
-  `pixels` `glyphs` `stipple` (`1 2 3`), `weak` (`w`), `aviation` (`a`), `focus` (`f`), `help` (`?`), `close`
-  (`Escape`).
+  `pixels` `glyphs` `stipple` (`1 2 3`), `weak` (`w`), `aviation` (`a`), `focus` (`f`), `follow` (no default; pauses and resumes GPS follow),
+  `help` (`?`), `close` (`Escape`).
   A value that is not a quoted string, a sequence Qt cannot parse, an
   unknown action, or a key another action already holds leaves that action
   on its default and is named in the status slot (`[KEYS] ZOOM_IN = "FOO":
   FOO IS NOT A KEY`, with a count of any further mistakes) until the file is
-  fixed; a bad `treatment`, `weak_floor`, `focus_mode`, `popover_scale`, centre, or `locked_radar` is
+  fixed; a bad `treatment`, `weak_floor`, `focus_mode`, `gpsd`, `popover_scale`, centre, or `locked_radar` is
   reported the same way. `home_site` and `follow` are unused and named if
   present.
 

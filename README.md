@@ -34,6 +34,13 @@ Optional: a Hyprland key to toggle the window. Add one line to
 o.bind("SUPER + SHIFT + R", "Omastorm", "omarchy shell shell toggle com.omastorm.radar '{}'")
 ```
 
+Optional: GPS follow needs the gpsd package (it provides `gpspipe`) running
+with your receiver, then `gpsd = true` in the config:
+
+```sh
+sudo pacman -S gpsd
+```
+
 Optional: list it in the app launcher:
 
 ```sh
@@ -50,7 +57,8 @@ approximate location.
 
 **Use approximate location** is one click. It asks [wttr.in](https://wttr.in)
 to guess your city from the public IP of that request. Nothing is sent until
-you click; there is no GPS and no background tracking. A VPN or CGNAT may
+you click, and there is no background tracking. Nothing uses GPS unless you
+set `gpsd = true`. A VPN or CGNAT may
 land you at the ISP instead of your house. Choose manually if the guess is
 wrong.
 
@@ -244,8 +252,6 @@ Chrome follows the Omarchy theme. Radar color comes from the measured reflectivi
 | `?` | This map |
 | Esc | Close |
 
-## Preferences
-
 ## Configuration
 
 `~/.config/omastorm/config.toml` holds deliberate preferences. The app saves
@@ -261,7 +267,8 @@ remembered lock is restored, otherwise the nearest radar follows the map.
 With a GPS receiver on a running `gpsd`, `gpsd = true` makes the map follow
 the receiver once a view exists, handing the radar off as you drive. The
 crosshair on the map is the follow chip: click to pause and resume; `NO FIX`
-shows when the receiver is silent.
+shows when the receiver is silent. A pan pauses follow; a zoom does not.
+Follow has no default key; bind one with `follow = "..."` under `[keys]`.
 
 ```toml
 # Optional: always open here. Omit both to remember the last map position.
