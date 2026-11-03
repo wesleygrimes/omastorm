@@ -266,6 +266,7 @@ Item {
         case "nearest": nearest(); break;
         case "mosaic": coveringMosaic(); break;
         case "lock": toggleLock(); break;
+        case "follow": toggleFollow(); break;
         case "locate": locateMe(); break;
         case "pan_left": map.pan(-1, 0); break;
         case "pan_right": map.pan(1, 0); break;
@@ -300,13 +301,28 @@ Item {
             return JSON.stringify({sheet: sheet.open, menu: treatmentMenu.opened, treatment: app.treatment, weakFloor: app.weakFloor === null ? "off" : app.weakFloor, error: app.configError, layout: win.layout,
                                    span: Math.round(map.span * 10) / 10, lat: Math.round(map.centerLat * 1000) / 1000, lon: Math.round(map.centerLon * 1000) / 1000,
                                    locationSource: app.store.locationSource, needsLocation: app.store.needsLocation, locating: app.store.locating,
-                                   site: app.siteId, source: engine.source ? engine.source.id : "", locked: app.locked, lockSource: app.store.lockSource, outsideCoverage: app.outsideCoverage});
+                                   site: app.siteId, source: engine.source ? engine.source.id : "", locked: app.locked, lockSource: app.store.lockSource, outsideCoverage: app.outsideCoverage,
+                                   gpsEnabled: app.gpsEnabled, gpsFollowing: app.gpsFollowing, gpsPaused: app.gpsPaused, gpsNoFix: app.gpsNoFix});
         }
     }
     // Site navigation (DESIGN.md, location): the lock pins the radar against
     // hand-offs; `n` releases it and selects the nearest radar without moving
     // the camera. The site picker locks and centres on that station.
     readonly property bool locked: state && state.navigation ? state.navigation.locked : false
+    readonly property bool following: state && state.navigation ? state.navigation.follow && !state.navigation.locked : false
+    // The follow chip on the map (DESIGN.md, gpsd follow as built) is the
+    // crosshair on the map's top-left, hidden when gpsd is off. Its three
+    // shapes read the camera-control state of GPS follow: filled accent
+    // while a fix is steering the camera, outlined accent after a pan has
+    // paused it, outlined dimmed with `NO FIX` while the receiver has
+    // nothing to report. Click to pause and resume; the padlock on the
+    // site row is a separate verb that only pins the radar.
+    readonly property bool gpsEnabled: config.gpsd
+    readonly property bool gpsHasFix: !!config.fix
+    readonly property bool gpsPaused: store.followPaused
+    readonly property bool gpsFollowing: gpsEnabled && gpsHasFix && !gpsPaused
+    readonly property bool gpsNoFix: gpsEnabled && !gpsHasFix
+    readonly property var resetTarget: Location.resolveReset(Location.configCenter(config.values), config.location)
     readonly property bool outsideCoverage: {
         if (!locked) return false;
         if (engine.site && engine.site.coverage)
@@ -318,6 +334,24 @@ Item {
     function toggleLock() {
         if (!state || !state.selection) return;
         store.setLock(locked ? null : state.selection, !locked);
+    }
+    // The follow chip's single verb: pause ↔ resume. While the receiver is
+    // silent (NO FIX) a click has nothing to hold or steer with yet.
+    function toggleFollow() {
+        if (!gpsEnabled || gpsNoFix) return;
+        store.setFollowPaused(!gpsPaused);
+    }
+    readonly property string placeLabel: {
+        var t = app.resetTarget;
+        if (t && Location.distanceKm(map.centerLat, map.centerLon, t.lat, t.lon) < 2) return (t.name || "OMARCHY'S LOCATION").toUpperCase();
+        if (app.store.placeName && Location.distanceKm(map.centerLat, map.centerLon, app.store.centerLat, app.store.centerLon) < 2) {
+            var name = app.store.placeName.toUpperCase();
+            return app.store.locationSource === "ip" ? "IP NEAR " + name : name;
+        }
+        if (app.store.locationSource === "ip" && Location.distanceKm(map.centerLat, map.centerLon, app.store.centerLat, app.store.centerLon) < 2)
+            return "IP NEAR YOU";
+        var lat = map.centerLat, lon = map.centerLon;
+        return Math.abs(lat).toFixed(2) + "° " + (lat < 0 ? "S" : "N") + "  " + Math.abs(lon).toFixed(2) + "° " + (lon < 0 ? "W" : "E");
     }
     property string mapNotice: ""
     Timer { id: mapNoticeTimer; interval: Quickshell.env("OMASTORM_CAPTURE") ? 20000 : 3000; onTriggered: app.mapNotice = "" }
@@ -453,7 +487,7 @@ Item {
                 "play": "󰐊", "pause": "󰏤", "back": "󰒮", "fwd": "󰒭",
                 "first": "󰒫", "last": "󰒬", "lock": "󰌾", "unlock": "󰌿",
                 "keys": "󰌌", "locate": "󰍎", "search": "󰍉", "chevron": "󰅀",
-                "radar": "󰐷"
+                "radar": "󰐷", "follow": "󰍏"
             })
             Text {
                 textFormat: Text.PlainText
@@ -775,11 +809,36 @@ Item {
                     }
                 }
                 // Locate (DESIGN.md): map marker, top-left; north sits beside it.
+                // The follow chip takes the corner ahead of it while gpsd is on
+                // (DESIGN.md, gpsd follow as built).
                 Row {
                     id: mapTopLeft
                     anchors.top: parent.top; anchors.left: parent.left; anchors.margins: 10
                     spacing: 8
                     visible: !!app.state
+                    Rectangle {
+                        id: followChip
+                        width: 22; height: 22
+                        readonly property color ink: app.gpsFollowing ? app.theme.background
+                            : app.gpsNoFix ? Qt.alpha(app.theme.foreground, .55)
+                            : app.theme.accent
+                        readonly property color borderInk: app.gpsFollowing || app.gpsPaused ? app.theme.accent : Qt.alpha(app.theme.foreground, .22)
+                        color: app.gpsFollowing ? app.theme.accent : followArea.containsMouse ? Qt.alpha(app.theme.accent, .18) : Qt.alpha(app.theme.background, .9)
+                        border.width: 1; border.color: borderInk
+                        visible: app.gpsEnabled
+                        opacity: app.gpsFollowing || app.gpsPaused || followArea.containsMouse ? 1 : .7
+                        Glyph { anchors.centerIn: parent; glyph: "follow"; ink: followChip.ink }
+                        MouseArea { id: followArea; anchors.fill: parent; hoverEnabled: true; onClicked: app.toggleFollow() }
+                    }
+                    // NO FIX stands beside the chip while the receiver is silent,
+                    // so a silent receiver reads as exactly that and not as a
+                    // paused chip or an outage.
+                    LabelText {
+                        text: "NO FIX"
+                        color: Qt.alpha(app.theme.foreground, .7); font.pixelSize: 10; font.letterSpacing: 1
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: app.gpsNoFix
+                    }
                     Rectangle {
                         id: locateChip
                         width: 26; height: 22
