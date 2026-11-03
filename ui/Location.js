@@ -311,6 +311,12 @@ function configErrors(values) {
     return errors;
 }
 
+// Two map centres are one when they differ only by a Mercator round-trip
+// (#32). A zoom keeps the centre; a pan moves it, which pauses GPS follow.
+function sameCenter(aLat, aLon, bLat, bLon) {
+    return Math.abs(aLat - bLat) < 1e-6 && Math.abs(aLon - bLon) < 1e-6;
+}
+
 // Remembered view from state.json. Invalid fields are dropped, not fatal.
 function parseState(raw) {
     var empty = { lat: undefined, lon: undefined, span: undefined, lock: null, name: "" };

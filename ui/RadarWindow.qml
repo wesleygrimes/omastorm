@@ -219,8 +219,8 @@ Item {
     // `[keys]` table over the defaults, asking Qt whether each sequence
     // parses; a bad value or a key bound twice keeps the default and is
     // named in the status slot, like a rejection, until the file is fixed.
-    // The treatment, weak_floor, and focus_mode settings are judged the
-    // same way.
+    // The treatment, weak_floor, focus_mode, and gpsd settings are judged
+    // the same way.
     // OMASTORM_STYLE and OMASTORM_WEAK, set by the capture scripts, outrank
     // the file.
     property var bindings: ({})
@@ -232,6 +232,7 @@ Item {
         var errors = Location.configErrors(config.values);
         var wanted = KeyMap.treatment(config.treatment, errors), floor = KeyMap.weakFloor(config.weakFloor, errors);
         KeyMap.focusMode(config.focusMode, errors);
+        KeyMap.gpsd(config.values.gpsd, errors);
         KeyMap.popoverScale(config.popoverScale, errors);
         var resolved = KeyMap.resolve(config.keys, canon);
         bindings = resolved.bindings;
@@ -322,7 +323,6 @@ Item {
     readonly property bool gpsPaused: store.followPaused
     readonly property bool gpsFollowing: gpsEnabled && gpsHasFix && !gpsPaused
     readonly property bool gpsNoFix: gpsEnabled && !gpsHasFix
-    readonly property var resetTarget: Location.resolveReset(Location.configCenter(config.values), config.location)
     readonly property bool outsideCoverage: {
         if (!locked) return false;
         if (engine.site && engine.site.coverage)
@@ -340,18 +340,6 @@ Item {
     function toggleFollow() {
         if (!gpsEnabled || gpsNoFix) return;
         store.setFollowPaused(!gpsPaused);
-    }
-    readonly property string placeLabel: {
-        var t = app.resetTarget;
-        if (t && Location.distanceKm(map.centerLat, map.centerLon, t.lat, t.lon) < 2) return (t.name || "OMARCHY'S LOCATION").toUpperCase();
-        if (app.store.placeName && Location.distanceKm(map.centerLat, map.centerLon, app.store.centerLat, app.store.centerLon) < 2) {
-            var name = app.store.placeName.toUpperCase();
-            return app.store.locationSource === "ip" ? "IP NEAR " + name : name;
-        }
-        if (app.store.locationSource === "ip" && Location.distanceKm(map.centerLat, map.centerLon, app.store.centerLat, app.store.centerLon) < 2)
-            return "IP NEAR YOU";
-        var lat = map.centerLat, lon = map.centerLon;
-        return Math.abs(lat).toFixed(2) + "° " + (lat < 0 ? "S" : "N") + "  " + Math.abs(lon).toFixed(2) + "° " + (lon < 0 ? "W" : "E");
     }
     property string mapNotice: ""
     Timer { id: mapNoticeTimer; interval: Quickshell.env("OMASTORM_CAPTURE") ? 20000 : 3000; onTriggered: app.mapNotice = "" }

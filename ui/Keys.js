@@ -148,6 +148,13 @@ function focusMode(value, errors) {
     errors.push("focus_mode = " + JSON.stringify(value) + ": true or false");
     return false;
 }
+// The gpsd setting, judged the same way.
+function gpsd(value, errors) {
+    if (value === undefined) return false;
+    if (typeof value === "boolean") return value;
+    errors.push("gpsd = " + JSON.stringify(value) + ": true or false");
+    return false;
+}
 // The popover_scale setting: a size multiplier for the bar popover, 1 when
 // unset. A number outside MIN_SCALE..MAX_SCALE is clamped and reported;
 // anything else is reported and leaves 1.

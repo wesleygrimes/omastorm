@@ -15,6 +15,9 @@ assert.equal(Location.validPair(null, 0), false);
 assert.equal(Location.validPair(91, 0), false);
 assert.equal(Location.parseState('{"lat":35.4,"lon":-97.5}').lat, 35.4);
 assert.equal(Location.parseState('{"lat":"south","lock":1}').lat, undefined);
+// A zoom keeps the centre (a Mercator round-trip is not a move); a pan moves it.
+assert.equal(Location.sameCenter(35.4, -97.5, 35.39999999999999, -97.5), true);
+assert.equal(Location.sameCenter(35.4, -97.5, 35.4, -97.6), false);
 assert.equal(Location.parseWttrHome('{"nearest_area":[{"latitude":"41.05","longitude":"-73.54","areaName":[{"value":"Stamford"}]}]}').lat, 41.05);
 assert.equal(Location.parseWttrHome('{}'), null);
 const mosaics = [{id: 'opera', kind: 'mosaic', coverage: {kind: 'box', north: 72, south: 31, east: 45, west: -30}},
@@ -29,7 +32,17 @@ const Keys = moduleBody('Keys');
 assert.equal(Keys.resolve({play:'Space',unknown:'x'}, x=>x).errors.length, 1);
 assert.equal(Keys.resolve({play:'h'}, x=>x).errors.length, 1);
 assert.equal(Keys.envFloor('off'), null);
+// gpsd: absent is off, a boolean passes, anything else is named and off.
+for (const [value, on, errors] of [[undefined, false, 0], [true, true, 0], [false, false, 0], ['yes', false, 1], [1, false, 1]]) {
+    const list = [];
+    assert.equal(Keys.gpsd(value, list), on);
+    assert.equal(list.length, errors);
+}
 const Toml = moduleBody('Toml');
+// A quoted "true" is a string, so gpsd stays off and is named.
+const quoted = [];
+assert.equal(Keys.gpsd(Toml.parse('gpsd = "true"\n').gpsd, quoted), false);
+assert.equal(quoted.length, 1);
 assert.equal(Toml.parse('[keys]\nplay = "Space" # comment\n')['keys.play'], 'Space');
 // popover_scale: absent is 1, valid passes, out of range clamps, anything else is 1; only absent and valid are silent.
 function popoverScale(toml) {

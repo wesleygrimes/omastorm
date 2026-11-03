@@ -367,9 +367,7 @@ QtObject {
         var next = Location.clampSpan(spanKm);
         // Mercator round-trip after applyView can report 35.39999999999999
         // for a pick of 35.4 (#32). Keep the stored centre; only take span.
-        var sameCenter = hasView
-            && Math.abs(centerLat - lat) < 1e-6
-            && Math.abs(centerLon - lon) < 1e-6;
+        var sameCenter = hasView && Location.sameCenter(centerLat, centerLon, lat, lon);
         if (sameCenter && span === next) return;
         if (!sameCenter) {
             centerLat = lat;
@@ -377,7 +375,8 @@ QtObject {
         }
         span = next;
         hasView = true;
-        if (config.fix && !followPaused) followPaused = true;
+        // A pan pauses follow; a zoom that keeps the centre does not.
+        if (!sameCenter && config.fix && !followPaused) followPaused = true;
         persistTimer.restart();
     }
 
