@@ -72,7 +72,11 @@ jobs:
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         if: needs.changes.outputs.engine == 'true'
         with:
-          install_args: rust
+          install_args: rust mr-boxington
+      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
+        if: needs.changes.outputs.engine == 'true'
+        with:
+          cache-key-suffix: lint
       - name: Rust format and Clippy
         if: needs.changes.outputs.engine == 'true'
         run: |
@@ -100,15 +104,10 @@ jobs:
           sudo apt-get install -y cmake pkg-config
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          install_args: rust
-      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+          install_args: rust mr-boxington
+      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/debug
-          key: engine-x86-${{ hashFiles('Cargo.lock', 'mise.toml') }}-${{ github.sha }}
-          restore-keys: engine-x86-${{ hashFiles('Cargo.lock', 'mise.toml') }}-
+          cache-key-suffix: engine
       - name: Setup and source verification
         run: |
           python3 scripts/tooling/cli.py setup --profile engine
