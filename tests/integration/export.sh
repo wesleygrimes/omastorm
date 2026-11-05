@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # The view export (docs/configuration.md, remembered state and view export) in the real window against the
-# suite's daemon: state.json names the station on screen with the frame's scan time, and `live` is a boolean.
-# Stepping back to the oldest frame sets `live` to false and moves `scan` to that frame. The fixture archive is
-# not a live source, so `live` is never asserted true. A real pan (keys run pan_right) moves the camera on disk;
-# a sweep and a daemon reconnect must leave the panned camera alone. The other client (the bar) is not run here.
+# suite's daemon. The KTLX fixture is one volume scan, so the check asserts the fixture's own values: the station
+# on screen, the scan time 2013-05-20T20:16:43Z, and live false (the archive is not a live source). A real pan
+# (keys run pan_right) must reach the camera on disk. The daemon then restarts, and the camera must survive the
+# reconnect. Not covered here: the sweep and reconnect overlays racing a second client (the bar), since this
+# fixture has no second frame to make the trio change. The reconnect check waits a fixed 2 s, so it is a bound,
+# not a condition on a write.
 set -euo pipefail
 # shellcheck source=tests/integration/common.sh
 source "$(dirname "$0")/common.sh"
@@ -27,32 +29,16 @@ until_export() { # field, wanted
   for _ in {1..400}; do [[ $(exported "$1") == "$2" ]] && return; sleep .1; done
   fail "state.json $1 never became $2" "$(cat "$check_dir/state.json" 2>/dev/null || echo '(no file)')"
 }
-# The oldest frame is on disk once the scan has left the head. `live` is false from the start with the archive
-# fixture, so it cannot be the signal: returning on it ran the scan check before backfill added history.
-until_oldest() {
-  for _ in {1..80}; do
-    call run oldest
-    [[ $(exported scan) != "$head" && $(exported live) == false ]] && return
-    sleep .5
-  done
-  fail "The oldest frame did not arrive" "$(cat "$check_dir/state.json" 2>/dev/null || echo '(no file)')"
-}
 for _ in {1..100}; do call status > /dev/null 2>&1 && break; sleep .1; done
 call status > /dev/null || fail "The window's keys IPC never answered"
 
 # Oklahoma City places the view, and the nearest station on screen is KTLX.
 for _ in {1..150}; do [[ -n $(field site) ]] && break; sleep .1; done
 [[ $(field site) == KTLX ]] || fail "Oklahoma City should show KTLX: $(call status)"
-call run newest
 until_export site KTLX
-head=$(exported scan)
-[[ $head =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail "The exported scan is not an RFC 3339 instant: $head"
+until_export live false
+until_export scan 2013-05-20T20:16:43Z
 jq -e '(.live | type) == "boolean"' "$check_dir/state.json" > /dev/null || fail "live is not a boolean: $(cat "$check_dir/state.json")"
-
-# The live selection can start with one frame; retry until backfill adds history.
-until_oldest
-older=$(exported scan)
-[[ -n $older && $older != "$head" ]] || fail "The oldest frame's scan did not travel: head $head, now $older"
 
 # A real pan moves the camera on disk. The window owns the camera, so the panned values are what the rest of
 # the check must keep.
@@ -65,21 +51,12 @@ panned_lat=$(exported lat); panned_lon=$(exported lon); panned_span=$(exported s
 [[ $panned_lon != "$launch_lon" ]] || fail "The pan never reached the file: $(cat "$check_dir/state.json")"
 pan_intact() { [[ $(exported lat) == "$panned_lat" && $(exported lon) == "$panned_lon" && $(exported span) == "$panned_span" ]]; }
 
-# A sweep overlays site/scan/live onto the file and must leave the panned camera alone.
-call run newest
-until_export site KTLX
-pan_intact || fail "A sweep rewrote the panned camera: was $panned_lat $panned_lon $panned_span, now $(cat "$check_dir/state.json")"
-until_oldest
-pan_intact || fail "Stepping back rewrote the panned camera: $(cat "$check_dir/state.json")"
-
-# Reconnect: the daemon restarts, and the reconnect holds only the on-screen trio. The panned camera stays.
-sleep 1
-"$OMASTORM_ENGINE_BINARY" stop
-"$OMASTORM_ENGINE_BINARY" ensure
-until_export site KTLX
-pan_intact || fail "The reconnect wrote a stale camera over the pan: $(cat "$check_dir/state.json")"
-until_oldest
-pan_intact || fail "A sweep after the reconnect rewrote the camera: $(cat "$check_dir/state.json")"
+# Reconnect: the daemon restarts and the window reconnects; the panned camera must still be on disk after a
+# fixed 2 s settle. Time-bounded by design (see the header).
+"${OMASTORM_ENGINE_BINARY:?selected by the suite}" stop
+"${OMASTORM_ENGINE_BINARY:?selected by the suite}" ensure
+sleep 2
+pan_intact || fail "The reconnect changed the panned camera: was $panned_lat $panned_lon $panned_span, now $(cat "$check_dir/state.json")"
 
 check_qml_log "$check_dir/log"
 echo "EXPORT_PASSED"

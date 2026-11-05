@@ -258,20 +258,25 @@ there is no provider setting or mosaic picker.
   view.
 - `site`, `scan`, `live`: the **view export** — the station shown, the
   RFC 3339 scan time of the frame on screen, and whether that frame is the
-  live head (`false` while stepped back or on an archived scan). Written
-  400 ms after the view, the station, or the frame settles, so the file
-  says what Omastorm is showing now, window open or not. They are for other
+  live head (`false` while stepped back or on an archived scan). Written when
+  the view, the station or the frame settles: a camera move waits 400 ms, and
+  a sweep writes at once.
+  Equal values are not written again, so the file says what Omastorm is
+  showing now, window open or not. They are for other
   programs to read — a hand-off to a fuller viewer builds its own deep link
   from them — and launch never reads them back. Omastorm names no such
   program and opens none. Absent until the engine has a station.
 
 A camera move (panning, locking, picking a place, picker's reset) writes the
-whole snapshot. A sweep or an engine reconnect only overlays the trio above
-onto whatever is on disk now — the camera and the lock keys are never
-touched — so a sweep that arrives after a pan keeps the user's pan and adds
-the new `site` / `scan` / `live`. The window and the bar are separate
-processes on one file; the overlay lets them coexist without either
-rewriting the other's camera.
+whole snapshot. A sweep or an engine reconnect overlays the trio above onto
+the last copy of the file this process loaded or wrote; it does not re-read
+the file first, and it never writes the camera or the lock keys. Only the
+keys launch reads (`lat`, `lon`, `span`, `lock`, `name`) are kept, so other
+keys in the file are dropped by a sweep. The window and the bar are separate
+processes on one file with no lock between them: if the bar writes after this
+process loaded its copy and before this process writes, the bar's write is
+lost (last writer wins). No check here runs the bar, so that race is not
+verified.
 
 `OMASTORM_STATE` names another state file for checks. `OMASTORM_LOCATION`
 names another weather.json (`name`, `latitude`, `longitude`, written by the

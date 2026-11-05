@@ -89,4 +89,15 @@ assert.equal(json(Location.stateObject(35.4, -97.5, 50, null, 'OKC', 'KTLX', 'ne
   json({lat: 35.4, lon: -97.5, span: 50, name: 'OKC', site: 'KTLX', scan: 'new', live: true}), 'stateObject writes site, scan and live when a site is set');
 assert.equal(json(Location.stateObject(35.4, -97.5, 50, null, 'OKC', null, null, true)),
   json({lat: 35.4, lon: -97.5, span: 50, name: 'OKC'}), 'stateObject writes no live without a site');
+// Production passes parseState's output, not the raw file: its absent lock is null and its absent name is "".
+assert.equal(json(Location.overlay(Location.parseState('{"lat":35.4,"lon":-97.5,"span":50}'), 'KTLX', 'new', true, null)),
+  json({lat: 35.4, lon: -97.5, span: 50, site: 'KTLX', live: true, scan: 'new'}), 'an overlay of a file without lock or name writes neither');
+const lockRaw = '{"lat":35.4,"lon":-97.5,"span":50,"lock":{"sourceId":"KTLX","target":{"kind":"site","siteId":"KTLX"}}}';
+const withLock = Location.overlay(Location.parseState(lockRaw), 'KTLX', 'new', false, null);
+assert.equal(json(withLock.lock), json(Location.parseState(lockRaw).lock), 'an overlay keeps the lock parseState reads');
+assert.notEqual(withLock.lock, null, 'a real lock is not dropped');
+assert.equal(json(Location.overlay({lat: 35.4, lon: -97.5, span: 50}, null, 'new', true, null)),
+  json({lat: 35.4, lon: -97.5, span: 50}), 'a scan without a site is not written');
+assert.equal(json(Location.stateObject(35.4, -97.5, 50, null, '', null, 'new', true)),
+  json({lat: 35.4, lon: -97.5, span: 50}), 'stateObject writes no scan without a site');
 console.log('Pure UI location, config, key binding and METAR regressions PASS');
