@@ -74,4 +74,19 @@ assert.equal(Keys.scaled(10, 1.25), 13);
 const Metar = moduleBody('Metar');
 assert.equal(Metar.color('VFR'), '#00c000');
 assert.equal(Metar.countFromConfig({'metar.count':999}), 0);
+// View export (docs/configuration.md): overlay writes only site/scan/live over the file on disk.
+// Compared as JSON strings: the vm context has its own Object prototype, so deepEqual would fail on realm.
+const json = (o) => JSON.stringify(o);
+assert.equal(json(Location.overlay({lat: 35.4, lon: -97.5, span: 50, lock: {a: 1}, name: 'OKC', site: 'KFCX', scan: 'old', live: true}, 'KTLX', 'new', false, null)),
+  json({lat: 35.4, lon: -97.5, span: 50, lock: {a: 1}, name: 'OKC', site: 'KTLX', live: false, scan: 'new'}), 'overlay keeps camera, lock and name, and key order');
+assert.equal(json(Location.overlay({lat: 35.4, lon: -97.5, span: 50, live: true}, null, null, true, null)),
+  json({lat: 35.4, lon: -97.5, span: 50}), 'a missing site drops live and scan');
+assert.equal(json(Location.overlay({lat: 35.4, lon: -97.5, span: 50}, 'KTLX', 'new', true, {lat: 1, lon: 2, span: 9})),
+  json({lat: 35.4, lon: -97.5, span: 50, site: 'KTLX', live: true, scan: 'new'}), 'a fallback centre is not applied over an existing centre');
+assert.equal(json(Location.overlay({}, 'KTLX', 'new', true, {lat: 1, lon: 2, span: 9})),
+  json({lat: 1, lon: 2, span: 9, site: 'KTLX', live: true, scan: 'new'}), 'the fallback centre applies when there is no existing centre');
+assert.equal(json(Location.stateObject(35.4, -97.5, 50, null, 'OKC', 'KTLX', 'new', true)),
+  json({lat: 35.4, lon: -97.5, span: 50, name: 'OKC', site: 'KTLX', scan: 'new', live: true}), 'stateObject writes site, scan and live when a site is set');
+assert.equal(json(Location.stateObject(35.4, -97.5, 50, null, 'OKC', null, null, true)),
+  json({lat: 35.4, lon: -97.5, span: 50, name: 'OKC'}), 'stateObject writes no live without a site');
 console.log('Pure UI location, config, key binding and METAR regressions PASS');
