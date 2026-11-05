@@ -340,8 +340,9 @@ QtObject {
     }
     readonly property string shownKey: shownSite + "|" + shownScan + "|" + shownLive
     // A sweep changes the on-screen view (docs/configuration.md, view
-    // export). It overlays `site` / `scan` / `live` onto whatever's on disk
-    // and never rewrites the camera or the lock — the window owns those,
+    // export). It overlays `site` / `scan` / `live` onto the last copy of the
+    // state file this process loaded or wrote (not a fresh read), and never
+    // rewrites the camera or the lock — the window owns those,
     // and the bar reading them later must see what the user actually
     // panned to. `Remembered.overlay` dedupes equal trios, so this is also
     // a no-op when the bar's process happens to see the same broadcast.
