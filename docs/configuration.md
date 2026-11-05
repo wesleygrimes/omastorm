@@ -232,18 +232,20 @@ the machine's own state and weather files are not read unless
   reported the same way. `home_site` and `follow` are unused and named if
   present.
 
-## Remembered state
+## Remembered state and view export
 
 `~/.local/state/omastorm/state.json` is written atomically (a temporary file
-renamed into place). It holds the last map centre, span in kilometres, and
-the UI radar lock when one is set. Protocol v2 stores that lock as the exact
-selection identity. A leftover string lock is read as a NEXRAD site for one
-migration release and rewritten in the object form:
+renamed into place). It holds the last map centre, span in kilometres, the UI
+radar lock when one is set, and what is on screen right now. Protocol v2
+stores the lock as the exact selection identity; a leftover string lock is
+read as a NEXRAD site for one migration release and rewritten in the object
+form:
 
 ```json
 {"lat":30.332,"lon":-81.656,"span":210,
  "lock":{"sourceId":"nexrad","target":{"kind":"site","siteId":"KJAX"}},
- "name":"Jacksonville"}
+ "name":"Jacksonville",
+ "site":"KJAX","scan":"2026-09-10T18:42:11Z","live":true}
 ```
 
 A mosaic lock is `{"sourceId":"fixture-mosaic","target":{"kind":"mosaic"}}`.
@@ -251,7 +253,31 @@ The previous `"lock":"KJAX"` string is accepted on read, then written back as
 the object above. `locked_radar` in config.toml stays a polar site string;
 there is no provider setting or mosaic picker.
 
-Invalid fields are dropped. A missing file is no remembered view.
-`OMASTORM_LOCATION` names another weather.json (`name`, `latitude`,
-`longitude`, written by the shell's weather panel) for checks; coordinates
-outside ±90/±180 are ignored.
+- `lat`, `lon`, `span`, `lock`, `name`: the remembered view, read back at
+  launch (above). Invalid fields are dropped; a missing file is no remembered
+  view.
+- `site`, `scan`, `live`: the **view export** — the station shown, the
+  RFC 3339 scan time of the frame on screen, and whether that frame is the
+  live head (`false` while stepped back or on an archived scan). Written when
+  the view, the station or the frame settles: a camera move waits 400 ms, and
+  a sweep writes at once.
+  Equal values are not written again, so the file says what Omastorm is
+  showing now, window open or not. They are for other
+  programs to read — a hand-off to a fuller viewer builds its own deep link
+  from them — and launch never reads them back. Omastorm names no such
+  program and opens none. Absent until the engine has a station.
+
+A camera move (panning, locking, picking a place, picker's reset) writes the
+whole snapshot. A sweep or an engine reconnect overlays the trio above onto
+the last copy of the file this process loaded or wrote; it does not re-read
+the file first, and it never writes the camera or the lock keys. Only the
+keys launch reads (`lat`, `lon`, `span`, `lock`, `name`) are kept, so other
+keys in the file are dropped by a sweep. The window and the bar are separate
+processes on one file with no lock between them: if the bar writes after this
+process loaded its copy and before this process writes, the bar's write is
+lost (last writer wins). No check here runs the bar, so that race is not
+verified.
+
+`OMASTORM_STATE` names another state file for checks. `OMASTORM_LOCATION`
+names another weather.json (`name`, `latitude`, `longitude`, written by the
+shell's weather panel) for checks; coordinates outside ±90/±180 are ignored.
