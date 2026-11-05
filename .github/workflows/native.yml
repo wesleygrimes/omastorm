@@ -27,16 +27,13 @@ jobs:
           sudo apt-get install -y build-essential cmake pkg-config binutils jq
       - uses: jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0
         with:
-          install_args: rust
-      - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+          install_args: rust mr-boxington
+      # Release tags build with a local-only cache, so published assets never
+      # restore compiler outputs from the shared Actions cache.
+      - uses: jdx/mr-boxington-action@88acf2bb50552c7c508cbac13e5f8c576b95b1de # v1.7.3
         with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            target/debug
-            target/${{ inputs.arch }}-unknown-linux-gnu
-          key: native-${{ inputs.arch }}-${{ hashFiles('Cargo.lock', 'mise.toml') }}-${{ github.sha }}
-          restore-keys: native-${{ inputs.arch }}-${{ hashFiles('Cargo.lock', 'mise.toml') }}-
+          cache-key-suffix: native
+          backend: ${{ startsWith(github.ref, 'refs/tags/') && 'local' || 'github' }}
       - name: Native source and optimized artifact verification
         run: |
           python3 scripts/tooling/cli.py setup --profile engine
