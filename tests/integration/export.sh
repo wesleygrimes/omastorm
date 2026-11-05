@@ -27,10 +27,12 @@ until_export() { # field, wanted
   for _ in {1..400}; do [[ $(exported "$1") == "$2" ]] && return; sleep .1; done
   fail "state.json $1 never became $2" "$(cat "$check_dir/state.json" 2>/dev/null || echo '(no file)')"
 }
+# The oldest frame is on disk once the scan has left the head. `live` is false from the start with the archive
+# fixture, so it cannot be the signal: returning on it ran the scan check before backfill added history.
 until_oldest() {
   for _ in {1..80}; do
     call run oldest
-    [[ $(exported live) == false ]] && return
+    [[ $(exported scan) != "$head" && $(exported live) == false ]] && return
     sleep .5
   done
   fail "The oldest frame did not arrive" "$(cat "$check_dir/state.json" 2>/dev/null || echo '(no file)')"
