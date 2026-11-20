@@ -38,6 +38,8 @@ pub const HOSTS: [&str; 2] = [
     "https://object-store.os-api.cci1.ecmwf.int/openradar-24h-backup",
 ];
 const LIST_PAGES_MAX: usize = 8;
+/// Scans stamped past this are treated as bad metadata, not live data.
+const FUTURE_SLACK: chrono::TimeDelta = chrono::TimeDelta::minutes(15);
 /// Listings start here, so a host whose feed stopped looks empty.
 const LOOKBACK_MINUTES: i64 = 90;
 /// Service footprint from `envelope::OPERA` (ORD docs, approx corners).
@@ -602,6 +604,12 @@ where
     finish_load(fetched, palette, bounds, decode_slots.as_deref()).await
 }
 
+enum Newest {
+    Fresh(Box<Loaded>),
+    Known,
+    Empty,
+}
+
 /// Load the newest unseen COMP from the freshest store that serves a
 /// readable copy. A failure is reported unless another store delivers.
 async fn load_newest<L, G, LF, GF>(
@@ -611,7 +619,7 @@ async fn load_newest<L, G, LF, GF>(
     palette: Arc<Vec<String>>,
     bounds: Arc<Vec<f64>>,
     decode_slots: Option<Arc<Semaphore>>,
-) -> Result<Option<Loaded>, String>
+) -> Result<Newest, String>
 where
     L: Fn(reqwest::Url) -> LF,
     LF: Future<Output = Result<String, String>>,
@@ -620,9 +628,11 @@ where
 {
     let get = Arc::new(get);
     let mut failure = None;
+    let mut outcome = Newest::Empty;
     for objects in list_hosts(Utc::now().naive_utc(), list).await? {
         let newest = objects[objects.len() - 1].clone();
         if known.contains(&newest.key) {
+            outcome = Newest::Known;
             break;
         }
         let loaded = load_one(
@@ -634,11 +644,11 @@ where
         )
         .await;
         match loaded {
-            Ok(loaded) => return Ok(Some(loaded)),
+            Ok(loaded) => return Ok(Newest::Fresh(Box::new(loaded))),
             Err(reason) => failure = Some(reason),
         }
     }
-    failure.map_or(Ok(None), Err)
+    failure.map_or(Ok(outcome), Err)
 }
 
 fn validate_opera_georef(raster: &DecodedRaster) -> Result<(), String> {
@@ -681,8 +691,12 @@ where
     let mut failures = Vec::new();
     for host in HOSTS {
         match list_window(host, now, &list).await {
-            Ok(objects) if !objects.is_empty() => found.push(objects),
-            Ok(_) => {}
+            Ok(mut objects) => {
+                objects.retain(|o| o.stamp <= now + FUTURE_SLACK);
+                if !objects.is_empty() {
+                    found.push(objects);
+                }
+            }
             Err(reason) => failures.push(reason),
         }
     }
@@ -737,16 +751,23 @@ where
     G: Fn(String) -> GF,
     GF: Future<Output = Result<Vec<u8>, String>>,
 {
-    Ok(load_newest(
-        known,
-        list,
-        get,
-        Arc::new(palette.to_vec()),
-        Arc::new(bounds.to_vec()),
-        None,
+    Ok(
+        match load_newest(
+            known,
+            list,
+            get,
+            Arc::new(palette.to_vec()),
+            Arc::new(bounds.to_vec()),
+            None,
+        )
+        .await?
+        {
+            Newest::Fresh(loaded) => {
+                Some((loaded.object, loaded.frame, loaded.texture, loaded.start_ms))
+            }
+            Newest::Known | Newest::Empty => None,
+        },
     )
-    .await?
-    .map(|loaded| (loaded.object, loaded.frame, loaded.texture, loaded.start_ms)))
 }
 
 /// Fetch up to `HISTORY_MAX` recent COMP frames the live poll has not
@@ -769,7 +790,7 @@ async fn backfill_loop(
             return;
         }
     };
-    let targets = backfill_targets(&objects, &known, HISTORY_MAX);
+    let targets = backfill_targets(&objects, &known, HISTORY_MAX - 1);
     fill_history(events, targets, get_http, palette, bounds, decode_slots).await;
 }
 
@@ -917,10 +938,10 @@ async fn poll_loop(
         )
         .await;
         let sent = match result {
-            Ok(Some(loaded)) => {
+            Ok(Newest::Fresh(loaded)) => {
                 log_load("", &loaded);
                 let (host, stamp) = (loaded.object.host, loaded.object.stamp);
-                let saved = publish_live(&events, &mut known, loaded).await;
+                let saved = publish_live(&events, &mut known, *loaded).await;
                 if saved == Ok(true) && backfill.is_none() {
                     // Held so aborting this poller cancels in-flight COMP downloads.
                     backfill = Some(AbortOnDrop(tokio::spawn(backfill_loop(
@@ -935,11 +956,18 @@ async fn poll_loop(
                 }
                 saved.map(|_| ())
             }
-            Ok(None) if first => events
-                .send(ev_silent("ORD cache has no OPERA DBZH.tiff yet".into()))
+            Ok(Newest::Known) => events
+                .send(GridEvent::Online {
+                    source_id: ID.to_owned(),
+                })
                 .await
                 .map_err(|_| ()),
-            Ok(None) => Ok(()),
+            Ok(Newest::Empty) => events
+                .send(ev_silent(format!(
+                    "ORD cache has no OPERA DBZH.tiff from the last {LOOKBACK_MINUTES} minutes"
+                )))
+                .await
+                .map_err(|_| ()),
             Err(reason) => events.send(ev_offline(reason)).await.map_err(|_| ()),
         };
         first = false;
@@ -1546,7 +1574,7 @@ mod tests {
             });
             let mut known = HashSet::new();
             for expected in [false, true] {
-                let loaded = load_newest(
+                let Newest::Fresh(loaded) = load_newest(
                     &known,
                     by_host(&[], &["20261120T2005"]),
                     |url| std::future::ready(served(&url)),
@@ -1555,10 +1583,11 @@ mod tests {
                     None,
                 )
                 .await
-                .unwrap()
-                .expect("an unsaved frame is offered again");
+                .unwrap() else {
+                    panic!("an unsaved frame is offered again");
+                };
                 assert_eq!(
-                    publish_live(&events, &mut known, loaded).await,
+                    publish_live(&events, &mut known, *loaded).await,
                     Ok(expected)
                 );
             }
@@ -1568,6 +1597,41 @@ mod tests {
                 HashSet::from(["2026/11/20/OPERA/COMP/OPERA@20261120T2005@0@DBZH.tiff".to_owned()])
             );
         });
+    }
+
+    #[test]
+    fn known_newest_and_empty_window_are_reported_apart() {
+        let opera = Opera::new();
+        let newest = |known: HashSet<String>, original: &'static [&'static str]| {
+            current_thread().block_on(load_newest(
+                &known,
+                by_host(original, &[]),
+                |url| std::future::ready(served(&url)),
+                Arc::new(opera.palette.clone()),
+                Arc::new(opera.bounds.clone()),
+                None,
+            ))
+        };
+        let shown =
+            HashSet::from(["2026/11/20/OPERA/COMP/OPERA@20261120T2005@0@DBZH.tiff".to_owned()]);
+        assert!(matches!(
+            newest(shown, &["20261120T2005"]),
+            Ok(Newest::Known)
+        ));
+        assert!(matches!(newest(HashSet::new(), &[]), Ok(Newest::Empty)));
+    }
+
+    #[test]
+    fn future_stamped_scan_does_not_outrank_a_live_store() {
+        let hosts = current_thread()
+            .block_on(list_hosts(
+                now(),
+                by_host(&["20261120T2005"], &["20261120T2300"]),
+            ))
+            .unwrap();
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0][0].host, HOSTS[0]);
+        assert_eq!(hosts[0][0].stamp, comp("20261120T2005").stamp);
     }
 
     #[test]
