@@ -432,6 +432,7 @@ impl Nexrad {
     fn site_candidates(&self) -> Vec<Candidate> {
         self.sites
             .iter()
+            .filter(|site| !site.testbed)
             .map(|site| Candidate {
                 selection: Selection {
                     source_id: self.id.to_owned(),
@@ -1000,39 +1001,33 @@ mod tests {
                 .as_deref(),
             Some("KTLX")
         );
+    }
+
+    #[test]
+    fn follow_never_selects_a_testbed_dish() {
+        let registry = SourceRegistry::compiled();
+        let site = |center, held: Option<Selection>| match registry
+            .covering_selection(center, held.as_ref())
+            .map(|s| s.target)
+        {
+            Some(AdapterTarget::Site { site_id }) => site_id,
+            other => panic!("expected a site, got {other:?}"),
+        };
+        let oklahoma_city = GeoPoint {
+            lat: 35.4676,
+            lon: -97.5164,
+        };
         let koun = registry.nexrad.station("KOUN").unwrap();
-        assert_eq!(
-            registry
-                .covering_selection(
-                    GeoPoint {
-                        lat: koun.lat,
-                        lon: koun.lon
-                    },
-                    Some(&sel_site("KCRI"))
-                )
-                .map(|s| match s.target {
-                    AdapterTarget::Site { site_id } => site_id,
-                    AdapterTarget::Mosaic => String::new(),
-                })
-                .as_deref(),
-            Some("KCRI")
-        );
-        assert_eq!(
-            registry
-                .covering_selection(
-                    GeoPoint {
-                        lat: koun.lat,
-                        lon: koun.lon
-                    },
-                    Some(&sel_site("KTLX"))
-                )
-                .map(|s| match s.target {
-                    AdapterTarget::Site { site_id } => site_id,
-                    AdapterTarget::Mosaic => String::new(),
-                })
-                .as_deref(),
-            Some("KOUN")
-        );
+        let at_koun = GeoPoint {
+            lat: koun.lat,
+            lon: koun.lon,
+        };
+        assert_eq!(site(oklahoma_city, None), "KTLX");
+        assert_eq!(site(at_koun, None), "KTLX");
+        assert_eq!(site(at_koun, Some(sel_site("KTLX"))), "KTLX");
+        assert_eq!(site(at_koun, Some(sel_site("KCRI"))), "KTLX");
+        let listed: Vec<_> = registry.hello_sites().into_iter().map(|s| s.id).collect();
+        assert!(listed.contains(&"KCRI".to_string()) && listed.contains(&"KOUN".to_string()));
     }
 
     #[test]

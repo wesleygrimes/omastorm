@@ -95,7 +95,7 @@ per frame. New live sweeps take the screen only while the newest entry is select
 
 The station table's source, retrieval date, and caveats are in `data/sites.json`
 and hello. It includes archived and test sites; membership does not imply live
-availability. An archived scan retains its measured coordinates.
+availability. Follow never selects a site marked `testbed`. An archived scan retains its measured coordinates.
 
 ## European mosaic
 
