@@ -11,14 +11,11 @@ use crate::{
     source::{GridEvent, GridSender, MosaicMeta, SourceMetadataBorrowed},
     sweep,
 };
-use chrono::{NaiveDate, NaiveDateTime, Utc};
+use chrono::{NaiveDate, NaiveDateTime, TimeDelta, Utc};
 use std::{
     collections::{HashSet, VecDeque},
     future::Future,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
+    sync::{Arc, LazyLock},
     time::{Duration, Instant},
 };
 use tokio::{
@@ -40,8 +37,9 @@ pub const HOSTS: [&str; 2] = [
     "https://s3.waw3-1.cloudferro.com/openradar-24h",
     "https://object-store.os-api.cci1.ecmwf.int/openradar-24h-backup",
 ];
-static ACTIVE_HOST: AtomicUsize = AtomicUsize::new(0);
 const LIST_PAGES_MAX: usize = 8;
+/// Listings start here, so a host whose feed stopped looks empty.
+const LOOKBACK_MINUTES: i64 = 90;
 /// Service footprint from `envelope::OPERA` (ORD docs, approx corners).
 pub const COVERAGE_NORTH: f64 = crate::envelope::OPERA.north;
 pub const COVERAGE_SOUTH: f64 = crate::envelope::OPERA.south;
@@ -60,6 +58,7 @@ const BODY_MAX: usize = 12 << 20;
 pub const HISTORY_MAX: usize = 12;
 const START_TIMEOUT: Duration = Duration::from_secs(45);
 const HOST_LIST_TIMEOUT: Duration = Duration::from_secs(15);
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const IDLE: Duration = Duration::from_secs(30);
 /// After the newest COMP is on screen, pull earlier stamps (NEXRAD waits
 /// the same beat so a hand-off mid-pan does not spend bandwidth).
@@ -198,6 +197,7 @@ impl Opera {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompObject {
+    pub host: &'static str,
     pub key: String,
     pub stamp: NaiveDateTime,
 }
@@ -209,7 +209,7 @@ pub struct DbzhPage {
 }
 
 /// Parse one ListObjects v2 page for `OPERA@…@DBZH.tiff` keys.
-pub fn parse_dbzh_listing(body: &str) -> Result<DbzhPage, String> {
+pub fn parse_dbzh_listing(host: &'static str, body: &str) -> Result<DbzhPage, String> {
     let mut objects = Vec::new();
     let mut next = None;
     let mut truncated = false;
@@ -222,6 +222,7 @@ pub fn parse_dbzh_listing(body: &str) -> Result<DbzhPage, String> {
                 "Key" => {
                     if let Some(stamp) = parse_dbzh_key(&text) {
                         objects.push(CompObject {
+                            host,
                             key: text.clone(),
                             stamp,
                         });
@@ -245,25 +246,81 @@ pub fn parse_dbzh_listing(body: &str) -> Result<DbzhPage, String> {
 }
 
 /// Follow continuation tokens: the ORD store caps pages below a day of keys.
-pub async fn list_day_pages<P, PF>(page: P) -> Result<Vec<CompObject>, String>
+async fn list_pages<P, PF>(host: &'static str, page: P) -> Result<Vec<CompObject>, String>
 where
     P: Fn(Option<String>) -> PF,
     PF: Future<Output = Result<String, String>>,
 {
     let mut objects = Vec::new();
+    let mut seen = HashSet::new();
     let mut token = None;
     for _ in 0..LIST_PAGES_MAX {
-        let listing = parse_dbzh_listing(&page(token.take()).await?)?;
+        let listing = parse_dbzh_listing(host, &page(token.take()).await?)?;
         objects.extend(listing.objects);
         match listing.next {
-            Some(next) => token = Some(next),
-            None => {
-                objects.sort_by_key(|o| o.stamp);
-                return Ok(objects);
+            None => return Ok(objects),
+            Some(next) if next.is_empty() || !seen.insert(next.clone()) => {
+                return Err(format!("{host} repeated an OPERA listing token"));
             }
+            Some(next) => token = Some(next),
         }
     }
-    Err(format!("OPERA listing exceeds {LIST_PAGES_MAX} pages"))
+    Err(format!(
+        "{host} OPERA listing exceeds {LIST_PAGES_MAX} pages"
+    ))
+}
+
+pub fn listing_url(
+    host: &str,
+    day: NaiveDate,
+    start_after: Option<&str>,
+    token: Option<&str>,
+) -> Result<reqwest::Url, String> {
+    let mut url = reqwest::Url::parse(host).map_err(|e| format!("OPERA host: {e}"))?;
+    {
+        let mut query = url.query_pairs_mut();
+        query
+            .append_pair("list-type", "2")
+            .append_pair("prefix", &prefix_for(day))
+            .append_pair("max-keys", "1000");
+        if let Some(start_after) = start_after {
+            query.append_pair("start-after", start_after);
+        }
+        if let Some(token) = token {
+            query.append_pair("continuation-token", token);
+        }
+    }
+    Ok(url)
+}
+
+/// COMP objects on `host` stamped from `LOOKBACK_MINUTES` before `now`.
+async fn list_window<L, LF>(
+    host: &'static str,
+    now: NaiveDateTime,
+    list: &L,
+) -> Result<Vec<CompObject>, String>
+where
+    L: Fn(reqwest::Url) -> LF,
+    LF: Future<Output = Result<String, String>>,
+{
+    let since = now - TimeDelta::minutes(LOOKBACK_MINUTES);
+    let days = if since.date() == now.date() {
+        vec![now.date()]
+    } else {
+        vec![since.date(), now.date()]
+    };
+    let mut objects = Vec::new();
+    for day in days {
+        let start_after = (day == since.date())
+            .then(|| format!("{}OPERA@{}", prefix_for(day), since.format("%Y%m%dT%H%M")));
+        let page = |token: Option<String>| {
+            let url = listing_url(host, day, start_after.as_deref(), token.as_deref());
+            async move { list(url?).await }
+        };
+        objects.extend(list_pages(host, page).await?);
+    }
+    objects.sort_by_key(|o| o.stamp);
+    Ok(objects)
 }
 
 /// `…/OPERA/COMP/OPERA@YYYYMMDDTHHMM@0@DBZH.tiff`
@@ -466,7 +523,7 @@ where
     GF: Future<Output = Result<Vec<u8>, String>>,
 {
     let started = Instant::now();
-    let bytes = (*get)(obj.key.clone()).await?;
+    let bytes = (*get)(format!("{}/{}", obj.host, obj.key)).await?;
     Ok(Fetched {
         object: obj,
         bytes,
@@ -515,44 +572,50 @@ where
     finish_load(fetched, palette, bounds, decode_slots.as_deref()).await
 }
 
-/// List + GET the newest unseen COMP. Decode is the caller's job so the
-/// start timeout cannot turn a slow PNG encode into `Offline`.
+/// List + GET the newest unseen COMP, from the freshest host that serves
+/// it. Decode is the caller's job so the start timeout cannot turn a slow
+/// PNG encode into `Offline`.
 async fn fetch_newest<L, G, LF, GF>(
     known: &HashSet<String>,
-    list_day: L,
+    list: L,
     get: G,
 ) -> Result<Option<Fetched>, String>
 where
-    L: Fn(NaiveDate) -> LF,
-    LF: Future<Output = Result<Vec<CompObject>, String>>,
+    L: Fn(reqwest::Url) -> LF,
+    LF: Future<Output = Result<String, String>>,
     G: Fn(String) -> GF,
     GF: Future<Output = Result<Vec<u8>, String>>,
 {
-    let objects = list_recent(list_day).await?;
-    let Some(newest) = objects.last().cloned() else {
-        return Ok(None);
-    };
-    if known.contains(&newest.key) {
-        return Ok(None);
+    let get = Arc::new(get);
+    let mut failure = None;
+    for objects in list_hosts(Utc::now().naive_utc(), list).await? {
+        let newest = objects[objects.len() - 1].clone();
+        if known.contains(&newest.key) {
+            return Ok(None);
+        }
+        match fetch_one(newest, Arc::clone(&get)).await {
+            Ok(fetched) => return Ok(Some(fetched)),
+            Err(reason) => failure = Some(reason),
+        }
     }
-    Ok(Some(fetch_one(newest, Arc::new(get)).await?))
+    failure.map_or(Ok(None), Err)
 }
 
 async fn load_newest<L, G, LF, GF>(
     known: &HashSet<String>,
-    list_day: L,
+    list: L,
     get: G,
     palette: Arc<Vec<String>>,
     bounds: Arc<Vec<f64>>,
     decode_slots: Option<Arc<Semaphore>>,
 ) -> Result<Option<Loaded>, String>
 where
-    L: Fn(NaiveDate) -> LF,
-    LF: Future<Output = Result<Vec<CompObject>, String>>,
+    L: Fn(reqwest::Url) -> LF,
+    LF: Future<Output = Result<String, String>>,
     G: Fn(String) -> GF,
     GF: Future<Output = Result<Vec<u8>, String>>,
 {
-    let Some(fetched) = fetch_newest(known, list_day, get).await? else {
+    let Some(fetched) = fetch_newest(known, list, get).await? else {
         return Ok(None);
     };
     Ok(Some(
@@ -589,18 +652,28 @@ fn validate_opera_georef(raster: &DecodedRaster) -> Result<(), String> {
     Ok(())
 }
 
-/// List today's COMP objects, falling back to yesterday when today is empty.
-pub async fn list_recent<L, LF>(list_day: L) -> Result<Vec<CompObject>, String>
+/// Each host's recent COMP objects, oldest first, freshest host first.
+/// Hosts with none are left out; an error surfaces only when no host has any.
+pub async fn list_hosts<L, LF>(now: NaiveDateTime, list: L) -> Result<Vec<Vec<CompObject>>, String>
 where
-    L: Fn(NaiveDate) -> LF,
-    LF: Future<Output = Result<Vec<CompObject>, String>>,
+    L: Fn(reqwest::Url) -> LF,
+    LF: Future<Output = Result<String, String>>,
 {
-    let today = Utc::now().date_naive();
-    let mut objects = list_day(today).await?;
-    if objects.is_empty() {
-        objects = list_day(today.pred_opt().unwrap_or(today)).await?;
+    let mut found = Vec::new();
+    let mut failures = Vec::new();
+    for host in HOSTS {
+        match timeout(HOST_LIST_TIMEOUT, list_window(host, now, &list)).await {
+            Ok(Ok(objects)) if !objects.is_empty() => found.push(objects),
+            Ok(Ok(_)) => {}
+            Ok(Err(reason)) => failures.push(reason),
+            Err(_) => failures.push(format!("listing {host} timed out")),
+        }
     }
-    Ok(objects)
+    if found.is_empty() && !failures.is_empty() {
+        return Err(failures.join("; "));
+    }
+    found.sort_by_key(|objects| std::cmp::Reverse(objects[objects.len() - 1].stamp));
+    Ok(found)
 }
 
 /// Newest `limit` COMP keys that are not already `known`, oldest first so
@@ -622,20 +695,20 @@ pub fn backfill_targets(
 #[cfg(test)]
 pub async fn refresh<L, G, LF, GF>(
     known: &HashSet<String>,
-    list_day: L,
+    list: L,
     get: G,
     palette: &[String],
     bounds: &[f64],
 ) -> Result<Option<(CompObject, MosaicFrame, Vec<u8>, i64)>, String>
 where
-    L: Fn(NaiveDate) -> LF,
-    LF: Future<Output = Result<Vec<CompObject>, String>>,
+    L: Fn(reqwest::Url) -> LF,
+    LF: Future<Output = Result<String, String>>,
     G: Fn(String) -> GF,
     GF: Future<Output = Result<Vec<u8>, String>>,
 {
     Ok(load_newest(
         known,
-        list_day,
+        list,
         get,
         Arc::new(palette.to_vec()),
         Arc::new(bounds.to_vec()),
@@ -656,8 +729,8 @@ async fn backfill_loop(
     decode_slots: Arc<Semaphore>,
 ) {
     sleep(BACKFILL_DELAY).await;
-    let objects = match list_recent(list_http).await {
-        Ok(objects) => objects,
+    let objects = match list_hosts(Utc::now().naive_utc(), list_http).await {
+        Ok(hosts) => hosts.into_iter().next().unwrap_or_default(),
         Err(reason) => {
             opera_log(format_args!("backfill listing: {reason}"));
             return;
@@ -740,78 +813,47 @@ impl<T> Drop for AbortOnDrop<T> {
     }
 }
 
-/// List `day` on the host that last had COMP files, trying the other one
-/// when it is empty or failing.
-pub async fn list_day_on_hosts<L, LF>(
-    active: &AtomicUsize,
-    day: NaiveDate,
-    list: L,
-) -> Result<Vec<CompObject>, String>
-where
-    L: Fn(&'static str, NaiveDate) -> LF,
-    LF: Future<Output = Result<Vec<CompObject>, String>>,
-{
-    let first = active.load(Ordering::Relaxed);
-    let mut answered = false;
-    let mut failure = String::new();
-    for offset in 0..HOSTS.len() {
-        let index = (first + offset) % HOSTS.len();
-        match timeout(HOST_LIST_TIMEOUT, list(HOSTS[index], day)).await {
-            Ok(Ok(objects)) if !objects.is_empty() => {
-                active.store(index, Ordering::Relaxed);
-                return Ok(objects);
-            }
-            Ok(Ok(_)) => answered = true,
-            Ok(Err(reason)) => failure = reason,
-            Err(_) => failure = format!("listing {} timed out", HOSTS[index]),
+fn http_client() -> &'static reqwest::Client {
+    static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
+        let mut builder = reqwest::Client::builder()
+            .timeout(REQUEST_TIMEOUT)
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                let home = attempt.previous().first().map(|url| url.origin());
+                if attempt.previous().len() > 10 {
+                    attempt.error("too many redirects")
+                } else if home == Some(attempt.url().origin()) {
+                    attempt.follow()
+                } else {
+                    attempt.error("redirect leaves the OPERA store")
+                }
+            }));
+        if cfg!(test) {
+            builder = builder.no_proxy();
         }
-    }
-    if answered {
-        Ok(Vec::new())
-    } else {
-        Err(failure)
-    }
+        builder.build().expect("OPERA HTTP client")
+    });
+    &CLIENT
 }
 
-async fn list_http(day: NaiveDate) -> Result<Vec<CompObject>, String> {
-    list_day_on_hosts(&ACTIVE_HOST, day, |host, day| {
-        list_day_pages(move |token| listing_page(host, day, token))
-    })
-    .await
-}
-
-async fn listing_page(
-    host: &'static str,
-    day: NaiveDate,
-    token: Option<String>,
-) -> Result<String, String> {
-    let mut url = reqwest::Url::parse(host).map_err(|e| format!("OPERA host: {e}"))?;
-    {
-        let mut query = url.query_pairs_mut();
-        query
-            .append_pair("list-type", "2")
-            .append_pair("prefix", &prefix_for(day))
-            .append_pair("max-keys", "1000");
-        if let Some(token) = &token {
-            query.append_pair("continuation-token", token);
-        }
-    }
-    live_index::listing_text(url.as_str(), "listing OPERA", "reading OPERA listing").await
-}
-
-async fn get_http(key: String) -> Result<Vec<u8>, String> {
-    let host = HOSTS[ACTIVE_HOST.load(Ordering::Relaxed)];
-    let url = format!("{host}/{key}");
-    let response = live_index::http_client()
-        .get(&url)
+async fn get_body(url: &str, max: usize) -> Result<Vec<u8>, String> {
+    let response = http_client()
+        .get(url)
         .send()
         .await
-        .map_err(|e| format!("fetching OPERA {key}: {e}"))?
-        .error_for_status()
-        .map_err(|e| format!("fetching OPERA {key}: {e}"))?;
-    live_index::take_body(response, BODY_MAX)
+        .and_then(reqwest::Response::error_for_status)
+        .map_err(|e| format!("fetching OPERA {url}: {e}"))?;
+    live_index::take_body(response, max)
         .await
-        .map_err(|e| format!("reading OPERA {key}: {e}"))
+        .map_err(|e| format!("reading OPERA {url}: {e}"))
+}
+
+async fn list_http(url: reqwest::Url) -> Result<String, String> {
+    let bytes = get_body(url.as_str(), live_index::LISTING_MAX).await?;
+    String::from_utf8(bytes).map_err(|e| format!("reading OPERA listing: {e}"))
+}
+
+async fn get_http(url: String) -> Result<Vec<u8>, String> {
+    get_body(&url, BODY_MAX).await
 }
 
 async fn poll_loop(
@@ -962,7 +1004,7 @@ mod tests {
             <Contents><Key>2026/09/17/OPERA/COMP/OPERA@20260917T1205@0@RATE.tiff</Key></Contents>
             <Contents><Key>2026/09/17/OPERA/COMP/OPERA@20260917T1210@0@DBZH.tiff</Key></Contents>
             </ListBucketResult>"#;
-        let objects = parse_dbzh_listing(body).unwrap().objects;
+        let objects = parse_dbzh_listing(HOSTS[0], body).unwrap().objects;
         assert_eq!(objects.len(), 2);
         assert_eq!(
             objects[0].key,
@@ -1147,7 +1189,7 @@ mod tests {
         let got = runtime
             .block_on(refresh(
                 &known,
-                |_day| async { parse_dbzh_listing(listing).map(|page| page.objects) },
+                |_url| async { Ok(listing.to_owned()) },
                 |key| {
                     let fixture = fixture.clone();
                     async move {
@@ -1167,7 +1209,7 @@ mod tests {
         let again = runtime
             .block_on(refresh(
                 &known,
-                |_day| async { parse_dbzh_listing(listing).map(|page| page.objects) },
+                |_url| async { Ok(listing.to_owned()) },
                 |_key| async { panic!("should not refetch") },
                 &opera.palette,
                 &opera.bounds,
@@ -1194,7 +1236,7 @@ mod tests {
             <Contents><Key>2026/09/17/OPERA/COMP/OPERA@20260917T1200@0@DBZH.tiff</Key></Contents>
             <Contents><Key>2026/09/17/OPERA/COMP/OPERA@20260917T1205@0@DBZH.tiff</Key></Contents>
             </ListBucketResult>"#;
-        let objects = parse_dbzh_listing(listing).unwrap().objects;
+        let objects = parse_dbzh_listing(HOSTS[0], listing).unwrap().objects;
         assert_eq!(objects.len(), 14);
         let mut known = HashSet::new();
         known.insert("2026/09/17/OPERA/COMP/OPERA@20260917T1205@0@DBZH.tiff".into());
@@ -1297,121 +1339,206 @@ mod tests {
             .unwrap()
     }
 
+    fn listing(keys: &[&str], next: Option<&str>) -> String {
+        let mut body = String::from("<ListBucketResult>");
+        for stamp in keys {
+            let day = format!("{}/{}/{}", &stamp[..4], &stamp[4..6], &stamp[6..8]);
+            body += &format!(
+                "<Contents><Key>{day}/OPERA/COMP/OPERA@{stamp}@0@DBZH.tiff</Key></Contents>"
+            );
+        }
+        if let Some(next) = next {
+            body += &format!(
+                "<IsTruncated>true</IsTruncated><NextContinuationToken>{next}</NextContinuationToken>"
+            );
+        }
+        body + "</ListBucketResult>"
+    }
+
+    fn by_host(
+        original: &'static [&'static str],
+        backup: &'static [&'static str],
+    ) -> impl Fn(reqwest::Url) -> std::future::Ready<Result<String, String>> {
+        move |url| {
+            let keys = if url.as_str().starts_with(HOSTS[0]) {
+                original
+            } else {
+                backup
+            };
+            std::future::ready(Ok(listing(keys, None)))
+        }
+    }
+
+    fn fetched_url<G, GF>(
+        list: impl Fn(reqwest::Url) -> std::future::Ready<Result<String, String>>,
+        get: G,
+    ) -> String
+    where
+        G: Fn(String) -> GF,
+        GF: Future<Output = Result<Vec<u8>, String>>,
+    {
+        let fetched = current_thread()
+            .block_on(fetch_newest(&HashSet::new(), list, get))
+            .unwrap()
+            .unwrap();
+        format!("{}/{}", fetched.object.host, fetched.object.key)
+    }
+
+    fn now() -> NaiveDateTime {
+        parse_dbzh_key("OPERA@20261120T2010@0@DBZH.tiff").unwrap()
+    }
+
     #[test]
-    fn empty_original_host_falls_back_to_backup_and_stays_there() {
-        let active = AtomicUsize::new(0);
-        let day = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
-        let calls = std::sync::Mutex::new(Vec::new());
-        let list = |host: &'static str, _day| {
-            calls.lock().unwrap().push(host);
-            async move {
-                Ok(if host == HOSTS[1] {
-                    vec![comp("20260917T1200")]
-                } else {
-                    Vec::new()
-                })
-            }
-        };
-        let rt = current_thread();
-        let objects = rt.block_on(list_day_on_hosts(&active, day, list)).unwrap();
-        assert_eq!(objects, vec![comp("20260917T1200")]);
-        rt.block_on(list_day_on_hosts(&active, day, list)).unwrap();
-        assert_eq!(*calls.lock().unwrap(), vec![HOSTS[0], HOSTS[1], HOSTS[1]]);
+    fn empty_original_host_uses_the_backup() {
+        let url = fetched_url(by_host(&[], &["20261120T2005"]), |_url| async {
+            Ok(Vec::new())
+        });
+        assert!(url.starts_with(HOSTS[1]), "{url}");
+        assert!(url.ends_with("OPERA@20261120T2005@0@DBZH.tiff"), "{url}");
     }
 
     #[test]
     fn original_host_with_files_is_used() {
-        let active = AtomicUsize::new(0);
-        let day = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
-        let objects = current_thread()
-            .block_on(list_day_on_hosts(&active, day, |host, _day| async move {
-                assert_eq!(host, HOSTS[0], "backup must not be listed");
-                Ok(vec![comp("20260917T1200")])
-            }))
-            .unwrap();
-        assert_eq!(objects, vec![comp("20260917T1200")]);
+        let url = fetched_url(
+            by_host(&["20261120T2005"], &["20261120T2005"]),
+            |url| async move {
+                assert!(url.starts_with(HOSTS[0]), "{url}");
+                Ok(Vec::new())
+            },
+        );
+        assert!(url.starts_with(HOSTS[0]), "{url}");
     }
 
     #[test]
-    fn failing_backup_returns_to_original_host() {
-        let active = AtomicUsize::new(1);
-        let day = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
-        let calls = std::sync::Mutex::new(Vec::new());
-        let list = |host: &'static str, _day| {
-            calls.lock().unwrap().push(host);
-            async move {
-                if host == HOSTS[1] {
-                    Err("backup down".to_owned())
+    fn fresher_host_wins_over_a_stalled_one() {
+        let url = fetched_url(
+            by_host(&["20261120T1900"], &["20261120T2005"]),
+            |_url| async { Ok(Vec::new()) },
+        );
+        assert!(url.starts_with(HOSTS[1]), "{url}");
+        assert!(url.ends_with("OPERA@20261120T2005@0@DBZH.tiff"), "{url}");
+    }
+
+    #[test]
+    fn failed_download_falls_back_to_the_other_host() {
+        let url = fetched_url(
+            by_host(&["20261120T2005"], &["20261120T2005"]),
+            |url| async move {
+                if url.starts_with(HOSTS[0]) {
+                    Err("404".to_owned())
                 } else {
-                    Ok(vec![comp("20260917T1200")])
-                }
-            }
-        };
-        let rt = current_thread();
-        let objects = rt.block_on(list_day_on_hosts(&active, day, list)).unwrap();
-        assert_eq!(objects, vec![comp("20260917T1200")]);
-        rt.block_on(list_day_on_hosts(&active, day, list)).unwrap();
-        assert_eq!(*calls.lock().unwrap(), vec![HOSTS[1], HOSTS[0], HOSTS[0]]);
-    }
-
-    #[test]
-    fn empty_backup_and_failing_original_is_empty_not_an_error() {
-        let active = AtomicUsize::new(1);
-        let day = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
-        let objects = current_thread()
-            .block_on(list_day_on_hosts(&active, day, |host, _day| async move {
-                if host == HOSTS[1] {
                     Ok(Vec::new())
-                } else {
-                    Err("original down".to_owned())
                 }
-            }))
+            },
+        );
+        assert!(url.starts_with(HOSTS[1]), "{url}");
+    }
+
+    #[test]
+    fn listed_objects_download_from_the_host_that_listed_them() {
+        let hosts = current_thread()
+            .block_on(list_hosts(
+                now(),
+                by_host(&[], &["20261120T2000", "20261120T2005"]),
+            ))
             .unwrap();
-        assert!(objects.is_empty());
+        assert_eq!(hosts.len(), 1);
+        assert!(hosts[0].iter().all(|o| o.host == HOSTS[1]));
     }
 
     #[test]
     fn hanging_original_host_falls_back_to_backup() {
-        let active = AtomicUsize::new(0);
-        let day = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
-        let objects = current_thread()
+        let hosts = current_thread()
             .block_on(async {
                 tokio::time::pause();
-                list_day_on_hosts(&active, day, |host, _day| async move {
-                    if host == HOSTS[0] {
+                list_hosts(now(), |url: reqwest::Url| async move {
+                    if url.as_str().starts_with(HOSTS[0]) {
                         std::future::pending::<()>().await;
                     }
-                    Ok(vec![comp("20260917T1200")])
+                    Ok(listing(&["20261120T2005"], None))
                 })
                 .await
             })
             .unwrap();
-        assert_eq!(objects, vec![comp("20260917T1200")]);
+        assert_eq!(hosts.len(), 1);
+        assert_eq!(hosts[0][0].host, HOSTS[1]);
     }
 
     #[test]
-    fn both_hosts_failing_is_an_error() {
-        let active = AtomicUsize::new(0);
+    fn listing_failure_shows_when_no_host_has_files() {
+        let result = current_thread().block_on(list_hosts(now(), |url: reqwest::Url| async move {
+            if url.as_str().starts_with(HOSTS[0]) {
+                Err("original down".to_owned())
+            } else {
+                Ok(listing(&[], None))
+            }
+        }));
+        assert!(result.unwrap_err().contains("original down"));
+        let empty = current_thread().block_on(list_hosts(now(), by_host(&[], &[])));
+        assert!(empty.unwrap().is_empty());
+    }
+
+    #[test]
+    fn listing_starts_ninety_minutes_back_across_midnight() {
+        let urls = std::sync::Mutex::new(Vec::new());
+        let after_midnight = parse_dbzh_key("OPERA@20261120T0030@0@DBZH.tiff").unwrap();
+        current_thread()
+            .block_on(list_hosts(after_midnight, |url: reqwest::Url| {
+                if url.as_str().starts_with(HOSTS[0]) {
+                    urls.lock()
+                        .unwrap()
+                        .push(url.query_pairs().into_owned().collect::<Vec<_>>());
+                }
+                std::future::ready(Ok(listing(&[], None)))
+            }))
+            .unwrap();
+        let urls = urls.into_inner().unwrap();
+        let param = |query: &Vec<(String, String)>, name: &str| {
+            query
+                .iter()
+                .find(|(k, _)| k == name)
+                .map(|(_, v)| v.clone())
+        };
+        assert_eq!(urls.len(), 2);
+        assert_eq!(param(&urls[0], "prefix").unwrap(), "2026/11/19/OPERA/COMP/");
+        assert_eq!(
+            param(&urls[0], "start-after").unwrap(),
+            "2026/11/19/OPERA/COMP/OPERA@20261119T2300"
+        );
+        assert_eq!(param(&urls[1], "prefix").unwrap(), "2026/11/20/OPERA/COMP/");
+        assert_eq!(param(&urls[1], "start-after"), None);
+    }
+
+    #[test]
+    fn listing_url_carries_an_opaque_token_intact() {
+        let token = "2026/11/20/OPERA/COMP/OPERA@20261120T1900@0@RATE.tiff+a=b&c d%";
         let day = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
-        let result =
-            current_thread().block_on(list_day_on_hosts(&active, day, |_host, _day| async {
-                Err("down".to_owned())
-            }));
-        assert!(result.is_err());
+        let url = listing_url(HOSTS[1], day, None, Some(token)).unwrap();
+        assert!(url.as_str().starts_with(HOSTS[1]));
+        let sent: Vec<_> = url.query_pairs().into_owned().collect();
+        assert!(sent.contains(&("continuation-token".to_owned(), token.to_owned())));
     }
 
     #[test]
     fn listing_follows_ord_continuation_pages() {
         let first = include_str!("../tests/fixtures/opera-listing-page1.xml");
         let rest = include_str!("../tests/fixtures/opera-listing-page2.xml");
+        let day = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
         let objects = current_thread()
-            .block_on(list_day_pages(|token| async move {
-                match token.as_deref() {
-                    None => Ok(first.to_owned()),
-                    Some("2026/11/20/OPERA/COMP/OPERA@20261120T1900@0@RATE.tiff") => {
-                        Ok(rest.to_owned())
+            .block_on(list_pages(HOSTS[1], |token| {
+                let url = listing_url(HOSTS[1], day, None, token.as_deref()).unwrap();
+                async move {
+                    let token = url
+                        .query_pairs()
+                        .find(|(k, _)| k == "continuation-token")
+                        .map(|(_, v)| v.into_owned());
+                    match token.as_deref() {
+                        None => Ok(first.to_owned()),
+                        Some("2026/11/20/OPERA/COMP/OPERA@20261120T1900@0@RATE.tiff") => {
+                            Ok(rest.to_owned())
+                        }
+                        Some(other) => Err(format!("unexpected token {other}")),
                     }
-                    Some(other) => Err(format!("unexpected token {other}")),
                 }
             }))
             .unwrap();
@@ -1421,23 +1548,88 @@ mod tests {
         assert_eq!(objects[11], comp_on("2026/11/20", "20261120T1955"));
     }
 
-    #[test]
-    fn truncated_listing_without_token_is_an_error() {
-        let body = "<ListBucketResult><IsTruncated>true</IsTruncated></ListBucketResult>";
-        assert!(parse_dbzh_listing(body).is_err());
+    fn paged(last_page_truncated: bool) -> (Result<Vec<CompObject>, String>, usize) {
+        let requests = std::sync::atomic::AtomicUsize::new(0);
+        let result = current_thread().block_on(list_pages(HOSTS[0], |_token| {
+            let n = requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            let next = (n < LIST_PAGES_MAX || last_page_truncated).then(|| format!("t{n}"));
+            std::future::ready(Ok(listing(&["20261120T2005"], next.as_deref())))
+        }));
+        (result, requests.into_inner())
     }
 
     #[test]
-    fn endless_listing_gives_up() {
-        let first = include_str!("../tests/fixtures/opera-listing-page1.xml");
-        let result =
-            current_thread().block_on(list_day_pages(|_token| async move { Ok(first.to_owned()) }));
+    fn eighth_page_ends_a_listing_and_a_ninth_is_never_requested() {
+        let (complete, requests) = paged(false);
+        assert_eq!(complete.unwrap().len(), LIST_PAGES_MAX);
+        assert_eq!(requests, LIST_PAGES_MAX);
+        let (endless, requests) = paged(true);
+        assert!(endless.is_err());
+        assert_eq!(requests, LIST_PAGES_MAX);
+    }
+
+    #[test]
+    fn repeated_token_stops_the_listing() {
+        let requests = std::sync::atomic::AtomicUsize::new(0);
+        let result = current_thread().block_on(list_pages(HOSTS[0], |_token| {
+            requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            std::future::ready(Ok(listing(&[], Some("same"))))
+        }));
         assert!(result.is_err());
+        assert_eq!(requests.into_inner(), 2);
+    }
+
+    #[test]
+    fn truncated_listing_without_token_is_an_error() {
+        let body = "<ListBucketResult><IsTruncated>true</IsTruncated></ListBucketResult>";
+        assert!(parse_dbzh_listing(HOSTS[0], body).is_err());
+    }
+
+    #[test]
+    fn redirects_stay_on_the_store_origin() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        current_thread().block_on(async {
+            let home = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let away = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base = format!("http://{}", home.local_addr().unwrap());
+            let elsewhere = format!("http://{}/x", away.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                for location in ["/moved".to_owned(), elsewhere] {
+                    let (mut socket, _) = home.accept().await.unwrap();
+                    let _ = socket.read(&mut [0u8; 2048]).await.unwrap();
+                    let response = format!(
+                        "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    );
+                    socket.write_all(response.as_bytes()).await.unwrap();
+                }
+            });
+            let error = get_http(format!("{base}/start")).await.unwrap_err();
+            assert!(error.contains("error following redirect"), "{error}");
+            server.await.unwrap();
+            assert!(timeout(Duration::from_millis(100), away.accept()).await.is_err());
+        });
+    }
+
+    #[test]
+    fn stalled_download_times_out() {
+        current_thread().block_on(async {
+            let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let url = format!("http://{}/x", server.local_addr().unwrap());
+            let _held = tokio::spawn(async move {
+                let (socket, _) = server.accept().await.unwrap();
+                std::future::pending::<()>().await;
+                drop(socket);
+            });
+            tokio::time::pause();
+            let result = timeout(REQUEST_TIMEOUT * 2, get_http(url)).await;
+            assert!(result.expect("request timeout must fire first").is_err());
+        });
     }
 
     fn comp_on(day: &str, stamp: &str) -> CompObject {
         let key = format!("{day}/OPERA/COMP/OPERA@{stamp}@0@DBZH.tiff");
         CompObject {
+            host: HOSTS[1],
             stamp: parse_dbzh_key(&key).unwrap(),
             key,
         }
@@ -1670,7 +1862,7 @@ mod tests {
                 Duration::from_millis(20),
                 fetch_newest(
                     &known,
-                    |_day| async { parse_dbzh_listing(listing).map(|page| page.objects) },
+                    |_url| async { Ok(listing.to_owned()) },
                     move |_key| {
                         let slow = slow.clone();
                         async move {
@@ -1685,17 +1877,13 @@ mod tests {
 
             let fetched = timeout(
                 Duration::from_millis(20),
-                fetch_newest(
-                    &known,
-                    |_day| async { parse_dbzh_listing(listing).map(|page| page.objects) },
-                    {
+                fetch_newest(&known, |_url| async { Ok(listing.to_owned()) }, {
+                    let fixture = fixture.clone();
+                    move |_key| {
                         let fixture = fixture.clone();
-                        move |_key| {
-                            let fixture = fixture.clone();
-                            async move { Ok(fixture) }
-                        }
-                    },
-                ),
+                        async move { Ok(fixture) }
+                    }
+                }),
             )
             .await
             .expect("fast GET should beat the fetch timeout")
