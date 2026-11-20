@@ -22,9 +22,9 @@ Omarchy 4 on x86_64 and aarch64.
 omarchy plugin add https://github.com/wesleygrimes/omastorm.git --enable
 ```
 
-That clones the plugin, asks which bar section to use, and on first open
-downloads the pinned engine from GitHub Releases, checks its sha256, and
-installs it under `~/.local/share/omastorm/bin`. Configuration, remembered
+That clones the plugin and asks which bar section to use. When the bar
+loads the widget, it downloads the pinned engine from GitHub Releases, checks
+its sha256, and installs it under `~/.local/share/omastorm/bin`. Configuration, remembered
 view, and cached scans stay in Omastorm's own directories.
 
 Optional: a Hyprland key to toggle the window. Add one line to
@@ -71,6 +71,10 @@ U.S. radar comes from NOAA NEXRAD, and `Shift+N` switches to the NOAA MRMS
 mosaic for the contiguous U.S. European radar comes from EUMETNET OPERA.
 Coverage depends on radar range and the data available from each provider. Some areas have no radar data, even when their cities appear in
 search.
+
+The OPERA public cache has published no European mosaic since late October
+2026, so Europe shows an empty map with a red feed light until it returns
+([#207](https://github.com/wesleygrimes/omastorm/issues/207)).
 
 [![EUMETNET OPERA radar mosaic over Warsaw, Poland](docs/media/readme/omastorm-europe.png)](https://github.com/wesleygrimes/omastorm/releases/download/v0.1.14/omastorm-europe.mp4)
 
@@ -346,6 +350,7 @@ the template asks.
 omarchy plugin remove com.omastorm.radar
 ~/.local/share/omastorm/bin/omastorm-engine stop
 rm -rf ~/.local/share/omastorm ~/.cache/omastorm ~/.local/state/omastorm
+rm -rf "$XDG_RUNTIME_DIR/omastorm"                   # socket, logs, session tiles
 rm -rf ~/.config/omastorm                            # keep this to reinstall later
 rm -f ~/.local/share/applications/omastorm.desktop   # if you added the launcher entry
 ```

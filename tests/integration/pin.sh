@@ -165,6 +165,42 @@ timeout 2 socat -t0.2 - "UNIX-CONNECT:$XDG_RUNTIME_DIR/omastorm/engine.sock" < /
   || fail 'Clone --ensure did not produce a hello'
 "$dest" stop >/dev/null
 
+# A plugin retry while a bootstrap is still downloading leaves it alone: one
+# download, and the first bootstrap still installs and starts the engine.
+rm -f "$dest"
+cat > "$scratch/bin/curl" <<'CURL'
+#!/usr/bin/env bash
+set -euo pipefail
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    -o) out=$2; shift 2 ;;
+    --) url=$2; break ;;
+    *) shift ;;
+  esac
+done
+printf '%s\n' "$url" >> "$DOWNLOAD_FIXTURES/calls"
+until [[ -e $DOWNLOAD_FIXTURES/release ]]; do sleep 0.05; done
+cp "$DOWNLOAD_FIXTURES/${url##*/}" "$out"
+CURL
+(
+  cd "$clone"
+  unset OMASTORM_ENGINE_BINARY OMASTORM_ENGINE_ASSET
+  export PATH="$scratch/bin:$PATH" DOWNLOAD_FIXTURES=$scratch/downloads
+  export OMASTORM_BOOTSTRAP_LOG=$XDG_RUNTIME_DIR/omastorm/bootstrap.log
+  bash run.sh --ensure &
+  first=$!
+  for _ in {1..200}; do [[ -e $DOWNLOAD_FIXTURES/calls ]] && break; sleep 0.05; done
+  [[ -e $DOWNLOAD_FIXTURES/calls ]] || fail 'The first bootstrap never started its download'
+  timeout 10 bash run.sh --ensure || fail 'A retry during a download did not exit cleanly'
+  touch "$DOWNLOAD_FIXTURES/release"
+  wait "$first" || fail 'The first bootstrap failed after a retry'
+)
+[[ $(wc -l < "$scratch/downloads/calls") -eq 1 ]] || fail 'Overlapping bootstraps downloaded the engine more than once'
+[[ -x $dest ]] || fail 'Overlapping bootstraps left no engine installed'
+timeout 2 socat -t0.2 - "UNIX-CONNECT:$XDG_RUNTIME_DIR/omastorm/engine.sock" < /dev/null | rg -q '"type":"hello"' \
+  || fail 'Overlapping bootstraps did not produce a hello'
+"$dest" stop >/dev/null
+
 # The committed pin names what users get. Setup supplied verified bytes;
 # no network, no silent skip, and no candidate replacement during tests.
 read_engine_pin engine/release.pin
@@ -194,4 +230,4 @@ if [[ -x $dest ]]; then
     || fail "Pinned asset reports engine $(jq -r .engine <<< "$hello"); the pin names $tag"
 fi
 
-echo 'Engine install: pin verify, mismatch refuse, dest install, skip current, replace stale, arch, checkout --ensure, clone --ensure, pinned asset PASS'
+echo 'Engine install: pin verify, mismatch refuse, dest install, skip current, replace stale, arch, checkout --ensure, clone --ensure, overlapping bootstrap, pinned asset PASS'

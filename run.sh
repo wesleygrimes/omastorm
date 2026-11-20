@@ -13,16 +13,23 @@ fi
 # $XDG_DATA_HOME/omastorm/bin (DESIGN.md, distribution).
 if [[ ${1:-} == --ensure ]]; then
   # The plugin bootstrap runs detached; its stderr goes to the log it names.
+  # The plugin retries every 20 s while the engine is unreachable. A retry
+  # that finds a bootstrap still downloading leaves it, and its log, alone.
   if [[ -n ${OMASTORM_BOOTSTRAP_LOG:-} ]]; then
     mkdir -p "$(dirname "$OMASTORM_BOOTSTRAP_LOG")"
+    exec {lock}> "$(dirname "$OMASTORM_BOOTSTRAP_LOG")/bootstrap.lock"
+    flock -n "$lock" || exit 0
     exec 2> "$OMASTORM_BOOTSTRAP_LOG"
   fi
   if [[ -n $selected_engine ]]; then
-    exec "$selected_engine" ensure
+    engine=$selected_engine
   elif [[ -x target/debug/omastorm-engine ]]; then
-    exec target/debug/omastorm-engine ensure
+    engine=target/debug/omastorm-engine
+  else
+    engine=$(bash scripts/fetch-engine.sh --print-path)
   fi
-  engine=$(bash scripts/fetch-engine.sh --print-path)
+  # The daemon must not inherit the lock.
+  [[ -n ${lock:-} ]] && exec {lock}>&-
   exec "$engine" ensure
 fi
 if [[ ! -f ui/shaders/radar.frag.qsb || ! -f ui/shaders/tile.frag.qsb || ! -f ui/shaders/grid.frag.qsb || ! -f ui/shaders/texture-check.frag.qsb ]]; then
