@@ -297,7 +297,7 @@ pub fn listing_url(
 }
 
 /// COMP objects on `host` stamped from `LOOKBACK_MINUTES` before `now`.
-/// Today's listing must succeed; yesterday's only adds history.
+/// Today's listing must succeed; yesterday's may fail once today has scans.
 async fn list_window<L, LF>(
     host: &'static str,
     now: NaiveDateTime,
@@ -318,9 +318,11 @@ where
         list_day(host, today, Some(&start_after), list).await?
     } else {
         let today = list_day(host, today, None, list).await?;
-        let mut objects = list_day(host, since.date(), Some(&start_after), list)
-            .await
-            .unwrap_or_default();
+        let mut objects = match list_day(host, since.date(), Some(&start_after), list).await {
+            Ok(objects) => objects,
+            Err(reason) if today.is_empty() => return Err(reason),
+            Err(_) => Vec::new(),
+        };
         objects.extend(today);
         objects
     };
@@ -613,6 +615,7 @@ enum Newest {
 /// Load the newest unseen COMP from the freshest store that serves a
 /// readable copy. A failure is reported unless another store delivers.
 async fn load_newest<L, G, LF, GF>(
+    now: NaiveDateTime,
     known: &HashSet<String>,
     list: L,
     get: G,
@@ -629,7 +632,7 @@ where
     let get = Arc::new(get);
     let mut failure = None;
     let mut outcome = Newest::Empty;
-    for objects in list_hosts(Utc::now().naive_utc(), list).await? {
+    for objects in list_hosts(now, list).await? {
         let newest = objects[objects.len() - 1].clone();
         if known.contains(&newest.key) {
             outcome = Newest::Known;
@@ -739,6 +742,7 @@ pub fn backfill_targets(
 /// One list+fetch cycle with injectable HTTP (tests mock the closures).
 #[cfg(test)]
 pub async fn refresh<L, G, LF, GF>(
+    now: NaiveDateTime,
     known: &HashSet<String>,
     list: L,
     get: G,
@@ -753,6 +757,7 @@ where
 {
     Ok(
         match load_newest(
+            now,
             known,
             list,
             get,
@@ -929,6 +934,7 @@ async fn poll_loop(
             sleep(IDLE).await;
         }
         let result = load_newest(
+            Utc::now().naive_utc(),
             &known,
             list_http,
             get_http,
@@ -1243,6 +1249,7 @@ mod tests {
             .unwrap();
         let got = runtime
             .block_on(refresh(
+                parse_dbzh_key("OPERA@20260917T1210@0@DBZH.tiff").unwrap(),
                 &known,
                 |_url| async { Ok(listing.to_owned()) },
                 |key| {
@@ -1263,6 +1270,7 @@ mod tests {
         known.insert(got.0.key.clone());
         let again = runtime
             .block_on(refresh(
+                parse_dbzh_key("OPERA@20260917T1210@0@DBZH.tiff").unwrap(),
                 &known,
                 |_url| async { Ok(listing.to_owned()) },
                 |_key| async { panic!("should not refetch") },
@@ -1432,6 +1440,7 @@ mod tests {
         let known = known.iter().map(|k| k.to_string()).collect();
         let opera = Opera::new();
         let loaded = current_thread().block_on(refresh(
+            now(),
             &known,
             list,
             |url| std::future::ready(body(&url)),
@@ -1575,6 +1584,7 @@ mod tests {
             let mut known = HashSet::new();
             for expected in [false, true] {
                 let Newest::Fresh(loaded) = load_newest(
+                    now(),
                     &known,
                     by_host(&[], &["20261120T2005"]),
                     |url| std::future::ready(served(&url)),
@@ -1604,6 +1614,7 @@ mod tests {
         let opera = Opera::new();
         let newest = |known: HashSet<String>, original: &'static [&'static str]| {
             current_thread().block_on(load_newest(
+                now(),
                 &known,
                 by_host(original, &[]),
                 |url| std::future::ready(served(&url)),
@@ -1740,6 +1751,23 @@ mod tests {
                 host: HOSTS[0],
                 ..comp_on("2026/11/20", "20261120T0005")
             }]
+        );
+    }
+
+    #[test]
+    fn failing_yesterday_listing_is_reported_when_today_is_empty() {
+        let after_midnight = parse_dbzh_key("OPERA@20261120T0002@0@DBZH.tiff").unwrap();
+        let listed = current_thread().block_on(list_hosts(after_midnight, |url: reqwest::Url| {
+            let query: Vec<_> = url.query_pairs().into_owned().collect();
+            std::future::ready(if param(&query, "start-after").is_some() {
+                Err("yesterday timed out".to_owned())
+            } else {
+                Ok(listing(&[], None))
+            })
+        }));
+        assert_eq!(
+            listed,
+            Err("yesterday timed out; yesterday timed out".to_owned())
         );
     }
 
