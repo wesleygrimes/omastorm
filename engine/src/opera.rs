@@ -334,11 +334,13 @@ where
     L: Fn(reqwest::Url) -> LF,
     LF: Future<Output = Result<String, String>>,
 {
-    list_pages(host, |token: Option<String>| {
+    let pages = list_pages(host, |token: Option<String>| {
         let url = listing_url(host, day, start_after, token.as_deref());
         async move { list(url?).await }
-    })
-    .await
+    });
+    timeout(HOST_LIST_TIMEOUT, pages)
+        .await
+        .map_err(|_| format!("listing {host} {day} timed out"))?
 }
 
 /// `…/OPERA/COMP/OPERA@YYYYMMDDTHHMM@0@DBZH.tiff`
@@ -668,11 +670,10 @@ where
     let mut found = Vec::new();
     let mut failures = Vec::new();
     for host in HOSTS {
-        match timeout(HOST_LIST_TIMEOUT, list_window(host, now, &list)).await {
-            Ok(Ok(objects)) if !objects.is_empty() => found.push(objects),
-            Ok(Ok(_)) => {}
-            Ok(Err(reason)) => failures.push(reason),
-            Err(_) => failures.push(format!("listing {host} timed out")),
+        match list_window(host, now, &list).await {
+            Ok(objects) if !objects.is_empty() => found.push(objects),
+            Ok(_) => {}
+            Err(reason) => failures.push(reason),
         }
     }
     if found.is_empty() && !failures.is_empty() {
@@ -682,14 +683,12 @@ where
     Ok(found)
 }
 
-/// History comes from the store that served the live frame when it still
-/// lists one, so a store that fails downloads is not retried.
-pub fn backfill_store(hosts: Vec<Vec<CompObject>>, served: Option<&str>) -> Vec<CompObject> {
-    let pick = hosts
-        .iter()
-        .position(|objects| Some(objects[0].host) == served)
-        .unwrap_or(0);
-    hosts.into_iter().nth(pick).unwrap_or_default()
+/// History comes only from the store that served the live frame.
+pub fn backfill_store(hosts: Vec<Vec<CompObject>>, served: &str) -> Vec<CompObject> {
+    hosts
+        .into_iter()
+        .find(|objects| objects[0].host == served)
+        .unwrap_or_default()
 }
 
 /// Newest `limit` COMP keys that are not already `known`, oldest first so
@@ -740,7 +739,7 @@ where
 async fn backfill_loop(
     events: GridSender,
     known: HashSet<String>,
-    served: Option<&'static str>,
+    served: &'static str,
     palette: Arc<Vec<String>>,
     bounds: Arc<Vec<f64>>,
     decode_slots: Arc<Semaphore>,
@@ -831,9 +830,14 @@ impl<T> Drop for AbortOnDrop<T> {
 }
 
 fn http_client() -> &'static reqwest::Client {
-    static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
-        let mut builder = reqwest::Client::builder()
-            .timeout(REQUEST_TIMEOUT)
+    static CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| build_client(REQUEST_TIMEOUT));
+    &CLIENT
+}
+
+fn build_client(limit: Duration) -> reqwest::Client {
+    let mut builder =
+        reqwest::Client::builder()
+            .timeout(limit)
             .redirect(reqwest::redirect::Policy::custom(|attempt| {
                 let home = attempt.previous().first().map(|url| url.origin());
                 if attempt.previous().len() > 10 {
@@ -844,16 +848,14 @@ fn http_client() -> &'static reqwest::Client {
                     attempt.error("redirect leaves the OPERA store")
                 }
             }));
-        if cfg!(test) {
-            builder = builder.no_proxy();
-        }
-        builder.build().expect("OPERA HTTP client")
-    });
-    &CLIENT
+    if cfg!(test) {
+        builder = builder.no_proxy();
+    }
+    builder.build().expect("OPERA HTTP client")
 }
 
-async fn get_body(url: &str, max: usize) -> Result<Vec<u8>, String> {
-    let response = http_client()
+async fn get_body(client: &reqwest::Client, url: &str, max: usize) -> Result<Vec<u8>, String> {
+    let response = client
         .get(url)
         .send()
         .await
@@ -865,12 +867,12 @@ async fn get_body(url: &str, max: usize) -> Result<Vec<u8>, String> {
 }
 
 async fn list_http(url: reqwest::Url) -> Result<String, String> {
-    let bytes = get_body(url.as_str(), live_index::LISTING_MAX).await?;
+    let bytes = get_body(http_client(), url.as_str(), live_index::LISTING_MAX).await?;
     String::from_utf8(bytes).map_err(|e| format!("reading OPERA listing: {e}"))
 }
 
 async fn get_http(url: String) -> Result<Vec<u8>, String> {
-    get_body(&url, BODY_MAX).await
+    get_body(http_client(), &url, BODY_MAX).await
 }
 
 async fn poll_loop(
@@ -882,50 +884,13 @@ async fn poll_loop(
     let palette = Arc::new(palette);
     let bounds = Arc::new(bounds);
     let decode_slots = Arc::new(Semaphore::new(BACKFILL_IN_FLIGHT));
-    let mut served = None;
-    let first = load_newest(
-        &known,
-        list_http,
-        get_http,
-        Arc::clone(&palette),
-        Arc::clone(&bounds),
-        None,
-    )
-    .await;
-    match first {
-        Ok(Some(loaded)) => {
-            log_load("", &loaded);
-            served = Some(loaded.object.host);
-            known.insert(loaded.object.key);
-            let _ = events
-                .send(ev_frame(loaded.frame, loaded.texture, loaded.start_ms))
-                .await;
-        }
-        Ok(None) => {
-            let _ = events
-                .send(ev_silent("ORD cache has no OPERA DBZH.tiff yet".into()))
-                .await;
-        }
-        Err(reason) => {
-            let _ = events.send(ev_offline(reason)).await;
-        }
-    }
-    // Same shape as NEXRAD: newest is already on screen; pull the rest of
-    // the dozen in the background so play/[ ] have a loop. Held so aborting
-    // this poller cancels in-flight COMP downloads.
-    let _backfill = AbortOnDrop(tokio::spawn({
-        let events = events.clone();
-        let known = known.clone();
-        let palette = Arc::clone(&palette);
-        let bounds = Arc::clone(&bounds);
-        let decode_slots = Arc::clone(&decode_slots);
-        async move {
-            backfill_loop(events, known, served, palette, bounds, decode_slots).await;
-        }
-    }));
+    let mut first = true;
+    let mut backfill = None;
     loop {
-        sleep(IDLE).await;
-        match load_newest(
+        if !first {
+            sleep(IDLE).await;
+        }
+        let result = load_newest(
             &known,
             list_http,
             get_http,
@@ -933,28 +898,36 @@ async fn poll_loop(
             Arc::clone(&bounds),
             Some(Arc::clone(&decode_slots)),
         )
-        .await
-        {
+        .await;
+        let event = match result {
             Ok(Some(loaded)) => {
                 log_load("", &loaded);
                 known.insert(loaded.object.key.clone());
                 if known.len() > HISTORY_MAX * 4 {
-                    known = HashSet::from([loaded.object.key]);
+                    known = HashSet::from([loaded.object.key.clone()]);
                 }
-                if events
-                    .send(ev_frame(loaded.frame, loaded.texture, loaded.start_ms))
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
+                // History starts once a live frame is on screen, from its store.
+                // Held so aborting this poller cancels in-flight COMP downloads.
+                backfill.get_or_insert_with(|| {
+                    AbortOnDrop(tokio::spawn(backfill_loop(
+                        events.clone(),
+                        known.clone(),
+                        loaded.object.host,
+                        Arc::clone(&palette),
+                        Arc::clone(&bounds),
+                        Arc::clone(&decode_slots),
+                    )))
+                });
+                Some(ev_frame(loaded.frame, loaded.texture, loaded.start_ms))
             }
-            Ok(None) => {}
-            Err(reason) => {
-                if events.send(ev_offline(reason)).await.is_err() {
-                    return;
-                }
-            }
+            Ok(None) => first.then(|| ev_silent("ORD cache has no OPERA DBZH.tiff yet".into())),
+            Err(reason) => Some(ev_offline(reason)),
+        };
+        first = false;
+        if let Some(event) = event
+            && events.send(event).await.is_err()
+        {
+            return;
         }
     }
 }
@@ -1508,9 +1481,8 @@ mod tests {
         }];
         let backup = vec![comp_on("2026/11/20", "20261120T2000")];
         let hosts = vec![original, backup.clone()];
-        assert_eq!(backfill_store(hosts.clone(), Some(HOSTS[1])), backup);
-        assert_eq!(backfill_store(hosts.clone(), None)[0].host, HOSTS[0]);
-        assert!(backfill_store(Vec::new(), Some(HOSTS[1])).is_empty());
+        assert_eq!(backfill_store(hosts.clone(), HOSTS[1]), backup);
+        assert!(backfill_store(hosts[..1].to_vec(), HOSTS[1]).is_empty());
     }
 
     #[test]
@@ -1604,6 +1576,26 @@ mod tests {
         );
     }
 
+    #[test]
+    fn stalled_yesterday_listing_keeps_todays_frames() {
+        let after_midnight = parse_dbzh_key("OPERA@20261120T0010@0@DBZH.tiff").unwrap();
+        let hosts = current_thread()
+            .block_on(async {
+                tokio::time::pause();
+                list_hosts(after_midnight, |url: reqwest::Url| async move {
+                    let query: Vec<_> = url.query_pairs().into_owned().collect();
+                    if param(&query, "start-after").is_some() {
+                        std::future::pending::<()>().await;
+                    }
+                    Ok(listing(&["20261120T0005"], None))
+                })
+                .await
+            })
+            .unwrap();
+        assert_eq!(hosts.len(), 2);
+        assert!(hosts.iter().all(|objects| objects.len() == 1));
+    }
+
     fn param(query: &[(String, String)], name: &str) -> Option<String> {
         query
             .iter()
@@ -1685,10 +1677,14 @@ mod tests {
     fn repeated_token_stops_the_listing() {
         let requests = std::sync::atomic::AtomicUsize::new(0);
         let result = current_thread().block_on(list_pages(HOSTS[0], |_token| {
-            requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            std::future::ready(Ok(listing(&[], Some("same"))))
+            let n = requests.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+            std::future::ready(if n > 20 {
+                Err("runaway listing".to_owned())
+            } else {
+                Ok(listing(&[], Some("same")))
+            })
         }));
-        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("repeated"));
         assert_eq!(requests.into_inner(), 2);
     }
 
@@ -1742,9 +1738,12 @@ mod tests {
                 std::future::pending::<()>().await;
                 drop(socket);
             });
-            tokio::time::pause();
-            let result = timeout(REQUEST_TIMEOUT * 2, get_http(url)).await;
-            assert!(result.expect("request timeout must fire first").is_err());
+            let client = build_client(Duration::from_secs(1));
+            let result = timeout(Duration::from_secs(10), get_body(&client, &url, BODY_MAX)).await;
+            let error = result
+                .expect("request timeout must fire first")
+                .unwrap_err();
+            assert!(error.starts_with("reading OPERA"), "{error}");
         });
     }
 
