@@ -219,7 +219,9 @@ pub fn parse_dbzh_listing(host: &'static str, body: &str) -> Result<DbzhPage, St
             XmlEvent::Characters(chunk) => text.push_str(&chunk),
             XmlEvent::EndElement { name } => match name.local_name.as_str() {
                 "Key" => {
-                    if let Some(stamp) = parse_dbzh_key(&text) {
+                    if let Some(stamp) = parse_dbzh_key(&text)
+                        && text == comp_key(stamp)
+                    {
                         objects.push(CompObject {
                             host,
                             key: text.clone(),
@@ -349,6 +351,14 @@ pub fn parse_dbzh_key(key: &str) -> Option<NaiveDateTime> {
     let rest = name.strip_prefix("OPERA@")?;
     let stamp = rest.strip_suffix("@0@DBZH.tiff")?;
     NaiveDateTime::parse_from_str(stamp, "%Y%m%dT%H%M").ok()
+}
+
+fn comp_key(stamp: NaiveDateTime) -> String {
+    format!(
+        "{}OPERA@{}@0@DBZH.tiff",
+        prefix_for(stamp.date()),
+        stamp.format("%Y%m%dT%H%M")
+    )
 }
 
 pub fn prefix_for(day: NaiveDate) -> String {
@@ -683,12 +693,18 @@ where
     Ok(found)
 }
 
-/// History comes only from the store that served the live frame.
-pub fn backfill_store(hosts: Vec<Vec<CompObject>>, served: &str) -> Vec<CompObject> {
-    hosts
+/// History is the served store's scans older than the first live frame.
+pub fn backfill_store(
+    hosts: Vec<Vec<CompObject>>,
+    served: &str,
+    before: NaiveDateTime,
+) -> Vec<CompObject> {
+    let mut objects = hosts
         .into_iter()
         .find(|objects| objects[0].host == served)
-        .unwrap_or_default()
+        .unwrap_or_default();
+    objects.retain(|o| o.stamp < before);
+    objects
 }
 
 /// Newest `limit` COMP keys that are not already `known`, oldest first so
@@ -740,13 +756,14 @@ async fn backfill_loop(
     events: GridSender,
     known: HashSet<String>,
     served: &'static str,
+    before: NaiveDateTime,
     palette: Arc<Vec<String>>,
     bounds: Arc<Vec<f64>>,
     decode_slots: Arc<Semaphore>,
 ) {
     sleep(BACKFILL_DELAY).await;
     let objects = match list_hosts(Utc::now().naive_utc(), list_http).await {
-        Ok(hosts) => backfill_store(hosts, served),
+        Ok(hosts) => backfill_store(hosts, served, before),
         Err(reason) => {
             opera_log(format_args!("backfill listing: {reason}"));
             return;
@@ -899,37 +916,59 @@ async fn poll_loop(
             Some(Arc::clone(&decode_slots)),
         )
         .await;
-        let event = match result {
+        let sent = match result {
             Ok(Some(loaded)) => {
                 log_load("", &loaded);
-                known.insert(loaded.object.key.clone());
-                if known.len() > HISTORY_MAX * 4 {
-                    known = HashSet::from([loaded.object.key.clone()]);
-                }
-                // History starts once a live frame is on screen, from its store.
-                // Held so aborting this poller cancels in-flight COMP downloads.
-                backfill.get_or_insert_with(|| {
-                    AbortOnDrop(tokio::spawn(backfill_loop(
+                let (host, stamp) = (loaded.object.host, loaded.object.stamp);
+                let saved = publish_live(&events, &mut known, loaded).await;
+                if saved == Ok(true) && backfill.is_none() {
+                    // Held so aborting this poller cancels in-flight COMP downloads.
+                    backfill = Some(AbortOnDrop(tokio::spawn(backfill_loop(
                         events.clone(),
                         known.clone(),
-                        loaded.object.host,
+                        host,
+                        stamp,
                         Arc::clone(&palette),
                         Arc::clone(&bounds),
                         Arc::clone(&decode_slots),
-                    )))
-                });
-                Some(ev_frame(loaded.frame, loaded.texture, loaded.start_ms))
+                    ))));
+                }
+                saved.map(|_| ())
             }
-            Ok(None) => first.then(|| ev_silent("ORD cache has no OPERA DBZH.tiff yet".into())),
-            Err(reason) => Some(ev_offline(reason)),
+            Ok(None) if first => events
+                .send(ev_silent("ORD cache has no OPERA DBZH.tiff yet".into()))
+                .await
+                .map_err(|_| ()),
+            Ok(None) => Ok(()),
+            Err(reason) => events.send(ev_offline(reason)).await.map_err(|_| ()),
         };
         first = false;
-        if let Some(event) = event
-            && events.send(event).await.is_err()
-        {
+        if sent.is_err() {
             return;
         }
     }
+}
+
+/// Send a live frame. Its key counts as shown only once the engine saved it,
+/// so a frame the engine could not store is fetched again next poll.
+async fn publish_live(
+    events: &GridSender,
+    known: &mut HashSet<String>,
+    loaded: Loaded,
+) -> Result<bool, ()> {
+    let key = loaded.object.key.clone();
+    let slot = events.reserve().await.map_err(|_| ())?;
+    let saved = slot
+        .send(ev_frame(loaded.frame, loaded.texture, loaded.start_ms))
+        .await
+        .unwrap_or(false);
+    if saved {
+        known.insert(key.clone());
+        if known.len() > HISTORY_MAX * 4 {
+            *known = HashSet::from([key]);
+        }
+    }
+    Ok(saved)
 }
 
 /// Tiny synthetic COMP-shaped COG for decoder / fetch tests (not live data).
@@ -1479,10 +1518,72 @@ mod tests {
             host: HOSTS[0],
             ..comp_on("2026/11/20", "20261120T2005")
         }];
-        let backup = vec![comp_on("2026/11/20", "20261120T2000")];
+        let backup = vec![
+            comp_on("2026/11/20", "20261120T1955"),
+            comp_on("2026/11/20", "20261120T2000"),
+            comp_on("2026/11/20", "20261120T2005"),
+        ];
+        let first_live = backup[1].stamp;
         let hosts = vec![original, backup.clone()];
-        assert_eq!(backfill_store(hosts.clone(), HOSTS[1]), backup);
-        assert!(backfill_store(hosts[..1].to_vec(), HOSTS[1]).is_empty());
+        assert_eq!(
+            backfill_store(hosts.clone(), HOSTS[1], first_live),
+            backup[..1]
+        );
+        assert!(backfill_store(hosts[..1].to_vec(), HOSTS[1], first_live).is_empty());
+    }
+
+    #[test]
+    fn live_frame_counts_as_shown_only_once_the_engine_saved_it() {
+        let opera = Opera::new();
+        current_thread().block_on(async {
+            let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+            let events = GridSender::new(tx, 1);
+            let engine = tokio::spawn(async move {
+                for saved in [false, true] {
+                    let message = rx.recv().await.unwrap();
+                    message.published.unwrap().send(saved).unwrap();
+                }
+            });
+            let mut known = HashSet::new();
+            for expected in [false, true] {
+                let loaded = load_newest(
+                    &known,
+                    by_host(&[], &["20261120T2005"]),
+                    |url| std::future::ready(served(&url)),
+                    Arc::new(opera.palette.clone()),
+                    Arc::new(opera.bounds.clone()),
+                    None,
+                )
+                .await
+                .unwrap()
+                .expect("an unsaved frame is offered again");
+                assert_eq!(
+                    publish_live(&events, &mut known, loaded).await,
+                    Ok(expected)
+                );
+            }
+            engine.await.unwrap();
+            assert_eq!(
+                known,
+                HashSet::from(["2026/11/20/OPERA/COMP/OPERA@20261120T2005@0@DBZH.tiff".to_owned()])
+            );
+        });
+    }
+
+    #[test]
+    fn listing_skips_keys_outside_the_comp_path() {
+        let body = r#"<ListBucketResult>
+            <Contents><Key>2026/11/20/OPERA/COMP/../../../etc/OPERA@20261120T2000@0@DBZH.tiff</Key></Contents>
+            <Contents><Key>/2026/11/20/OPERA/COMP/OPERA@20261120T2000@0@DBZH.tiff</Key></Contents>
+            <Contents><Key>2026/11/19/OPERA/COMP/OPERA@20261120T2000@0@DBZH.tiff</Key></Contents>
+            <Contents><Key>2026/11/20/OPERA/COMP/OPERA@20261120T2005@0@DBZH.tiff</Key></Contents>
+            </ListBucketResult>"#;
+        let objects = parse_dbzh_listing(HOSTS[0], body).unwrap().objects;
+        assert_eq!(objects.len(), 1);
+        assert_eq!(
+            objects[0].key,
+            "2026/11/20/OPERA/COMP/OPERA@20261120T2005@0@DBZH.tiff"
+        );
     }
 
     #[test]
@@ -1502,13 +1603,15 @@ mod tests {
         let hosts = current_thread()
             .block_on(async {
                 tokio::time::pause();
-                list_hosts(now(), |url: reqwest::Url| async move {
+                let listed = list_hosts(now(), |url: reqwest::Url| async move {
                     if url.as_str().starts_with(HOSTS[0]) {
                         std::future::pending::<()>().await;
                     }
                     Ok(listing(&["20261120T2005"], None))
-                })
-                .await
+                });
+                timeout(HOST_LIST_TIMEOUT * 8, listed)
+                    .await
+                    .expect("a stalled listing must time out")
             })
             .unwrap();
         assert_eq!(hosts.len(), 1);
@@ -1582,14 +1685,16 @@ mod tests {
         let hosts = current_thread()
             .block_on(async {
                 tokio::time::pause();
-                list_hosts(after_midnight, |url: reqwest::Url| async move {
+                let listed = list_hosts(after_midnight, |url: reqwest::Url| async move {
                     let query: Vec<_> = url.query_pairs().into_owned().collect();
                     if param(&query, "start-after").is_some() {
                         std::future::pending::<()>().await;
                     }
                     Ok(listing(&["20261120T0005"], None))
-                })
-                .await
+                });
+                timeout(HOST_LIST_TIMEOUT * 8, listed)
+                    .await
+                    .expect("a stalled listing must time out")
             })
             .unwrap();
         assert_eq!(hosts.len(), 2);
@@ -1730,15 +1835,15 @@ mod tests {
             let _held = tokio::spawn(async move {
                 use tokio::io::{AsyncReadExt, AsyncWriteExt};
                 let (mut socket, _) = server.accept().await.unwrap();
-                let _ = socket.read(&mut [0u8; 2048]).await.unwrap();
                 socket
                     .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\n\r\npartial")
                     .await
                     .unwrap();
+                let _ = socket.read(&mut [0u8; 2048]).await.unwrap();
                 std::future::pending::<()>().await;
                 drop(socket);
             });
-            let client = build_client(Duration::from_secs(1));
+            let client = build_client(Duration::from_secs(2));
             let result = timeout(Duration::from_secs(10), get_body(&client, &url, BODY_MAX)).await;
             let error = result
                 .expect("request timeout must fire first")
