@@ -15,7 +15,10 @@ use chrono::{NaiveDate, NaiveDateTime, Utc};
 use std::{
     collections::{HashSet, VecDeque},
     future::Future,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 use tokio::{
@@ -31,7 +34,14 @@ pub const ATTRIBUTION: &str = "EUMETNET OPERA";
 /// Continental fallback: a covering national mosaic ranks above this.
 pub const SELECTION_PRIORITY: i32 = 10;
 
-pub const HOST: &str = "https://s3.waw3-1.cloudferro.com/openradar-24h";
+/// ORD 24h cache, then the ECMWF backup EUMETNET opened after the
+/// Nov 2026 MeteoGate cloud outage.
+pub const HOSTS: [&str; 2] = [
+    "https://s3.waw3-1.cloudferro.com/openradar-24h",
+    "https://object-store.os-api.cci1.ecmwf.int/openradar-24h-backup",
+];
+static ACTIVE_HOST: AtomicUsize = AtomicUsize::new(0);
+const LIST_PAGES_MAX: usize = 8;
 /// Service footprint from `envelope::OPERA` (ORD docs, approx corners).
 pub const COVERAGE_NORTH: f64 = crate::envelope::OPERA.north;
 pub const COVERAGE_SOUTH: f64 = crate::envelope::OPERA.south;
@@ -49,6 +59,7 @@ const BODY_MAX: usize = 12 << 20;
 /// capped here (not the polar catalog ring of 60) — each COMP is multi-MB.
 pub const HISTORY_MAX: usize = 12;
 const START_TIMEOUT: Duration = Duration::from_secs(45);
+const HOST_LIST_TIMEOUT: Duration = Duration::from_secs(15);
 const IDLE: Duration = Duration::from_secs(30);
 /// After the newest COMP is on screen, pull earlier stamps (NEXRAD waits
 /// the same beat so a hand-off mid-pan does not spend bandwidth).
@@ -191,35 +202,68 @@ pub struct CompObject {
     pub stamp: NaiveDateTime,
 }
 
-/// Parse ListObjects v2 XML for `OPERA@…@DBZH.tiff` keys.
-pub fn parse_dbzh_listing(body: &str) -> Result<Vec<CompObject>, String> {
+#[derive(Debug)]
+pub struct DbzhPage {
+    pub objects: Vec<CompObject>,
+    pub next: Option<String>,
+}
+
+/// Parse one ListObjects v2 page for `OPERA@…@DBZH.tiff` keys.
+pub fn parse_dbzh_listing(body: &str) -> Result<DbzhPage, String> {
     let mut objects = Vec::new();
-    let mut in_key = false;
-    let mut key = None::<String>;
+    let mut next = None;
+    let mut truncated = false;
+    let mut text = String::new();
     for event in EventReader::new(body.as_bytes()) {
         match event.map_err(|e| format!("reading OPERA listing: {e}"))? {
-            XmlEvent::StartElement { name, .. } if name.local_name == "Key" => {
-                in_key = true;
-                key = Some(String::new());
-            }
-            XmlEvent::Characters(text) if in_key => {
-                if let Some(k) = key.as_mut() {
-                    k.push_str(&text);
+            XmlEvent::StartElement { .. } => text.clear(),
+            XmlEvent::Characters(chunk) => text.push_str(&chunk),
+            XmlEvent::EndElement { name } => match name.local_name.as_str() {
+                "Key" => {
+                    if let Some(stamp) = parse_dbzh_key(&text) {
+                        objects.push(CompObject {
+                            key: text.clone(),
+                            stamp,
+                        });
+                    }
                 }
-            }
-            XmlEvent::EndElement { name } if name.local_name == "Key" => {
-                in_key = false;
-                if let Some(k) = key.take()
-                    && let Some(stamp) = parse_dbzh_key(&k)
-                {
-                    objects.push(CompObject { key: k, stamp });
-                }
-            }
+                "NextContinuationToken" => next = Some(text.clone()),
+                "IsTruncated" => truncated = text == "true",
+                _ => {}
+            },
             _ => {}
         }
     }
+    if truncated && next.is_none() {
+        return Err("OPERA listing is truncated without a continuation token".into());
+    }
     objects.sort_by_key(|o| o.stamp);
-    Ok(objects)
+    Ok(DbzhPage {
+        objects,
+        next: next.filter(|_| truncated),
+    })
+}
+
+/// Follow continuation tokens: the ORD store caps pages below a day of keys.
+pub async fn list_day_pages<P, PF>(page: P) -> Result<Vec<CompObject>, String>
+where
+    P: Fn(Option<String>) -> PF,
+    PF: Future<Output = Result<String, String>>,
+{
+    let mut objects = Vec::new();
+    let mut token = None;
+    for _ in 0..LIST_PAGES_MAX {
+        let listing = parse_dbzh_listing(&page(token.take()).await?)?;
+        objects.extend(listing.objects);
+        match listing.next {
+            Some(next) => token = Some(next),
+            None => {
+                objects.sort_by_key(|o| o.stamp);
+                return Ok(objects);
+            }
+        }
+    }
+    Err(format!("OPERA listing exceeds {LIST_PAGES_MAX} pages"))
 }
 
 /// `…/OPERA/COMP/OPERA@YYYYMMDDTHHMM@0@DBZH.tiff`
@@ -696,15 +740,68 @@ impl<T> Drop for AbortOnDrop<T> {
     }
 }
 
+/// List `day` on the host that last had COMP files, trying the other one
+/// when it is empty or failing.
+pub async fn list_day_on_hosts<L, LF>(
+    active: &AtomicUsize,
+    day: NaiveDate,
+    list: L,
+) -> Result<Vec<CompObject>, String>
+where
+    L: Fn(&'static str, NaiveDate) -> LF,
+    LF: Future<Output = Result<Vec<CompObject>, String>>,
+{
+    let first = active.load(Ordering::Relaxed);
+    let mut answered = false;
+    let mut failure = String::new();
+    for offset in 0..HOSTS.len() {
+        let index = (first + offset) % HOSTS.len();
+        match timeout(HOST_LIST_TIMEOUT, list(HOSTS[index], day)).await {
+            Ok(Ok(objects)) if !objects.is_empty() => {
+                active.store(index, Ordering::Relaxed);
+                return Ok(objects);
+            }
+            Ok(Ok(_)) => answered = true,
+            Ok(Err(reason)) => failure = reason,
+            Err(_) => failure = format!("listing {} timed out", HOSTS[index]),
+        }
+    }
+    if answered {
+        Ok(Vec::new())
+    } else {
+        Err(failure)
+    }
+}
+
 async fn list_http(day: NaiveDate) -> Result<Vec<CompObject>, String> {
-    let prefix = prefix_for(day);
-    let url = format!("{HOST}?list-type=2&prefix={prefix}&max-keys=1000");
-    let body = live_index::listing_text(&url, "listing OPERA", "reading OPERA listing").await?;
-    parse_dbzh_listing(&body)
+    list_day_on_hosts(&ACTIVE_HOST, day, |host, day| {
+        list_day_pages(move |token| listing_page(host, day, token))
+    })
+    .await
+}
+
+async fn listing_page(
+    host: &'static str,
+    day: NaiveDate,
+    token: Option<String>,
+) -> Result<String, String> {
+    let mut url = reqwest::Url::parse(host).map_err(|e| format!("OPERA host: {e}"))?;
+    {
+        let mut query = url.query_pairs_mut();
+        query
+            .append_pair("list-type", "2")
+            .append_pair("prefix", &prefix_for(day))
+            .append_pair("max-keys", "1000");
+        if let Some(token) = &token {
+            query.append_pair("continuation-token", token);
+        }
+    }
+    live_index::listing_text(url.as_str(), "listing OPERA", "reading OPERA listing").await
 }
 
 async fn get_http(key: String) -> Result<Vec<u8>, String> {
-    let url = format!("{HOST}/{key}");
+    let host = HOSTS[ACTIVE_HOST.load(Ordering::Relaxed)];
+    let url = format!("{host}/{key}");
     let response = live_index::http_client()
         .get(&url)
         .send()
@@ -865,7 +962,7 @@ mod tests {
             <Contents><Key>2026/09/17/OPERA/COMP/OPERA@20260917T1205@0@RATE.tiff</Key></Contents>
             <Contents><Key>2026/09/17/OPERA/COMP/OPERA@20260917T1210@0@DBZH.tiff</Key></Contents>
             </ListBucketResult>"#;
-        let objects = parse_dbzh_listing(body).unwrap();
+        let objects = parse_dbzh_listing(body).unwrap().objects;
         assert_eq!(objects.len(), 2);
         assert_eq!(
             objects[0].key,
@@ -1050,7 +1147,7 @@ mod tests {
         let got = runtime
             .block_on(refresh(
                 &known,
-                |_day| async { parse_dbzh_listing(listing) },
+                |_day| async { parse_dbzh_listing(listing).map(|page| page.objects) },
                 |key| {
                     let fixture = fixture.clone();
                     async move {
@@ -1070,7 +1167,7 @@ mod tests {
         let again = runtime
             .block_on(refresh(
                 &known,
-                |_day| async { parse_dbzh_listing(listing) },
+                |_day| async { parse_dbzh_listing(listing).map(|page| page.objects) },
                 |_key| async { panic!("should not refetch") },
                 &opera.palette,
                 &opera.bounds,
@@ -1097,7 +1194,7 @@ mod tests {
             <Contents><Key>2026/09/17/OPERA/COMP/OPERA@20260917T1200@0@DBZH.tiff</Key></Contents>
             <Contents><Key>2026/09/17/OPERA/COMP/OPERA@20260917T1205@0@DBZH.tiff</Key></Contents>
             </ListBucketResult>"#;
-        let objects = parse_dbzh_listing(listing).unwrap();
+        let objects = parse_dbzh_listing(listing).unwrap().objects;
         assert_eq!(objects.len(), 14);
         let mut known = HashSet::new();
         known.insert("2026/09/17/OPERA/COMP/OPERA@20260917T1205@0@DBZH.tiff".into());
@@ -1200,12 +1297,154 @@ mod tests {
             .unwrap()
     }
 
-    fn comp(stamp: &str) -> CompObject {
-        let key = format!("2026/09/17/OPERA/COMP/OPERA@{stamp}@0@DBZH.tiff");
+    #[test]
+    fn empty_original_host_falls_back_to_backup_and_stays_there() {
+        let active = AtomicUsize::new(0);
+        let day = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
+        let calls = std::sync::Mutex::new(Vec::new());
+        let list = |host: &'static str, _day| {
+            calls.lock().unwrap().push(host);
+            async move {
+                Ok(if host == HOSTS[1] {
+                    vec![comp("20260917T1200")]
+                } else {
+                    Vec::new()
+                })
+            }
+        };
+        let rt = current_thread();
+        let objects = rt.block_on(list_day_on_hosts(&active, day, list)).unwrap();
+        assert_eq!(objects, vec![comp("20260917T1200")]);
+        rt.block_on(list_day_on_hosts(&active, day, list)).unwrap();
+        assert_eq!(*calls.lock().unwrap(), vec![HOSTS[0], HOSTS[1], HOSTS[1]]);
+    }
+
+    #[test]
+    fn original_host_with_files_is_used() {
+        let active = AtomicUsize::new(0);
+        let day = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
+        let objects = current_thread()
+            .block_on(list_day_on_hosts(&active, day, |host, _day| async move {
+                assert_eq!(host, HOSTS[0], "backup must not be listed");
+                Ok(vec![comp("20260917T1200")])
+            }))
+            .unwrap();
+        assert_eq!(objects, vec![comp("20260917T1200")]);
+    }
+
+    #[test]
+    fn failing_backup_returns_to_original_host() {
+        let active = AtomicUsize::new(1);
+        let day = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
+        let calls = std::sync::Mutex::new(Vec::new());
+        let list = |host: &'static str, _day| {
+            calls.lock().unwrap().push(host);
+            async move {
+                if host == HOSTS[1] {
+                    Err("backup down".to_owned())
+                } else {
+                    Ok(vec![comp("20260917T1200")])
+                }
+            }
+        };
+        let rt = current_thread();
+        let objects = rt.block_on(list_day_on_hosts(&active, day, list)).unwrap();
+        assert_eq!(objects, vec![comp("20260917T1200")]);
+        rt.block_on(list_day_on_hosts(&active, day, list)).unwrap();
+        assert_eq!(*calls.lock().unwrap(), vec![HOSTS[1], HOSTS[0], HOSTS[0]]);
+    }
+
+    #[test]
+    fn empty_backup_and_failing_original_is_empty_not_an_error() {
+        let active = AtomicUsize::new(1);
+        let day = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
+        let objects = current_thread()
+            .block_on(list_day_on_hosts(&active, day, |host, _day| async move {
+                if host == HOSTS[1] {
+                    Ok(Vec::new())
+                } else {
+                    Err("original down".to_owned())
+                }
+            }))
+            .unwrap();
+        assert!(objects.is_empty());
+    }
+
+    #[test]
+    fn hanging_original_host_falls_back_to_backup() {
+        let active = AtomicUsize::new(0);
+        let day = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
+        let objects = current_thread()
+            .block_on(async {
+                tokio::time::pause();
+                list_day_on_hosts(&active, day, |host, _day| async move {
+                    if host == HOSTS[0] {
+                        std::future::pending::<()>().await;
+                    }
+                    Ok(vec![comp("20260917T1200")])
+                })
+                .await
+            })
+            .unwrap();
+        assert_eq!(objects, vec![comp("20260917T1200")]);
+    }
+
+    #[test]
+    fn both_hosts_failing_is_an_error() {
+        let active = AtomicUsize::new(0);
+        let day = NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
+        let result =
+            current_thread().block_on(list_day_on_hosts(&active, day, |_host, _day| async {
+                Err("down".to_owned())
+            }));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn listing_follows_ord_continuation_pages() {
+        let first = include_str!("../tests/fixtures/opera-listing-page1.xml");
+        let rest = include_str!("../tests/fixtures/opera-listing-page2.xml");
+        let objects = current_thread()
+            .block_on(list_day_pages(|token| async move {
+                match token.as_deref() {
+                    None => Ok(first.to_owned()),
+                    Some("2026/11/20/OPERA/COMP/OPERA@20261120T1900@0@RATE.tiff") => {
+                        Ok(rest.to_owned())
+                    }
+                    Some(other) => Err(format!("unexpected token {other}")),
+                }
+            }))
+            .unwrap();
+        assert_eq!(objects.len(), 12);
+        assert!(objects.iter().all(|o| o.key.ends_with("@0@DBZH.tiff")));
+        assert_eq!(objects[0], comp_on("2026/11/20", "20261120T1900"));
+        assert_eq!(objects[11], comp_on("2026/11/20", "20261120T1955"));
+    }
+
+    #[test]
+    fn truncated_listing_without_token_is_an_error() {
+        let body = "<ListBucketResult><IsTruncated>true</IsTruncated></ListBucketResult>";
+        assert!(parse_dbzh_listing(body).is_err());
+    }
+
+    #[test]
+    fn endless_listing_gives_up() {
+        let first = include_str!("../tests/fixtures/opera-listing-page1.xml");
+        let result =
+            current_thread().block_on(list_day_pages(|_token| async move { Ok(first.to_owned()) }));
+        assert!(result.is_err());
+    }
+
+    fn comp_on(day: &str, stamp: &str) -> CompObject {
+        let key = format!("{day}/OPERA/COMP/OPERA@{stamp}@0@DBZH.tiff");
         CompObject {
             stamp: parse_dbzh_key(&key).unwrap(),
             key,
         }
+    }
+
+    fn comp(stamp: &str) -> CompObject {
+        comp_on("2026/09/17", stamp)
     }
 
     #[test]
@@ -1431,7 +1670,7 @@ mod tests {
                 Duration::from_millis(20),
                 fetch_newest(
                     &known,
-                    |_day| async { parse_dbzh_listing(listing) },
+                    |_day| async { parse_dbzh_listing(listing).map(|page| page.objects) },
                     move |_key| {
                         let slow = slow.clone();
                         async move {
@@ -1446,13 +1685,17 @@ mod tests {
 
             let fetched = timeout(
                 Duration::from_millis(20),
-                fetch_newest(&known, |_day| async { parse_dbzh_listing(listing) }, {
-                    let fixture = fixture.clone();
-                    move |_key| {
+                fetch_newest(
+                    &known,
+                    |_day| async { parse_dbzh_listing(listing).map(|page| page.objects) },
+                    {
                         let fixture = fixture.clone();
-                        async move { Ok(fixture) }
-                    }
-                }),
+                        move |_key| {
+                            let fixture = fixture.clone();
+                            async move { Ok(fixture) }
+                        }
+                    },
+                ),
             )
             .await
             .expect("fast GET should beat the fetch timeout")
