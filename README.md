@@ -72,10 +72,6 @@ mosaic for the contiguous U.S. European radar comes from EUMETNET OPERA.
 Coverage depends on radar range and the data available from each provider. Some areas have no radar data, even when their cities appear in
 search.
 
-The OPERA public cache has published no European mosaic since late October
-2026, so Europe shows an empty map with a red feed light until it returns
-([#207](https://github.com/wesleygrimes/omastorm/issues/207)).
-
 [![EUMETNET OPERA radar mosaic over Warsaw, Poland](docs/media/readme/omastorm-europe.png)](https://github.com/wesleygrimes/omastorm/releases/download/v0.1.14/omastorm-europe.mp4)
 
 [Watch the 24-second Europe demo](https://github.com/wesleygrimes/omastorm/releases/download/v0.1.14/omastorm-europe.mp4).
