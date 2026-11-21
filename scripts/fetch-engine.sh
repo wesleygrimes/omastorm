@@ -36,7 +36,8 @@ if [[ -n ${OMASTORM_ENGINE_ASSET:-} ]]; then
   cp -- "$OMASTORM_ENGINE_ASSET" "$tmp"
 else
   url=${OMASTORM_ENGINE_URL:-https://github.com/$repo/releases/download/$tag/$asset}
-  if ! curl -fsSL --retry 2 -A "omastorm/$tag (https://omastorm.com)" -o "$tmp" -- "$url"; then
+  if ! curl -fsSL --retry 2 --connect-timeout 20 --max-time 300 --max-filesize 256M \
+      -A "omastorm/$tag (https://omastorm.com)" -o "$tmp" -- "$url"; then
     die "Could not download $asset from $url." \
       "Publish GitHub Release $tag on $repo with that asset matching $pin_file, and make the repository public so the asset is anonymous." \
       "From a checkout with Rust: bash scripts/cargo.sh build --locked && bash run.sh"

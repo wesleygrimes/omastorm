@@ -22,9 +22,9 @@ Omarchy 4 on x86_64 and aarch64.
 omarchy plugin add https://github.com/wesleygrimes/omastorm.git --enable
 ```
 
-That clones the plugin, asks which bar section to use, and on first open
-downloads the pinned engine from GitHub Releases, checks its sha256, and
-installs it under `~/.local/share/omastorm/bin`. Configuration, remembered
+That clones the plugin and asks which bar section to use. When the bar
+loads the widget, it downloads the pinned engine from GitHub Releases, checks
+its sha256, and installs it under `~/.local/share/omastorm/bin`. Configuration, remembered
 view, and cached scans stay in Omastorm's own directories.
 
 Optional: a Hyprland key to toggle the window. Add one line to
@@ -346,6 +346,7 @@ the template asks.
 omarchy plugin remove com.omastorm.radar
 ~/.local/share/omastorm/bin/omastorm-engine stop
 rm -rf ~/.local/share/omastorm ~/.cache/omastorm ~/.local/state/omastorm
+rm -rf "$XDG_RUNTIME_DIR/omastorm"                   # socket, logs, session tiles
 rm -rf ~/.config/omastorm                            # keep this to reinstall later
 rm -f ~/.local/share/applications/omastorm.desktop   # if you added the launcher entry
 ```

@@ -106,10 +106,8 @@ QtObject {
         locationError = "";
         locationPending = true;
         var url = Quickshell.env("OMASTORM_LOCATION_URL") || "https://wttr.in/?format=j2";
-        // -k: wttr.in's Let's Encrypt leaf lapses (expired this morning
-        // here); this is an IP city estimate, not a trusted channel.
-        locator.command = ["curl", "-fsSk", "--max-time", "10", "-A",
-            "omastorm (https://omastorm.com)", url];
+        locator.command = ["curl", "-fsS", "--max-time", "10", "--max-filesize", "65536",
+            "-A", "omastorm (https://omastorm.com)", url];
         // Bind the attempt to this launch. If a prior curl is still dying after
         // cancel, queue one restart instead of overwriting its exit attribution.
         locator.attempt = locateAttempt;
