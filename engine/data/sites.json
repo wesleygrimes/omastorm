@@ -2,7 +2,7 @@
   "source": "https://www.ncei.noaa.gov/access/homr/file/nexrad-stations.txt",
   "layout": "https://www.ncei.noaa.gov/access/homr/file/NexRad_Table.txt",
   "retrieved": "2026-09-05",
-  "notes": "All NEXRAD rows, including archived/test stations; TDWR excluded. No live availability implied. altM converts source feet (ground + tower + feed horn) by 0.3048. Empty state retained for overseas sites. Fixture geometry comes from its own Level II metadata.",
+  "notes": "All NEXRAD rows, including archived/test stations; TDWR excluded. No live availability implied. testbed marks test and research dishes (ROC redundant RDA, NSSL) that follow never selects. altM converts source feet (ground + tower + feed horn) by 0.3048. Empty state retained for overseas sites. Fixture geometry comes from its own Level II metadata.",
   "sites": [
     {
       "id": "KABR",
@@ -202,7 +202,8 @@
       "state": "OK",
       "lat": 35.238333,
       "lon": -97.46,
-      "altM": 400.8120
+      "altM": 400.8120,
+      "testbed": true
     },
     {
       "id": "KCRP",
@@ -930,7 +931,8 @@
       "state": "OK",
       "lat": 35.236058,
       "lon": -97.46235,
-      "altM": 391.3632
+      "altM": 391.3632,
+      "testbed": true
     },
     {
       "id": "KPAH",

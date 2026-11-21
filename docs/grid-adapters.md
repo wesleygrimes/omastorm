@@ -408,8 +408,9 @@ defined transform; merely naming a datum-shift error is not sufficient.
 
 ### Source selection
 
-Covering means the source's coverage contains the centre. On a settled
-centre:
+Covering means the source's coverage contains the centre. Test and
+research dishes marked `testbed` in `engine/data/sites.json` never cover;
+`select_site` still reaches them. On a settled centre:
 
 1. If the held polar site contains the centre, today's nearest-site
    hand-off remains: another covering polar site must beat it by

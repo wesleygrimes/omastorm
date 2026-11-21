@@ -218,6 +218,8 @@ pub struct Station {
     pub alt_m: f64,
     #[serde(default = "nexrad_site_coverage")]
     pub coverage: Coverage,
+    #[serde(default, skip_serializing)]
+    pub testbed: bool,
 }
 
 fn nexrad_site_coverage() -> Coverage {

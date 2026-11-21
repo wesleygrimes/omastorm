@@ -165,6 +165,7 @@ impl Osm {
         let client = reqwest::Client::builder()
             .user_agent(USER_AGENT)
             .timeout(FETCH_TIMEOUT)
+            .redirect(same_origin_redirects(&url))
             .build()
             .map_err(io::Error::other)?;
         Ok(Osm {
@@ -279,7 +280,11 @@ impl Osm {
         if self.backing_off() {
             return None;
         }
-        let metadata = match self.get(&self.url).await.and_then(|bytes| tilejson(&bytes)) {
+        let metadata = match self
+            .get(&self.url)
+            .await
+            .and_then(|bytes| tilejson(&bytes, &self.url))
+        {
             Ok(metadata) => metadata,
             Err(e) => {
                 eprintln!("TileJSON {}: {e}", self.url);
@@ -396,15 +401,43 @@ impl Osm {
     }
 }
 
-/// Parse TileJSON: the first template, the data version it names (the path
-/// segment before `{z}`), the source's name, and its attribution as text.
-fn tilejson(bytes: &[u8]) -> Result<Metadata, String> {
+/// Scheme, host, and port: tiles and redirects stay on the TileJSON's own
+/// origin, so the default source only ever reaches https://tiles.openfreemap.org.
+fn origin(url: &str) -> Option<(String, String, Option<u16>)> {
+    let url = reqwest::Url::parse(url).ok()?;
+    let host = url.host_str()?.to_ascii_lowercase();
+    Some((url.scheme().to_owned(), host, url.port_or_known_default()))
+}
+/// Follow at most 10 redirects, and only within `url`'s origin.
+fn same_origin_redirects(url: &str) -> reqwest::redirect::Policy {
+    let home = origin(url);
+    reqwest::redirect::Policy::custom(move |attempt| {
+        if attempt.previous().len() > 10 {
+            attempt.error("too many redirects")
+        } else if home.is_some() && origin(attempt.url().as_str()) == home {
+            attempt.follow()
+        } else {
+            attempt.error("redirect leaves the tile source")
+        }
+    })
+}
+/// Parse TileJSON read from `source`: the first template, the data version
+/// it names (the path segment before `{z}`), the source's name, and its
+/// attribution as text. A template on another origin than `source` is refused.
+fn tilejson(bytes: &[u8], source: &str) -> Result<Metadata, String> {
     let document: TileJson = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
     let template = document
         .tiles
         .into_iter()
         .find(|t| t.contains("{z}") && t.contains("{x}") && t.contains("{y}"))
         .ok_or("no {z}/{x}/{y} template in tiles")?;
+    let home = origin(source).ok_or("tile source is not a URL")?;
+    if origin(&template).as_ref() != Some(&home) {
+        return Err(format!(
+            "tile template {template} is not on {}://{}",
+            home.0, home.1
+        ));
+    }
     let head = template.split("{z}").next().unwrap_or_default();
     let segment = head
         .trim_end_matches('/')
@@ -1491,7 +1524,7 @@ mod tests {
             "attribution":"<a href=\"https://openfreemap.org\" target=\"_blank\">OpenFreeMap</a> <a href=\"https://www.openmaptiles.org/\" target=\"_blank\">&copy; OpenMapTiles</a> Data from <a href=\"https://www.openstreetmap.org/copyright\" target=\"_blank\">OpenStreetMap</a>",
             "name":"OpenFreeMap","version":"3.16.0","maxzoom":14}"#;
         assert_eq!(
-            tilejson(live).unwrap(),
+            tilejson(live, DEFAULT_URL).unwrap(),
             Metadata {
                 version: "20260830_080001_pt".into(),
                 template: "https://tiles.openfreemap.org/planet/20260830_080001_pt/{z}/{x}/{y}.pbf"
@@ -1501,16 +1534,118 @@ mod tests {
             }
         );
         // A template with no directory before {z} is versioned by its text.
-        let flat = tilejson(br#"{"tiles":["http://127.0.0.1:1/{z}/{x}/{y}.pbf"]}"#).unwrap();
+        let flat = tilejson(
+            br#"{"tiles":["http://127.0.0.1:1/{z}/{x}/{y}.pbf"]}"#,
+            "http://127.0.0.1:1/tiles.json",
+        )
+        .unwrap();
         assert_eq!(
             flat.version,
             tiles::tag("http://127.0.0.1:1/{z}/{x}/{y}.pbf")
         );
         assert_eq!(flat.name, "");
         assert_eq!(flat.attribution, "");
-        assert!(tilejson(br#"{"tiles":["http://x/{z}.pbf"]}"#).is_err());
-        assert!(tilejson(b"not json").is_err());
+        assert!(tilejson(br#"{"tiles":["http://x/{z}.pbf"]}"#, "http://x/").is_err());
+        assert!(tilejson(b"not json", DEFAULT_URL).is_err());
         assert_eq!(text("a &amp; <b>b</b>\n  c"), "a & b c");
+    }
+
+    #[test]
+    fn tilejson_refuses_a_template_off_the_source_origin() {
+        for template in [
+            "http://tiles.openfreemap.org/planet/v1/{z}/{x}/{y}.pbf",
+            "https://evil.example/planet/v1/{z}/{x}/{y}.pbf",
+            "https://tiles.openfreemap.org.evil.example/v1/{z}/{x}/{y}.pbf",
+            "https://tiles.openfreemap.org:8443/planet/v1/{z}/{x}/{y}.pbf",
+            "file:///etc/{z}/{x}/{y}.pbf",
+            "/planet/v1/{z}/{x}/{y}.pbf",
+        ] {
+            let body = format!(r#"{{"tiles":["{template}"]}}"#);
+            assert!(
+                tilejson(body.as_bytes(), DEFAULT_URL).is_err(),
+                "{template} was accepted"
+            );
+        }
+        let upper = br#"{"tiles":["https://TILES.openfreemap.org/planet/v1/{z}/{x}/{y}.pbf"]}"#;
+        assert_eq!(tilejson(upper, DEFAULT_URL).unwrap().version, "v1");
+    }
+
+    #[test]
+    fn a_template_off_the_source_origin_leaves_the_basemap_on_natural_earth() {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let base = format!("http://{}", listener.local_addr().unwrap());
+                let server = tokio::spawn(async move {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = [0u8; 2048];
+                    let _ = socket.read(&mut request).await.unwrap();
+                    let body = r#"{"tiles":["http://127.0.0.2:9/v1/{z}/{x}/{y}.pbf"]}"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    socket.write_all(response.as_bytes()).await.unwrap();
+                });
+                let source = test_source(format!("{base}/tiles.json"), PathBuf::new());
+                let key = TileKey { z: 7, x: 29, y: 50 };
+                assert_eq!(source.tile(key).await, None);
+                assert_eq!(source.info().version, "");
+                assert!(source.backing_off());
+                server.await.unwrap();
+            });
+    }
+
+    #[test]
+    fn redirects_stay_on_the_tile_source() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        assert_eq!(
+            origin(DEFAULT_URL),
+            Some(("https".into(), "tiles.openfreemap.org".into(), Some(443)))
+        );
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async {
+                // Two loopback ports are two origins: one hop within the
+                // first is followed, a hop to the second is refused.
+                let home = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let away = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let base = format!("http://{}", home.local_addr().unwrap());
+                let elsewhere = format!("http://{}/tile", away.local_addr().unwrap());
+                let server = tokio::spawn(async move {
+                    for location in ["/moved".to_owned(), elsewhere] {
+                        let (mut socket, _) = home.accept().await.unwrap();
+                        let mut request = [0u8; 2048];
+                        let _ = socket.read(&mut request).await.unwrap();
+                        let response = format!(
+                            "HTTP/1.1 302 Found\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        );
+                        socket.write_all(response.as_bytes()).await.unwrap();
+                    }
+                });
+                let client = reqwest::Client::builder()
+                    .no_proxy()
+                    .timeout(FETCH_TIMEOUT)
+                    .redirect(same_origin_redirects(&base))
+                    .build()
+                    .unwrap();
+                let error = client.get(format!("{base}/start")).send().await.unwrap_err();
+                assert!(error.is_redirect(), "{error}");
+                server.await.unwrap();
+                // Nothing ever connected to the other origin.
+                assert!(
+                    tokio::time::timeout(Duration::from_millis(100), away.accept())
+                        .await
+                        .is_err()
+                );
+            });
     }
 
     #[test]
